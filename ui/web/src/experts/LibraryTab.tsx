@@ -13,23 +13,13 @@ import {
   listExperts,
 } from './api'
 import { ExpertForm } from './ExpertForm'
+import { CAPABILITY_GAPS, capabilityStatusLabel } from '../capabilityGaps'
 import {
   LIBRARY_EXPERTS,
   LIBRARY_MAX_INSTRUCTIONS_CHARS,
   LIBRARY_SOURCE,
   type LibraryExpert,
 } from './library'
-
-/**
- * 人格原文里提到、但 quill 后端还没接通的能力。口径与对话页工具面板一致：
- * 只列名字 + 下一步该接哪个路由，不画选了也没用的开关。
- */
-const PENDING_CAPABILITIES = [
-  { labelKey: 'chat.tools.skills', fallback: '技能包', route: 'GET /api/extensions/skills', state: '501' },
-  { labelKey: 'chat.tools.plugins', fallback: '插件', route: 'GET /api/extensions/plugins', state: '501' },
-  { labelKey: 'chat.tools.mcp', fallback: 'MCP', route: 'GET /api/extensions/mcp', state: '501' },
-  { labelKey: 'chat.tools.cron', fallback: '定时任务', route: '/api/cron', state: '未注册' },
-] as const
 
 /** 与 EXPERT_ID_PATTERN 的 {1,64} 上限同口径。 */
 const EXPERT_ID_MAX_LEN = 64
@@ -271,20 +261,20 @@ export function LibraryTab(): ReactNode {
                     </p>
                     <div className="experts-lib-gap" role="note">
                       <p className="experts-card-label">
-                        {t('experts.libGapTitle', { defaultValue: '这些能力还没接通' })}
+                        {t('experts.libGapTitle', { defaultValue: '这些能力还没做到能用' })}
                       </p>
                       <p className="experts-lib-gap-hint">
                         {t('experts.libGapHint', {
-                          defaultValue: '人格原文提到了下面这些能力，quill 后端都还没实现，所以表单里没有对应开关——选它们也没有任何效果。',
+                          defaultValue: '人格原文提到了下面这些能力。标「部分接通」的是存储层已经能用、但对话里还调不到；标「未接通」的是路由压根不存在。表单里都没有对应开关——选它们不会有任何效果。',
                         })}
                       </p>
                       <ul className="experts-lib-gap-list">
-                        {PENDING_CAPABILITIES.map((capability) => (
+                        {CAPABILITY_GAPS.map((capability) => (
                           <li key={capability.route}>
                             <span>{t(capability.labelKey, { defaultValue: capability.fallback })}</span>
                             <code>{capability.route}</code>
                             <span className="experts-card-label">
-                              {t('chat.tools.notReady', { state: capability.state, defaultValue: '未接通 · {{state}}' })}
+                              {capabilityStatusLabel(capability, t)}
                             </span>
                           </li>
                         ))}

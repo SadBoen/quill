@@ -19,6 +19,15 @@ export interface McpServerConfig {
 /** `GET /api/extensions/mcp` 的响应；servers 字段缺失时按空数组处理。 */
 export interface McpServerList {
   servers?: McpServerConfig[]
+  /**
+   * 服务端是否真的连上过这些 MCP 服务器。
+   *
+   * 协议层（rmcp）还没接，所以现在恒为 `false`。**不要**拿它当装饰：
+   * 界面上任何「已连接 / 可用」的字样都必须读这个字段，而不是自行推断。
+   */
+  connected?: boolean
+  /** 服务端对当前连通性状态的说明，原样显示，不改写。 */
+  note?: string
 }
 
 export const MCP_ROUTE = '/api/extensions/mcp'

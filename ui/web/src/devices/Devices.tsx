@@ -3,10 +3,11 @@ import { type FormEvent, type ReactNode, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Card, ErrorNotice, PageHeader } from '../components/Page'
-import { MCP_ROUTE, listMcpServers, mcpServersOf, saveMcpServers, type McpServerConfig } from './api'
+import { MCP_ROUTE, listMcpServers, mcpServersOf, saveMcpServers, type McpServerConfig, type McpServerList } from './api'
 import {
   type EditableMcpServer,
   formatMcpSecrets,
+  MCP_NAME_PATTERN,
   mcpCapabilityMode,
   mcpSecretMap,
   readMcpForm,
@@ -36,6 +37,38 @@ function mcpServerQuery() {
     refetchIntervalInBackground: false,
     staleTime: 10_000,
   }
+}
+
+/**
+ * 如实标出「配置存下了，但协议层没接通」。
+ *
+ * 组件里**不许**出现任何根据 `servers.length` 推断出来的「已连接」「可用」
+ * 字样 —— 配了不等于连上了，服务器可能没起、地址可能写错、token 可能过期。
+ * 唯一可信的来源是服务端给的 `connected` 与 `note`，原样显示。
+ *
+ * 顺带修掉一处已经不成立的旧文案：早先这里写的是「服务端会直接回 501」，
+ * 而 501 只适用于还没实现处理器的路由。现在处理器是真的了，再留着那句话
+ * 就是骗人。
+ */
+function McpLinkStatus({ body, route }: { body: McpServerList | undefined; route: string }): ReactNode {
+  const { t } = useTranslation()
+  return (
+    <p className="field-help">
+      {t('devices.apiNote', {
+        defaultValue: '配置存在 {{route}}，下面每一行都是服务端返回的原文。',
+        route,
+      })}
+      {body?.connected === false && (
+        <>
+          {' '}
+          <strong>
+            {t('devices.mcpNotConnected', { defaultValue: '尚未连接验证。' })}
+          </strong>
+          {body.note ?? ''}
+        </>
+      )}
+    </p>
+  )
 }
 
 /**
@@ -103,12 +136,7 @@ export function DeviceListPage(): ReactNode {
       />
       <div className="settings-stack">
         <ErrorNotice error={config.error ?? save.error} />
-        <p className="field-help">
-          {t('devices.apiNote', {
-            defaultValue: '数据来自 {{route}}。quill 尚未实现该路由的实现体时，服务端会直接回 501；下面是服务端原文，不是本页面伪造的数据。',
-            route: MCP_ROUTE,
-          })}
-        </p>
+        <McpLinkStatus body={config.data} route={MCP_ROUTE} />
         <div className="card-grid">
           {servers.map((server) => (
             <article className="device-card" key={server.name}>
@@ -266,6 +294,7 @@ export function DeviceMcpPage(): ReactNode {
       />
       <ErrorNotice error={config.error ?? save.error} />
       <div className="settings-stack">
+        <McpLinkStatus body={config.data} route={MCP_ROUTE} />
         {servers.map((server) => (
           <Card
             key={server.name}
@@ -342,7 +371,7 @@ export function McpForm({
       {initial ? <input type="hidden" name="editing" value="true" /> : null}
       <label>
         {t('mcp.serviceName', { defaultValue: '服务名' })}
-        <input name="name" required pattern="[a-z][a-z0-9_]{0,31}" placeholder="company_search" defaultValue={initial?.name ?? ''} />
+        <input name="name" required pattern={MCP_NAME_PATTERN} placeholder="company-search" defaultValue={initial?.name ?? ''} />
       </label>
       <label>
         {t('mcp.transport', { defaultValue: '传输方式' })}

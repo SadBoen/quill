@@ -363,7 +363,14 @@ impl Drop for DbBridge {
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-pub fn storage_error(op: &str, e: sqlx::Error) -> AgentError {
+/// 存储层错误。
+///
+/// 参数取 `impl Display` 而不是 `sqlx::Error`：写库路径上不只有 sqlx 会失败，
+/// 把一段已存好的 JSON 反序列化回结构体同样会失败（库里存的是别人写的
+/// 字节，不受信）。早先这个签名写死 `sqlx::Error`，结果调用点只能把 serde
+/// 错误硬转成 `sqlx::Error::io(...)` 才塞得进去 —— 那是把「解析失败」伪装成
+/// 「IO 失败」，日志会把人带偏。
+pub fn storage_error(op: &str, e: impl fmt::Display) -> AgentError {
     AgentError::Storage {
         detail: format!(
             "{op}失败：{e}。\

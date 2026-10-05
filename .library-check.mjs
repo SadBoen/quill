@@ -14,6 +14,27 @@ const LIB = path.join(ROOT, '.octop-ref/octop/src/octop/infra/agents/experts/lib
 const OUT_DIR = path.join(ROOT, 'ui/web/src/experts/library');
 const TS = path.join(ROOT, 'ui/web/src/experts/library.ts');
 
+// .octop-ref/ 是只读参考源码，不入库（见 .gitignore 与 UPSTREAM.md）。
+// fresh clone 上它不存在 —— 这里给一句能照做的提示，而不是让后面
+// 十几处 readFileSync 抛一个看不出所以然的 ENOENT。
+if (!fs.existsSync(LIB)) {
+  console.error(
+    [
+      '找不到 Octop 专家库源数据：',
+      `  ${LIB}`,
+      '',
+      '这个门禁是「源 vs 产物」双向比对，必须有源才能跑。',
+      '.octop-ref/ 是只读参考，不入库（仓库体积 250MB→不到 2MB 的关键）。',
+      '',
+      '取回方式：',
+      '  bash .scripts/fetch-vendor.sh',
+      '',
+      '它按 UPSTREAM.md 记录的 pin 精确 checkout，不跟踪主分支。',
+    ].join('\n'),
+  );
+  process.exit(2);
+}
+
 const MAX_INSTRUCTIONS_CHARS = 20000; // crates/quill-agent/src/expert.rs:13，按 chars().count()
 
 let failures = 0;

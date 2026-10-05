@@ -13,6 +13,7 @@ import { ChatSidebar } from './ChatSidebar'
 import { ChatWelcome } from './ChatWelcome'
 import { useChatWelcome } from './welcomeContent'
 import { Transcript } from './Transcript'
+import { CAPABILITY_GAPS, capabilityStatusLabel } from '../capabilityGaps'
 import './ChatPage.css'
 import './chatShell.css'
 
@@ -26,15 +27,10 @@ interface NoticeState {
 }
 
 /**
- * 工具坞里那些还没接通的能力。这里只列名字 + 下一步该接哪个路由，
- * 不画点了没反应的按钮，也不放假状态。状态码来自 crates/quill-server/src/routes.rs。
+ * 工具坞里那些还没做到能用的能力。这里只列名字 + 路由 + 真实的接通程度，
+ * 不画点了没反应的按钮，也不放假状态。数据来自 `../capabilityGaps`，
+ * 与专家页的「能力缺口」表共用一份，两处口径不会各说各话。
  */
-const PENDING_TOOLS = [
-  { labelKey: 'chat.tools.skills', fallback: '技能包', route: 'GET /api/extensions/skills', state: '501' },
-  { labelKey: 'chat.tools.plugins', fallback: '插件', route: 'GET /api/extensions/plugins', state: '501' },
-  { labelKey: 'chat.tools.mcp', fallback: 'MCP', route: 'GET /api/extensions/mcp', state: '501' },
-  { labelKey: 'chat.tools.cron', fallback: '定时任务', route: '/api/cron', state: '未注册' },
-] as const
 
 function formatTokens(value: number): string {
   if (!Number.isFinite(value) || value <= 0) return '0'
@@ -432,20 +428,20 @@ export function ChatPage(_props: ChatPageProps): ReactNode {
                   {toolsOpen ? (
                     <div className="chat-tools-panel" role="note">
                       <p className="chat-tools-title">
-                        {t('chat.tools.panelTitle', { defaultValue: '工具（后端尚未接通）' })}
+                        {t('chat.tools.panelTitle', { defaultValue: '工具（还没做到能用）' })}
                       </p>
                       <p className="chat-tools-hint">
                         {t('chat.tools.hint', {
-                          defaultValue: '技能包、插件、MCP、定时任务这四项后端还没实现，这里只标出下一步该接哪个路由，不放点了没反应的按钮。',
+                          defaultValue: 'MCP 与技能包已能存能读，但对话里还调不到；插件与定时任务的路由压根不存在。这里只标出真实状态与路由，不放点了没反应的按钮。',
                         })}
                       </p>
                       <ul className="chat-tools-list">
-                        {PENDING_TOOLS.map((tool) => (
+                        {CAPABILITY_GAPS.map((tool) => (
                           <li key={tool.route}>
                             <span className="chat-tools-name">{t(tool.labelKey, { defaultValue: tool.fallback })}</span>
                             <code className="chat-tools-route">{tool.route}</code>
                             <span className="chat-tools-state">
-                              {t('chat.tools.notReady', { state: tool.state, defaultValue: '未接通 · {{state}}' })}
+                              {capabilityStatusLabel(tool, t)}
                             </span>
                           </li>
                         ))}

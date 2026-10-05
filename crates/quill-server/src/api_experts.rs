@@ -264,9 +264,21 @@ fn opt_bool(body: &Value, key: &str) -> Result<Option<bool>, ApiError> {
 }
 
 pub(crate) fn only_keys(body: &Value, allowed: &[&str], route: &str) -> Result<(), ApiError> {
+    only_keys_at(body, allowed, &format!("路由 {route}"))
+}
+
+/// `label` 是「这里是什么」的自然说法：可以是路由，也可以是
+/// 「第 2 项的 MCP 服务器」这种容器内的位置。
+pub(crate) fn only_keys_at(
+    body: &Value,
+    allowed: &[&str],
+    label: &str,
+) -> Result<(), ApiError> {
     let Some(map) = body.as_object() else {
         return Err(ApiError::bad_request(
-            "请求体必须是 JSON 对象。".to_string(),
+            "请求体必须是 JSON 对象。\n\
+             下一步：确认发来的是 `{{\"键\": 值}}` 这样的对象，而不是数组或字符串。"
+                .to_string(),
         ));
     };
     let unknown: Vec<&str> = map
@@ -278,8 +290,9 @@ pub(crate) fn only_keys(body: &Value, allowed: &[&str], route: &str) -> Result<(
         Ok(())
     } else {
         Err(ApiError::bad_request(format!(
-            "路由 {route} 不接受字段 {:?}。可接受字段：{}。\
-             （字段名拼错会被静默忽略并返回成功，所以这里直接判红。）",
+            "{label} 不接受字段 {:?}。可接受字段：{}。\
+             字段名拼错如果被静默忽略，用户会以为自己配了、其实没生效。\
+             下一步：删掉这些字段，或改用上面列出的名字。",
             unknown,
             allowed.join(" / ")
         )))

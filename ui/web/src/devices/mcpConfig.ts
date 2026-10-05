@@ -2,6 +2,23 @@ import type { McpServerConfig } from './api'
 
 export type EditableMcpServer = McpServerConfig
 
+/**
+ * MCP 服务名的形状，**必须**与服务端 `mcp_repo::normalize_name` 逐条对齐。
+ *
+ * 这条约束是从一次真事故里长出来的：原来这里写的是
+ * `[a-z][a-z0-9_]{0,31}`，只允许下划线；服务端却把 `_` 归一成 `-` 并返回
+ * `company-search`。于是「保存 → 重新编辑」这一圈直接死掉 —— 编辑框里回填的
+ * `company-search` 过不了页面自己的 `pattern`，浏览器拦下提交，用户只看到一个
+ * 说不清来由的红框。旧写法还要求首字符是字母，而服务端允许数字开头。
+ *
+ * 规则（对应服务端 `normalize_name` + `mcp_servers` 的 CHECK）：
+ * 归一后全小写；首尾是字母或数字；中间可含连字符但不得连续；长度 1~64。
+ */
+export const MCP_NAME_PATTERN = '[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?'
+
+/** 与 `MCP_NAME_PATTERN` 等价的可执行版本，用于单测。 */
+export const MCP_NAME_RE = new RegExp(`^${MCP_NAME_PATTERN}$`)
+
 function lines(value: FormDataEntryValue | null): string[] {
   return String(value ?? '')
     .split('\n')

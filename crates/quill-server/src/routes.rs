@@ -1,6 +1,6 @@
 use axum::extract::Path;
 use axum::response::IntoResponse;
-use axum::routing::{get, patch, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 
 use crate::api_admin;
@@ -8,6 +8,7 @@ use crate::api_chat;
 use crate::api_auth;
 use crate::api_dispatch;
 use crate::api_experts;
+use crate::api_extensions;
 use crate::api_providers;
 use crate::api_teams;
 use crate::error::ApiError;
@@ -126,30 +127,25 @@ pub fn build_router(state: AppState) -> Router {
     let extensions = Router::new()
         .route(
             "/api/extensions/mcp",
-            get(|_u: crate::auth::AuthUser| async {
-                not_implemented("GET", "/api/extensions/mcp")
-            })
-            .post(|_u: crate::auth::AuthUser| async {
-                not_implemented("POST", "/api/extensions/mcp")
-            }),
+            get(api_extensions::list_mcp).post(api_extensions::save_mcp),
         )
         .route(
             "/api/extensions/mcp/{name}",
+            // PATCH 还没接：前端目前是全量 POST，单条改用不上。
+            // 留着桩是为了契约完整，但**必须继续报 501** ——
+            // 悄悄改成 200 才叫假成功。
             patch(|_u: crate::auth::AuthUser, _n: Path<String>| async {
                 not_implemented("PATCH", "/api/extensions/mcp/{name}")
             })
-            .delete(|_u: crate::auth::AuthUser, _n: Path<String>| async {
-                not_implemented("DELETE", "/api/extensions/mcp/{name}")
-            }),
+            .delete(api_extensions::delete_mcp),
         )
         .route(
             "/api/extensions/skills",
-            get(|_u: crate::auth::AuthUser| async {
-                not_implemented("GET", "/api/extensions/skills")
-            })
-            .post(|_u: crate::auth::AuthUser| async {
-                not_implemented("POST", "/api/extensions/skills")
-            }),
+            get(api_extensions::list_skills).post(api_extensions::save_skill),
+        )
+        .route(
+            "/api/extensions/skills/{name}",
+            delete(api_extensions::delete_skill),
         )
         .route(
             "/api/extensions/plugins",

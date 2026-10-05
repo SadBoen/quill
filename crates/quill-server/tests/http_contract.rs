@@ -397,13 +397,22 @@ async fn created_session_id_is_byte_identical_to_the_listed_one() {
 async fn every_contract_route_responds_and_is_never_a_false_success() {
     // 「已实现」清单必须跟着实现一起长，否则新接通的路由会因为不再返回 501
     // 而被判成「假成功」——这正是本测试要抓的东西，所以清单不能手懒。
-    const IMPLEMENTED: [(&str, &str); 34] = [
+    const IMPLEMENTED: [(&str, &str); 40] = [
         ("GET", "/api/version"),
         ("GET", "/api/auth/me"),
         ("GET", "/api/healthz"),
         ("POST", "/api/auth/login"),
         ("POST", "/api/auth/refresh"),
         ("POST", "/api/auth/logout"),
+        // MCP 配置与 SKILL：存储层已通（2026-10-06 接通）。**只管存，不连服务器**
+        // —— 协议层（rmcp）还没落地，所以 `GET` 的响应里 `connected` 恒为
+        // false。把它列进「已实现」的同时，这条注释也钉住那个前提。
+        ("GET", "/api/extensions/mcp"),
+        ("POST", "/api/extensions/mcp"),
+        ("DELETE", "/api/extensions/mcp/{name}"),
+        ("GET", "/api/extensions/skills"),
+        ("POST", "/api/extensions/skills"),
+        ("DELETE", "/api/extensions/skills/{name}"),
         ("GET", "/api/experts"),
         ("POST", "/api/experts"),
         ("GET", "/api/experts/{slug}"),

@@ -1,4 +1,5 @@
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
+use sqlx::Acquire;
 use sqlx::SqlitePool;
 use std::str::FromStr;
 use std::time::Duration;
@@ -101,14 +102,36 @@ pub async fn configure_pool(path: &str, max_connections: u32) -> Result<SqlitePo
         .await
 }
 
+/// 应用一段迁移。
+///
+/// **全程用同一条连接**，且包在一个事务里。这两点都不是风格问题：
+///
+/// - 用同一条连接：迁移里带 `PRAGMA`。`PRAGMA` 是**连接级**的，而
+///   `SqlitePool` 每条 `query()` 各自取连接。`PRAGMA foreign_keys = OFF`
+///   落在 A 连接上，下一条 `DROP TABLE` 却在 B 连接上照旧开着外键 ——
+///   迁移于是以一个「自己没打算用的配置」跑完，行为随连接调度漂移。
+/// - 事务：一条迁移要不就全成，要不就全不成。逐条提交的话，0007 那种
+///   「建新表 → 搬数据 → 删旧表 → 改名」的迁移在中途失败会留下半张表，
+///   而台账里那条 `schema_version` 还没写，下次启动会当成没跑过再来一遍。
+///   注意：事务会让 `PRAGMA foreign_keys = OFF` 变成空操作，所以迁移**不能**
+///   依赖它（需要的话得先关约束、改表、再开回来）。
 pub async fn run_migration(pool: &SqlitePool, sql: &str) -> Result<usize, sqlx::Error> {
     let stmts = split_statements(sql);
-    for s in &stmts {
-        sqlx::query(s).execute(pool).await?;
+    let mut conn = pool.acquire().await?;
+    let mut tx = conn.begin().await?;
+
+    for (i, s) in stmts.iter().enumerate() {
+        // 带上序号与语句片段：迁移失败时只说 "error returned from database"
+        // 的话，人得自己回去数第几条。
+        sqlx::query(s)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| annotate_stmt(e, i + 1, stmts.len(), s))?;
     }
+    tx.commit().await?;
 
     let fk: i64 = sqlx::query_scalar("PRAGMA foreign_keys")
-        .fetch_one(pool)
+        .fetch_one(&mut *conn)
         .await?;
     if fk != 1 {
         return Err(sqlx::Error::Protocol(
@@ -116,6 +139,26 @@ pub async fn run_migration(pool: &SqlitePool, sql: &str) -> Result<usize, sqlx::
         ));
     }
     Ok(stmts.len())
+}
+
+fn annotate_stmt(e: sqlx::Error, idx: usize, total: usize, stmt: &str) -> sqlx::Error {
+    if !matches!(e, sqlx::Error::Protocol(_)) {
+        return sqlx::Error::Protocol(format!(
+            "第 {idx}/{total} 条语句失败：{e}。语句：{}",
+            head(stmt, 120)
+        ));
+    }
+    e
+}
+
+fn head(s: &str, max: usize) -> String {
+    let one: Vec<&str> = s.split_whitespace().collect();
+    let joined = one.join(" ");
+    if joined.chars().count() <= max {
+        return joined;
+    }
+    let cut: String = joined.chars().take(max).collect();
+    format!("{cut}…")
 }
 
 pub const MIGRATION_0001: &str = include_str!("../migrations/0001_init.sql");
@@ -549,6 +592,102 @@ mod tests {
         .await;
         assert!(bad3.is_err(), "能力列表必须是合法 JSON 数组");
     }
+
+    /// 迁移必须在**多连接文件池**上跑得通 —— 这才是服务真正用的形态。
+    ///
+    /// 这条测试是被一个真 bug 逼出来的：`in_memory()` 只有一条连接，而
+    /// `configure_pool(path, 5)` 有五条。旧的 `run_migration` 逐条
+    /// `query(pool)`，每条各自取连接，于是迁移里的
+    /// `PRAGMA foreign_keys = OFF` 落在连接 A，紧接着的
+    /// `DROP TABLE` / `ALTER TABLE ... RENAME` 却在连接 B 上照旧开着外键。
+    /// 0007 的改名因此报 "there is already another table or index with
+    /// this name: mcp_servers"，`quill doctor` 退出码 2，六个 CLI 用例全红。
+    /// 单连接的内存库永远测不出来。
+    #[tokio::test]
+    async fn all_migrations_apply_through_a_multi_connection_file_pool() {
+        let dir = std::env::temp_dir().join(format!(
+            "quill-store-multiconn-{}-{:?}.db",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_file(&dir);
+        let _ = std::fs::remove_file(format!("{}-wal", dir.to_string_lossy()));
+        let _ = std::fs::remove_file(format!("{}-shm", dir.to_string_lossy()));
+        let path = dir.to_string_lossy().to_string();
+
+        let pool = configure_pool(&path, 5).await.expect("建池");
+        // 逼出多连接：一条握着不放，剩下的语句必须去别的连接上跑。
+        let hog = pool.acquire().await.expect("占住一条连接");
+        migrate(&pool).await.expect("五条连接上迁移必须全过");
+        assert!(
+            schema_is_current(&pool).await.expect("查台账"),
+            "迁移后台账应与 MIGRATIONS 等长"
+        );
+        drop(hog);
+
+        // 再跑一次必须完全空转（幂等）。
+        let again = migrate(&pool).await.expect("第二次迁移");
+        assert!(again.applied.is_empty(), "第二次不该再应用任何迁移");
+        assert_eq!(again.already_current.len(), MIGRATIONS.len());
+
+        let _ = std::fs::remove_file(&dir);
+    }
+
+    /// 迁移中途失败必须整条回滚，不能留下半张表。
+    ///
+    /// 逐条提交的写法下，「建新表 → 搬数据 → 删旧表 → 改名」失败在中间
+    /// 会留下一张孤儿表，而台账里那条 `schema_version` 还没写 —— 下次启动
+    /// 会当成没跑过再来一遍，于是第二次报「表已存在」，现场比第一次更难查。
+    #[tokio::test]
+    async fn a_failing_migration_leaves_nothing_behind() {
+        let pool = in_memory().await.expect("内存库");
+        let before: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM sqlite_master WHERE type='table'")
+                .fetch_one(&pool)
+                .await
+                .expect("数表");
+
+        // 前两条能过，第三条必然失败。
+        let r = run_migration(
+            &pool,
+            "CREATE TABLE t_probe(x);\
+             CREATE INDEX ix_t_probe ON t_probe(x);\
+             INSERT INTO t_probe_no_such_table(x) VALUES(1);",
+        )
+        .await;
+        assert!(r.is_err(), "引用不存在的表必须失败");
+
+        let after: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM sqlite_master WHERE type='table'")
+                .fetch_one(&pool)
+                .await
+                .expect("数表");
+        assert_eq!(
+            before, after,
+            "失败的事务必须整体回滚：t_probe 与 ix_t_probe 都不该留下"
+        );
+    }
+
+    /// 失败信息要带「第几条 / 共几条」和语句片段。
+    ///
+    /// 只说 "error returned from database" 的话，人得回去自己数 SQL；
+    /// 0007 那种十几条语句的迁移，数错了查的就不是出问题的那条。
+    #[tokio::test]
+    async fn a_failing_statement_says_which_one_it_was() {
+        let pool = in_memory().await.expect("内存库");
+        let e = run_migration(
+            &pool,
+            "CREATE TABLE t_probe(x);\
+             CREATE TABLE t_probe2(x);\
+             INSERT INTO nope_missing(x) VALUES(1);",
+        )
+        .await
+        .expect_err("第三条应当失败");
+        let msg = e.to_string();
+        assert!(msg.contains("3/3"), "要说清是第几条：{msg}");
+        assert!(msg.contains("nope_missing"), "要带上语句片段：{msg}");
+    }
+
     /// team_slug 默认空串并回填成合法 slug，且未软删行内按用户唯一、
     /// 软删后可以复用同一个 slug。
     #[tokio::test]

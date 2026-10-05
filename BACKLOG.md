@@ -42,16 +42,17 @@
 | 启动 / 停止 / 重载 agent | `AgentCard.tsx:208-246,429-439` | quill 没有常驻 agent 进程（crates 里没有 `/api/agents`、没有 `start_agent`/`stop_agent`），专家只是每次请求插一条 system 消息 |
 | 工作区抽屉 | `AgentCard.tsx:410-427` | 没有工作区目录概念 |
 | 整理记忆 / 记忆瘦身 | `AgentCard.tsx:354` | 记忆系统未落地 |
-| 技能包 / 插件 / 工具 / MCP / 记忆 / 渠道 七个 catalog 抽屉 | `AgentMoreActions.tsx:17-23` | 三个 `GET /api/extensions/{skills,plugins,mcp}` 是 501 桩，`/api/cron` 连路由都没注册（返 404） |
+| 技能包 / 插件 / 工具 / MCP / 记忆 / 渠道 七个 catalog 抽屉 | `AgentMoreActions.tsx:17-23` | 2026-10-06 更新：`GET /api/extensions/{mcp,skills}` 已是真实现（见下方「MCP 与 SKILL」章节），`GET /api/extensions/plugins` 仍是 501 桩，`/api/cron` 连路由都没注册（返 404）。**catalog 抽屉本身仍然没做** —— quill 只有设备页那一张 MCP 列表 |
 | 发布到模板市场 / 专家市场 | `PublishExpertDrawer` / `ExpertMarketTab` | 无发布接口 |
 | 共享 / 远端专家徽标 | `AgentExpertsTable.tsx:313-322` | 列表没有 `is_shared` 概念 |
 | MBTI 人格标签 | `MbtiPersonaTag` | 无 MBTI 概念 |
 | 2 秒轮询运行态 | `AgentExpertsTable.tsx:170-200` | 无运行态 |
 | `StreamSetupGuide` 吉祥物空态 | `index.tsx:412-432` | 是 Octop 的引导流 + 美术资产 |
 
-界面上这些能力统一用**一个**说明块列出「下一步该接哪个路由」，不画假开关。
-已经这么做的地方：对话页工具坞 `ChatPage.tsx` 的 `PENDING_TOOLS`、
-专家库生成面板 `LibraryTab.tsx` 的 `PENDING_CAPABILITIES`。
+界面上这些能力统一用**一个**说明块列出真实接通程度，不画假开关。
+数据在 `ui/web/src/capabilityGaps.ts`，对话页工具坞与专家库生成面板**共用同一份**，
+避免两处各说各话。文案分两类：`partial`（存储层已通、执行层没接）与
+`not-implemented`（路由压根不存在）—— 混成一句「未接通」就是在骗人。
 
 ---
 
@@ -293,27 +294,89 @@ testkit 里的假实现，生产路径为零。`teams` 表的 `guidelines` / `ma
 
 **这块的 UI 反而是诚实的**：`TeamsTab.tsx` 明确渲染「只记账，未派工」。
 
-### SKILL / MCP：引擎层压根没写
+### SKILL / MCP：存储层已通，协议层没接（2026-10-06 更新）
 
-不是「只差路由」。`crates/quill-ext-hub/src/lib.rs` 全文只有一个
-`assert_eq!(2+2,4)` —— 没有函数、没有结构体、没有 trait。现状是三明治：
-数据库 schema 完整、前端 UI 已就绪、中间是空的。没有一行 INSERT/SELECT，
-`mcp_repo` / `skills_repo` 都不存在。
+**这一节推翻了上一版结论。** 上一版写的是「引擎层压根没写、`mcp_repo` /
+`skills_repo` 都不存在、保存按钮必 500」。现在：
 
-**一个真 bug：前端 transport 枚举与数据库 CHECK 打架。** 前端发
-`stdio | streamable_http | sse`，数据库只接受 `stdio | http | builtin`；
-`cwd` / `max_concurrent_calls` / `enabled_capabilities` 三个前端字段数据库里
-根本没有列。所以**设备页的 MCP 保存按钮现在必 500** —— 不是 501 桩，是真会炸。
+- `crates/quill-server/src/mcp_repo.rs` / `skills_repo.rs` 已落地，
+  `GET|POST /api/extensions/mcp` 与 `GET|POST /api/extensions/skills`、
+  两个 `DELETE /{name}` 都是真实现，不再是 501 桩。
+- 0007 迁移把 `mcp_servers` 重建，transport 改为
+  `stdio | streamable_http | sse | builtin`，补 `cwd` / `max_concurrent_calls` /
+  `enabled_capabilities_json` 三列，老库的 `'http'` 搬迁为 `'streamable_http`。
+  **那个「必 500」不再成立。**
+- 上面那个「保存按钮必 500」的真 bug 也修了：见下方「run_migration 的连接池 bug」。
 
-`expert.skill_count`（写的是字面量 `0`）与 `expert.tool_policy_json`
-（硬编码 `'{}'`）都是装饰字段，零消费者。
+**仍然没做的是协议层。** `GET /api/extensions/mcp` 的响应里 `connected` 恒为
+`false`，`note` 写明「下一步：接 rmcp 协议层」。`PATCH /api/extensions/mcp/{name}`
+与 `GET /api/extensions/plugins` 仍是 501。界面上不许出现任何由 `servers.length`
+推断出来的「已连接」字样。
 
-**参考实现**：goose 在 `vendor/goose/` 用 `rmcp` crate，`.mcp.json` 格式
+#### 修掉的一个深层 bug：`run_migration` 与连接池
+
+`quill_store::run_migration` 原来逐条 `sqlx::query(s).execute(pool)`，而
+`SqlitePool` **每条 query 各自取连接**。于是 0007 开头的
+`PRAGMA foreign_keys = OFF` 落在连接 A，紧接着的 `DROP TABLE` / `ALTER TABLE` 却在
+连接 B 上照旧开着外键，0007 直接报
+`there is already another table or index with this name: mcp_servers`，
+`quill doctor` 退出码 2，六个 CLI 用例全红。
+
+**为什么一直没被发现**：`quill-store` 的迁移测试用 `in_memory()`，那条池
+`max_connections(1)`，单连接下 `PRAGMA` 永远生效。真实服务是
+`configure_pool(path, 5)`，五连接，问题必现。已补
+`all_migrations_apply_through_a_multi_connection_file_pool` 钉住。
+
+现在 `run_migration` **固定用一条连接并包在一个事务里**。顺带：失败时错误里带
+「第 N/M 条语句失败：… 语句：…」——只说 `error returned from database` 的话，
+人得回去自己数 SQL。
+
+#### 指纹（`asset_hash`）
+
+内容没变就整行跳过，不动 `updated_at`；否则每次点保存所有行都像变过一遍，
+`updated_at` 就失去意义了。指纹必须**32 字节**（`mcp_servers.asset_hash` 与
+`skills.content_hash` 的 CHECK 都是 `length = 32`），所以复用 `db::digest32`
+而不是截 SHA-256。分段用「个数 + 每项长度前缀」：`[""]` 与 `[]`、`["a\u{1}b"]` 与
+`["a","b"]` 都必须算出不同指纹（这两条都是被自己的单测抓出来的真碰撞）。
+`env` 与 `headers` 分两个区段算，合成一张 map 会让同名字段互相覆盖。
+
+#### SKILL 即工具（抄 Octop 的 `SkillListItem.tool_name`）
+
+SKILL 不走 prompt，走 `tools` 字段 —— 于是「SKILL 怎么进 prompt」这个问题
+**不必回答**，用不到就不占常驻上下文。正文落盘到 `<db 同级>/skills/{slug}.md`，
+`skills` 行只留摘要与路径（与 Octop「挂目录给运行时」一致，也让
+`content_hash` 名副其实）。`skills_repo::as_tool_spec` 已经能把它变成
+`ToolSpec`，**但还没接进 `ToolRegistry`** —— 那是接上工具调用后的下一步。
+
+#### 参考实现
+
+goose 在 `vendor/goose/` 用 `rmcp` crate，`.mcp.json` 格式
 `{ "mcpServers": { name: { command, args, env, cwd } } }` —— 但**只支持 stdio**，
 HTTP/SSE 它没有。SKILL 参考 octop：`skills/{slug}/SKILL.md`，且它**不把内容拼进
-prompt，是挂目录给运行时按需加载** —— 这个设计更适合 quill（quill 没有 harness
-概念，没有现成挂载点）。
+prompt，是挂目录给运行时按需加载**。
 
-**待决**：① transport 枚举以谁为准（改迁移 vs 前端适配）；② 要不要引入 `rmcp`；
-③ SKILL 的消费方式（挂目录 vs 拼 prompt）。
+#### 待决 / 下一步
+
+1. 引入 `rmcp` 铺协议层，让 `tools/list` 真能连上（A 部分，用户已同意引入）。
+   结论：抄 goose 的**技术选型**（`rmcp` crate），但不复用它的 crate ——
+   `vendor/goose` 是独立 workspace（自带 `[workspace]`），quill 无法 path-depend；
+   它的 `mcp_client.rs` 有 1687 行且与 agent 类型深度耦合。
+2. 把 SKILL 通过 `as_tool_spec` 挂进 `ToolRegistry`，按用户过滤。
+3. `PATCH /api/extensions/mcp/{name}`（部分更新）与 `GET /api/extensions/plugins`。
+
+#### 顺带修掉的前后端契约 bug
+
+前端 `<input name="name">` 的 `pattern` 原来是 `[a-z][a-z0-9_]{0,31}`，只允许
+下划线；服务端把 `_` 归一成 `-` 并回填 `company-search`。于是
+**「保存 → 重新编辑」这一圈直接死掉** —— 编辑框里回填的 `company-search`
+过不了页面自己的 `pattern`，浏览器拦下提交，用户只看到一个说不清来由的红框。
+旧写法还要求首字符是字母，而服务端允许数字开头。
+
+已把 pattern 改成 `[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?`（`MCP_NAME_PATTERN`，
+`ui/web/src/devices/mcpConfig.ts`），并在 `mcp_repo.rs` 里加了同源表子：
+**方向是「服务端产出 ⊆ 前端能收」**，反过来不成立（前端比服务端严一点是提前
+拦下，严过头才是 bug）。两个文件里都有对照注释。
+
+`expert.skill_count`（写的是字面量 `0`）与 `expert.tool_policy_json`
+（硬编码 `'{}'`）仍是装饰字段，零消费者。
 
