@@ -418,6 +418,11 @@ export const en = {
       modalityUnknown: 'Unknown',
       contextLabel: 'Context',
       contextUnknown: 'Context unknown',
+      configuredContextLabel: 'Configured context:',
+      contextMismatch:
+        'Note: the "Context" above is what the model can actually take — {{probed}}, smaller than your configured {{configured}}. '
+        + 'Anything sized to {{configured}} will exceed the real window and be rejected outright; '
+        + 'next step: set "Context length" to {{probed}}, or raise the model service\'s -c value.',
       starModel: 'Use as the provider default model',
       unstarModel: 'Clear the default model',
       testConnection: 'Test connection',
@@ -925,6 +930,11 @@ export const zhCN = {
       modalityUnknown: '未知',
       contextLabel: '上下文',
       contextUnknown: '上下文未知',
+      configuredContextLabel: '配置上下文：',
+      contextMismatch:
+        '注意：上面「上下文」探测到的是模型实际能吞 {{probed}}，比你配置的 {{configured}} 小。'
+        + '按 {{configured}} 算的话，请求会超过模型真实窗口而被直接拒绝；'
+        + '下一步：把「上下文长度」改成 {{probed}}，或调大模型服务的 -c 参数。',
       starModel: '设为该提供商的默认模型',
       unstarModel: '取消默认模型',
       testConnection: '测试连接',

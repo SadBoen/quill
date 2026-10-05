@@ -374,6 +374,32 @@ const CUSTOM_DEFAULTS: ProviderInput = {
   max_output_tokens: 0,
 }
 
+/**
+ * 「你配置的上限比模型实际能吞的大」——这一条不提示，用户就只会看到
+ * 一条 `exceed_context_size_error` 的 503，而完全不知道根因是自己的配置。
+ * 本机实测：配置 32768、真实窗口 8192，差 4 倍。
+ *
+ * **只在探测值**小于**配置值时出现。探测值缺失（`null`）不出现** ——
+ * 那是「不知道」，不是「一致」，把「不知道」当成没问题是另一种谎。
+ */
+function ContextMismatchWarning({ group }: { group: PoolGroup }): ReactNode {
+  const { t } = useTranslation()
+  const probed = contextMismatch(group)
+  if (probed === null || group.configuredContext === null) return null
+  return (
+    <p className="models-context-mismatch" role="status">
+      {t('models.contextMismatch', {
+        configured: formatContextWindow(group.configuredContext),
+        probed: formatContextWindow(probed),
+        defaultValue:
+          '注意：上面「上下文」探测到的是模型实际能吞 {{probed}}，比你配置的 {{configured}} 小。'
+          + '按 {{configured}} 算的话，请求会超过模型真实窗口而被直接拒绝；'
+          + '下一步：把「上下文长度」改成 {{probed}}，或调大模型服务的 -c 参数。',
+      })}
+    </p>
+  )
+}
+
 function PoolCard({
   pool,
   providers,
@@ -430,6 +456,7 @@ function PoolCard({
               {t('models.poolGroupCount', { count: group.entries.length, defaultValue: '{{count}} 个' })}
             </span>
           </header>
+          <ContextMismatchWarning group={group} />
           <ul className="models-pool-list">
             {group.entries.map((entry) => (
               <li key={`${entry.provider_id}/${entry.model.id}`}>
@@ -743,7 +770,7 @@ function CustomProviderCard({
           <dd>{provider.model || '—'}</dd>
         </div>
         <div>
-          <dt>{t('models.contextLabel', { defaultValue: '上下文:' })}</dt>
+          <dt>{t('models.configuredContextLabel', { defaultValue: '配置上下文:' })}</dt>
           <dd>{formatContextWindow(provider.max_context_tokens)}</dd>
         </div>
       </dl>
@@ -1006,24 +1033,55 @@ function inputOf(provider: Provider): ProviderInput {
   }
 }
 
-interface PoolGroup {
+export interface PoolGroup {
   providerId: string
   name: string
   protocol: ProviderProtocol | ''
   entries: PoolEntry[]
+  /**
+   * 这个 provider **配置里**写的 `max_context_tokens`，拿不到就是 `null`。
+   *
+   * 留着它是为了能和 `entry.model.context_window`（**探测**到的真实窗口）
+   * 对账。两者不一致时必须在界面上说清楚 —— 本机实测就撞上过：
+   * 配置写 32768、实际只吞 8192，于是请求被上游 `exceed_context_size_error`
+   * 拒掉，而用户完全看不出这两个数打架。见 ISSUE-023。
+   */
+  configuredContext: number | null
+}
+
+/**
+ * 这组里**有没有**探测值小于配置值的情况。
+ *
+ * 刻意只报「配置值 > 探测值」这一种：反过来的（配置得比实际小）不会导致请求
+ * 被拒，只是白占窗口，报出来是噪音。而拿不到探测值（`null`）也**不算**不匹配 ——
+ * 那是「不知道」，不是「对」，不能拿它当成一致。
+ *
+ * 导出是为了能单测这三条判断（`ModelsPage.test.tsx`）——
+ * 这个函数决定用户会不会看到那条警告，判错了就是漏报或者误报。
+ */
+export function contextMismatch(group: PoolGroup): number | null {
+  const configured = group.configuredContext
+  if (configured === null || configured <= 0) return null
+  for (const entry of group.entries) {
+    const probed = entry.model.context_window
+    if (probed !== null && probed > 0 && probed < configured) return probed
+  }
+  return null
 }
 
 function groupPool(entries: PoolEntry[], providers: Provider[]): PoolGroup[] {
   const groups: PoolGroup[] = []
   for (const entry of entries) {
+    const provider = providers.find((p) => p.id === entry.provider_id)
     const found = groups.find((group) => group.providerId === entry.provider_id)
     if (found) found.entries.push(entry)
     else {
       groups.push({
         providerId: entry.provider_id,
         name: entry.provider_name,
-        protocol: providers.find((provider) => provider.id === entry.provider_id)?.protocol ?? '',
+        protocol: provider?.protocol ?? '',
         entries: [entry],
+        configuredContext: provider?.max_context_tokens ?? null,
       })
     }
   }

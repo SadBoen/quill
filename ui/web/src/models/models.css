@@ -12,6 +12,18 @@
 .models-pool-head strong { font-size: 12px; }
 .models-pool-head .models-count { margin-left: auto; }
 
+/* 配置的上下文 > 探测到的真实窗口：不提示的话用户只会看到一条
+   exceed_context_size_error 的 503，完全不知道根因是自己的配置（ISSUE-023）。 */
+.models-context-mismatch {
+  background: var(--warn-soft, var(--panel-soft));
+  border-bottom: 1px solid var(--line);
+  color: var(--warn, var(--ink));
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 0;
+  padding: 10px 14px;
+}
+
 .models-protocol {
   background: var(--panel);
   border: 1px solid var(--line-strong);
