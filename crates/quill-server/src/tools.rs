@@ -211,6 +211,79 @@ impl ToolRegistry {
 
         r
     }
+
+    /// 把该用户**已启用**的 SKILL 挂进工具表 —— 「SKILL 即工具」的落地点。
+    ///
+    /// 这一步是 async 而 `builtin` 是 sync：SKILL 的行在库里、正文在磁盘上，
+    /// 两处都得读。`builtin` 只闭包 `AppState`、不发 IO，所以那个签名不动。
+    ///
+    /// **失败就整条请求失败，不静默降级成「只有内置工具」。** 静默降级是最难查
+    /// 的一种故障：用户看到的是「模型好像没学过我的技能」，却没有任何迹象说明
+    /// 是加载失败，而且每一轮都这样。宁可 500，也不要一个看起来正常的对话。
+    ///
+    /// 两种「行在、正文不在」的情况**跳过并记日志**，不注册工具：挂一个
+    /// description 为空的工具进去，模型会调到一个必然没有产出的东西，而界面上
+    /// 还显示这个技能是启用的。
+    pub async fn with_skills(
+        mut self,
+        db: &crate::db::DbBridge,
+        uid: quill_adapters::UserId,
+        root: &std::path::Path,
+    ) -> Result<Self, String> {
+        let rows = crate::skills_repo::list(db, uid)
+            .await
+            .map_err(|e| format!("加载 SKILL 列表失败：{e}"))?;
+
+        for row in rows {
+            if !row.enabled {
+                continue;
+            }
+            let body =
+                crate::api_extensions::read_skill_body(&root.join(format!("{}.md", row.name)));
+            if body.trim().is_empty() {
+                eprintln!(
+                    "[tools] 跳过 SKILL {}：库里有行但磁盘上没有正文（文件被删了，或目录没挂上）",
+                    row.name
+                );
+                continue;
+            }
+            if self.specs.iter().any(|s| s.name == row.name) {
+                // `register` 是「同名替换」。一个叫 `list_experts` 的 SKILL 会
+                // 悄悄顶掉内置工具 —— 那个后果比「这个技能不生效」难查得多。
+                eprintln!(
+                    "[tools] 跳过 SKILL {}：与已有工具同名，挂进去会顶掉它",
+                    row.name
+                );
+                continue;
+            }
+            let spec = crate::skills_repo::as_tool_spec(&row, &body);
+            let handler = skill_handler(&row.name);
+            self.register(spec, handler);
+        }
+        Ok(self)
+    }
+}
+
+/// SKILL 工具的执行体。
+///
+/// **只回执，不回正文** —— 正文已经在 `as_tool_spec` 里进了工具描述，而工具
+/// 描述每轮请求都带着。再回一份就是同一段文字读两遍；更糟的是正文可能超过
+/// `MAX_RESULT_CHARS`，于是回灌给模型的是一份**被截断的**副本，模型会误以为
+/// 方法只写了一半。
+fn skill_handler(name: &str) -> ToolHandler {
+    let name = name.to_string();
+    Arc::new(move |args: &Value| {
+        let task = args
+            .get("task")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .ok_or("缺少参数 task —— 请写清要交给这套方法处理的具体任务。")?;
+        Ok(format!(
+            "已加载「{name}」这套方法（正文见该工具的描述）。\
+             现在按这套方法处理这个任务：\n{task}"
+        ))
+    })
 }
 
 #[cfg(test)]
@@ -356,5 +429,25 @@ mod tests {
             "同名工具重复注册会让模型在两个定义间无所适从"
         );
         assert_eq!(r.call(&call("echo")).expect("应走新实现"), "新");
+    }
+
+    #[test]
+    fn a_skill_tool_result_reports_the_task_and_does_not_repeat_the_body() {
+        let h = skill_handler("code-review");
+        let out = h(&json!({ "task": "审一下 x.rs 里的下拉" })).expect("应成功");
+        assert!(out.contains("code-review"), "要说清用的是哪套方法：{out}");
+        assert!(out.contains("审一下 x.rs 里的下拉"), "任务要回给模型：{out}");
+        assert!(
+            out.chars().count() < MAX_RESULT_CHARS,
+            "回执必须短到不被 render_result 截断，否则模型会拿到半截方法"
+        );
+    }
+
+    #[test]
+    fn a_skill_tool_called_without_a_task_is_reported_back_to_the_model() {
+        for args in [json!({}), json!({"task": "  "}), json!({"task": 7})] {
+            let err = skill_handler("x")(&args).expect_err("缺 task 必须报错");
+            assert!(err.contains("task"), "要说清缺哪个参数：{err}");
+        }
     }
 }

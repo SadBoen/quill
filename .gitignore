@@ -76,3 +76,7 @@ __pycache__/
 # Octop 设计参考：README 与 sparse checkout 保留（记录出处），截图不进仓库
 /.octop-ref/*.png
 /.octop-ref/*.jpg
+
+# 测试集的原始下载件（71MB）。入库的是派生出来的 tasks.json + skills/ + 文档；
+# 原始件可用 .scripts/fetch-testsets.sh 重新拉回来，出处见 TESTSETS/README.md。
+/TESTSETS/_raw/

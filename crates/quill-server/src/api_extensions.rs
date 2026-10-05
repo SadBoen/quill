@@ -357,7 +357,11 @@ fn kv(v: Option<&Value>, label: &str) -> Result<Vec<(String, String)>, ApiError>
 // ------------------------------------------------------------------ SKILL
 
 /// SKILL 正文目录。优先 `QUILL_SKILL_DIR`，否则用数据库同级的 `skills/`。
-fn skill_dir(cfg: &crate::config::Config) -> std::path::PathBuf {
+///
+/// `pub(crate)` 是因为 `tools::ToolRegistry::with_skills` 也要按同一个目录读正文 ——
+/// 挂进工具表时如果自己另算一份路径，界面上「已保存」与模型「能调用」就会
+/// 悄悄指向两个地方。
+pub(crate) fn skill_dir(cfg: &crate::config::Config) -> std::path::PathBuf {
     if let Ok(d) = std::env::var("QUILL_SKILL_DIR") {
         if !d.trim().is_empty() {
             return std::path::PathBuf::from(d);
@@ -388,7 +392,9 @@ fn skill_file(root: &std::path::Path, slug: &str) -> Result<std::path::PathBuf, 
     Ok(path)
 }
 
-fn read_skill_body(path: &std::path::Path) -> String {
+/// 读 SKILL 正文。**读不到就当空**，由调用方决定这算「没配」还是「坏了」——
+/// 静默变成空串会让「文件被删了」看起来像「用户没写内容」。
+pub(crate) fn read_skill_body(path: &std::path::Path) -> String {
     std::fs::read_to_string(path).unwrap_or_default()
 }
 
