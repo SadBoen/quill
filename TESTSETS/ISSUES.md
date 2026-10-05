@@ -1103,6 +1103,55 @@
 
 ---
 
+## ISSUE-028 · 客户端等不下去被记成 `FAIL`，而 `FAIL` 是计入跑过的
+
+**状态**：已修（2026-10-06）
+**归属**：**测试脚手架（`runner.py`）的缺陷，不是 quill 的**
+
+- **现象**（50 条批量跑时撞见，`sb-crystallographic-wyckoff-position-analysis`）：
+  ```
+  FAIL | err=transport / timed out
+  ```
+- **根因是一笔算得出来的账**：
+  ```
+  quill 单次模型调用超时 DEFAULT_TIMEOUT_SECS = 300s   （llm.rs:104）
+  一轮对话最多 1 + MAX_TOOL_ROUNDS 次串行调用          （MAX_TOOL_ROUNDS = 4）
+  → 一轮最坏能到 5 × 300 = 1500s
+  runner 单请求超时原来是 180s
+  ```
+  180 远小于 1500。所以「超时」表达的是「**我等不了了**」，
+  **不是**「quill 出问题了」。
+- **为什么严重**：runner 把 `__http == 0` 一律归到「链路不通」，
+  `verdict()` 于是给 `FAIL`；而 `FAIL` 按定义是
+  「链路不通，或命中 quill 自己的 bug」，并且**计入
+  `PASS + PARTIAL + FAIL` 的「真的跑完」**。
+  也就是说 —— **我自己等不下去，会被算成「quill 跑完了、只是没通过」**。
+  这正是红线里最不许出现的那种虚增，而且是**系统性**的：
+  工具循环越多、单轮越慢，命中率越高。
+- **已修**：
+  - 新增判定 `TIMEOUT`：**客户端自己等不下去了**，结果没拿到。
+    与 `UNJUDGEABLE` 一样**不计入**「真的跑完」，但含义不同 ——
+    `UNJUDGEABLE` 是「跑完了、验不了」，`TIMEOUT` 是「压根没拿到结果」。
+  - `judge()` 识别 `transport` + `timed out` 这一组合，置 `timed_out=True`，
+    并把 `link.why` 改成「客户端超时，没拿到结果（这不是 quill 的错）」——
+    **错误原文照旧带出去，不改写**（改写过的错误没法用来排查）。
+  - runner 默认超时 180s → **600s**，并加 `--timeout` /
+    `QUILL_RUNNER_TIMEOUT` 可调；`--help` 里写明它只是**下限**，
+    因为 quill 最坏能到 1500s。
+- **回归**（`.wsl-t28.sh`，4 条断言，**已验证不是空断言**）：
+  - 超时 → `TIMEOUT`，且**不等于** `FAIL`
+  - 真·链路不通 → **仍然** `FAIL`（别把这个洞修过头）
+  - 链路通但没维度可判 → `UNJUDGEABLE`（ISSUE-017 那条不许被带坏）
+  - 默认超时 ≥ 600s
+  - 负向验证：把 `res.get("timed_out")` 那个分支改掉之后，
+    第 1 条**立刻红**（`AssertionError: 超时应判 TIMEOUT，实际 UNJUDGEABLE`），
+    改回后恢复。
+- **没有单测进仓库门禁**：本仓库的 Python 不在 `.wsl-verify-persona.sh` 里，
+  上面 4 条是本轮自用脚本。这与 `runner.py` / `build_tasks.py` 的现状一致，
+  **如实记着，不假装它有门禁保护**。
+
+---
+
 ## ISSUE-026 · MCP 服务器的 `enabled=false` 只存不用：用户停用了，工具照样挂进对话
 
 **状态**：已修（2026-10-06）

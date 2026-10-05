@@ -87,7 +87,7 @@ class Quillian:
     误记成一条 ISSUE。
     """
 
-    def __init__(self, base: str, token: str, timeout: int = 180):
+    def __init__(self, base: str, token: str, timeout: int = 600):
         self.base = base.rstrip("/")
         self.token = token
         self.timeout = timeout
@@ -366,11 +366,20 @@ def judge(task: dict, chat: dict, need_servers: dict, servers: dict,
         "tools": {"judgeable": False, "called": [], "missing_servers": [], "why": ""},
         "claims": {"judgeable": False, "hit": 0, "total": 0, "why": ""},
         "suspicions": [],
+        # 客户端自己等不下去了 —— 与「链路不通」是两回事，见 ISSUE-028。
+        "timed_out": False,
     }
 
     # 1) 链路
     if chat.get("__http") == 0:
-        res["link"]["why"] = "连不上服务：%s" % err_detail(chat)
+        code = ((chat.get("error") or {}).get("code") or "")
+        res["timed_out"] = code == "transport" and "timed out" in err_detail(chat)
+        res["link"]["why"] = (
+            "客户端超时，没拿到结果（这不是 quill 的错，详见 ISSUE-028）：%s"
+            % err_detail(chat)
+            if res["timed_out"]
+            else "连不上服务：%s" % err_detail(chat)
+        )
     elif chat.get("error"):
         res["link"]["why"] = "HTTP %s：%s" % (chat.get("__http"), err_detail(chat))
     else:
@@ -453,7 +462,11 @@ def verdict(res: dict) -> str:
     - 一个维度都没判过 → `UNJUDGEABLE`（什么都没验，不是验过了）
     - 判过且有不过的   → `PARTIAL`
     - 命中原项目认定的 bug（正文被吞等）→ `FAIL`
+    - **客户端自己等不下去了** → `TIMEOUT`（见下，不是 FAIL）
     """
+    # 超时**不是 FAIL**，也不是任何一种「验过了」。见 ISSUE-028。
+    if res.get("timed_out"):
+        return "TIMEOUT"
     if not res["link"]["ok"]:
         return "FAIL"
     if res["suspicions"]:
@@ -544,6 +557,15 @@ def main() -> int:
     ap.add_argument("--only", action="append", default=[], help="只跑这些 id，可重复")
     ap.add_argument("--source", choices=["MCP-Atlas", "SkillsBench"], help="只跑某一段")
     ap.add_argument("--dry-run", action="store_true", help="只读，不发任何写请求")
+    ap.add_argument(
+        "--timeout",
+        type=int,
+        default=int(os.environ.get("QUILL_RUNNER_TIMEOUT", "600")),
+        help="单条请求的客户端超时秒数，默认 600。"
+        "**注意这只是下限**：quill 一轮对话最多 1 + MAX_TOOL_ROUNDS 次串行模型调用，"
+        "每次都有自己的超时（默认 300s），最坏能到 1500s。"
+        "等不下去会记成 TIMEOUT，**不算跑过**（见 ISSUE-028）。",
+    )
     args = ap.parse_args()
 
     with open(TASKS, encoding="utf-8") as f:
@@ -559,7 +581,7 @@ def main() -> int:
         print("没有匹配到任务。", file=sys.stderr)
         return 2
 
-    q = Quillian(args.base, args.token)
+    q = Quillian(args.base, args.token, timeout=args.timeout)
     st, health = q.get("/healthz")
     if st != 200:
         print("服务不可达（%s）：%s" % (args.base, err_detail(health)), file=sys.stderr)
@@ -643,9 +665,13 @@ def main() -> int:
         "  PARTIAL      链路通，但有维度判过且没过（该调的工具没调、断言没全中）。\n"
         "  FAIL         链路不通，或命中「调了工具却把正文吞了」这类 quill 自己的 bug。\n"
         "  UNJUDGEABLE  链路通，但**没有任何一维可判** —— 什么都没验，不是验过了。\n"
-        "\n真的跑完的条数 = PASS + PARTIAL + FAIL = %d（UNJUDGEABLE 不算跑过）\n"
+        "  TIMEOUT      **客户端自己等不下去了**（不是 quill 的错），结果没拿到。\n"
+        "\n真的跑完的条数 = PASS + PARTIAL + FAIL = %d"
+        "（UNJUDGEABLE 与 TIMEOUT 都不算跑过）\n"
         "依赖的服务器没配时，工具那一维度记 unjudgeable 并写清缺哪几台 ——\n"
-        "**那不是 quill 的问题，也不算跑过。**" % done
+        "**那不是 quill 的问题，也不算跑过。**\n"
+        "客户端超时记 TIMEOUT：quill 一轮最多 1+%d 次串行模型调用，"
+        "最坏比这个长得多，等不下去不等于它坏了。" % (done, 4)
     )
     return 0
 
