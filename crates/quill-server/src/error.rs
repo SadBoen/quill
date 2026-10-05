@@ -15,6 +15,13 @@ pub enum ApiError {
         detail: String,
     },
 
+    /// 模型服务**回话了**但拒绝了这次请求。与 `ProviderUnavailable` 分开的原因
+    /// 见 `provider_rejected` 的文档。
+    ProviderRejected {
+        detail: String,
+        advice: &'static str,
+    },
+
     NotFound {
         path: String,
     },
@@ -108,6 +115,27 @@ impl ApiError {
         }
     }
 
+    /// **模型服务活着、但它回了一个错误**（HTTP 4xx/5xx、响应不合法、上游拒绝）。
+    ///
+    /// 为什么要与 `ProviderUnavailable` 分开：`ProviderUnavailable` 的「下一步」是
+    /// 「先 curl 一下确认端点活着 / 把 llama-server 起起来」—— 那句话在**连不上**
+    /// 时是对的，在**连上了但被拒**时是错的：让用户去检查一个当场回过话的服务，
+    /// 比不给建议更糟（他会以为服务没起，反复重启，最后仍然不通）。
+    ///
+    /// 证据（2026-10-06 实测）：模型上下文是 8192，装了 5 个 SKILL 之后请求
+    /// 变成 8525 token，上游回 `exceed_context_size_error`。那时候界面给的
+    /// 「下一步」是「先确认端点活着；本地模型请先启动 llama-server」——
+    /// 而端点明明活着。见 ISSUE-018。
+    ///
+    /// `advice` 由调用方按 `ProviderError` 的种类挑好传进来，而不是在这里猜：
+    /// `quill-provider` 已经分得清 `Unreachable`（没连上）与 `Status`（回了错）。
+    pub fn provider_rejected(detail: impl Into<String>, advice: &'static str) -> Self {
+        Self::ProviderRejected {
+            detail: detail.into(),
+            advice,
+        }
+    }
+
     pub fn storage_unavailable_detail(detail: impl Into<String>) -> Self {
         Self::StorageUnavailable {
             detail: detail.into(),
@@ -155,6 +183,9 @@ impl ApiError {
             Self::StorageUnavailable { .. } | Self::ProviderUnavailable { .. } => {
                 StatusCode::SERVICE_UNAVAILABLE
             }
+            // 与 `ProviderUnavailable` 同一个状态码：**请求确实没拿到结果**。
+            // 分开的是「下一步」说什么，不是「算不算失败」。
+            Self::ProviderRejected { .. } => StatusCode::SERVICE_UNAVAILABLE,
             Self::TooManyRequests { .. } => StatusCode::TOO_MANY_REQUESTS,
             Self::Internal { .. } => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -172,6 +203,7 @@ impl ApiError {
             Self::NotImplemented { .. } => "not_implemented",
             Self::StorageUnavailable { .. } => "storage_unavailable",
             Self::ProviderUnavailable { .. } => "provider_unavailable",
+            Self::ProviderRejected { .. } => "provider_rejected",
             Self::TooManyRequests { .. } => "too_many_requests",
             Self::Internal { .. } => "internal_error",
         }
@@ -193,6 +225,7 @@ impl ApiError {
             }
             Self::StorageUnavailable { detail } => detail.clone(),
             Self::ProviderUnavailable { detail } => detail.clone(),
+            Self::ProviderRejected { detail, .. } => detail.clone(),
             Self::TooManyRequests { detail, .. } => detail.clone(),
             Self::Internal { detail } => detail.clone(),
         }
@@ -245,6 +278,10 @@ impl ApiError {
                  本地模型请先启动 llama-server，再用 `QUILL_LLM_BASE_URL` / `QUILL_LLM_MODEL` \
                  指向正确的地址与模型名后重启 quill-server。"
             }
+            // 「下一步」由调用方按 ProviderError 的种类挑好传进来。
+            // 绝不能在这里给一句通用的「去确认端点活着」——模型明明回过话，
+            // 让用户去检查一个活着的服务只会把他引到错误的分支上。
+            Self::ProviderRejected { advice, .. } => advice,
             Self::Internal { .. } => {
                 "查看服务端 stderr 日志中带请求 ID 的记录定位真实原因（客户端只拿到可读说明，\
                  不会收到内部栈）；然后执行 `quill doctor` 打印完整诊断，修复后用同一请求重试。"
@@ -301,6 +338,66 @@ impl IntoResponse for ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ISSUE-018 的核心防线：**模型明明回过话，就不许让用户去重启它。**
+    ///
+    /// 两种错误的「下一步」必须不同，而且 `ProviderRejected` 那句里
+    /// **不许**出现「确认端点活着」「启动 llama-server」——
+    /// 那两句在「回过话但被拒」时是错的，会把用户引到「反复重启一个活着的服务」
+    /// 这条死路上。
+    #[test]
+    fn a_live_model_that_refuses_must_not_be_reported_as_unreachable() {
+        let dead = ApiError::service_unavailable("模型调用失败：连不上 LLM 服务");
+        let alive = ApiError::provider_rejected(
+            "模型调用失败：exceeds the available context size",
+            crate::api_chat::ADVICE_REJECTED_BY_STATUS,
+        );
+
+        // 状态码可以一样（都没拿到结果），但错误码与「下一步」必须分得开。
+        assert_eq!(dead.code(), "provider_unavailable");
+        assert_eq!(alive.code(), "provider_rejected");
+        assert_eq!(dead.status(), alive.status());
+
+        for wrong in ["确认端点活着", "启动 llama-server", "llama-server"] {
+            assert!(
+                !alive.next_step().contains(wrong),
+                "模型回过话了，「下一步」里不该出现「{wrong}」：{}",
+                alive.next_step()
+            );
+        }
+        // 真的没连上时，那句建议**必须**还在 —— 别把一个 bug 修成另一个 bug。
+        assert!(dead.next_step().contains("确认端点活着"));
+    }
+
+    /// 两条分支都必须给出**可执行的**下一步，而且不能是同一句。
+    ///
+    /// **这里不断言字面量「下一步」三个字**：`next_step` 是结构化字段，
+    /// 前端把它渲染成独立的一段（`Page.tsx` 的 `.form-error-next`），
+    /// 标签由字段名承担。仓库里既有的 `next_step`（unauthorized、
+    /// too_many_requests、internal）也都不含这三个字 ——
+    /// 要断言它，就得先改掉那三条，属于无谓的措辞 churn。
+    /// 真正要盯的是：**有内容、且能照着做**。
+    #[test]
+    fn both_provider_outcomes_hand_the_user_a_distinct_actionable_next_step() {
+        let dead = ApiError::service_unavailable("模型调用失败：连不上 LLM 服务");
+        let alive = ApiError::provider_rejected(
+            "模型调用失败：exceeds the available context size",
+            crate::api_chat::ADVICE_REJECTED_BY_STATUS,
+        );
+
+        assert_ne!(
+            dead.next_step(),
+            alive.next_step(),
+            "连不上与回过话但被拒，下一步必须不同"
+        );
+        for e in [dead, alive] {
+            let n = e.next_step();
+            assert!(n.chars().count() > 20, "{:?} 的下一步太短，说不清怎么做：{n}", e.code());
+            // 「能照着做」的最低要求：给得出一个可执行的东西（命令 / 键名 / 具体动作）。
+            let actionable = n.contains('`') || n.contains("下一步") || n.contains("；");
+            assert!(actionable, "{:?} 的下一步里没有可执行的动作：{n}", e.code());
+        }
+    }
 
     #[test]
     fn unauthorized_has_single_shape_so_user_enumeration_is_impossible() {

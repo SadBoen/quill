@@ -78,6 +78,57 @@ fn storage(e: quill_agent::AgentError) -> ApiError {
     ApiError::storage_unavailable(e.to_string())
 }
 
+/// 模型调用失败时怎么措辞。
+///
+/// **关键是把「连不上」与「连上了但被拒」分开。** `ProviderError` 本来就分得清
+/// （`Unreachable` / `Timeout` / `ModelNotFound` / `NotConfigured` 是没连上；
+/// `Status` / `MalformedResponse` / `UpstreamRejected` / `InvalidRequest`
+/// 是回过话的），而这两种情况的「下一步」**完全相反**。
+///
+/// 早先这里不管哪种都套 `service_unavailable`，于是下面这句在第二种情况下
+/// 变成了假建议：
+/// > 「模型服务不可用：先执行 curl …/models 确认端点活着；本地模型请先启动 llama-server」
+///
+/// 实测踩到过（2026-10-06）：模型上下文 8192，装了 5 个 SKILL 之后请求变成
+/// 8525 token，上游回 `exceed_context_size_error`（`Status { code: 400 }`）。
+/// 界面当时让用户去检查一个**正在正常应答**的服务。见 ISSUE-018。
+fn provider_failure(e: quill_provider::ProviderError) -> ApiError {
+    use quill_provider::ProviderError;
+    let detail = format!("模型调用失败：{e}");
+    match e {
+        // 没连上：那句「去确认端点活着 / 把 llama-server 起起来」在这里是对的。
+        ProviderError::Unreachable { .. }
+        | ProviderError::Timeout { .. }
+        | ProviderError::ModelNotFound { .. }
+        | ProviderError::NotConfigured { .. } => ApiError::service_unavailable(detail),
+        // 回过话了。端点是活的，建议必须关于「它说了什么」而不是「怎么连上」。
+        ProviderError::Status { .. } => ApiError::provider_rejected(detail, ADVICE_REJECTED_BY_STATUS),
+        other => ApiError::provider_rejected(detail, advice_for_unusable_reply(&other)),
+    }
+}
+
+/// 上游回了一个 HTTP 错误状态码时的建议。
+///
+/// 说「最常见的一种是…」而不是「就是上下文超了」：这里**没有**解析上游的 body，
+/// 按关键字去猜就又变成替上游说话。点出最常见的那一种，是因为它在本机 4B 上
+/// 最常发生、而且给出的处置真的对得上；不中也不耽误 —— detail 里原样带着
+/// 上游自己的那句话。
+/// `pub(crate)`：`error.rs` 的单测要引用它，钉住「模型回过话就不许建议重启它」
+/// 那条断言（ISSUE-018 的回归）。
+pub(crate) const ADVICE_REJECTED_BY_STATUS: &str = "模型服务**活着**并回了一个错误状态码，它自己的原话在上一段里。\
+     下一步：照那句话改，**不要**去重启模型服务（它正在正常应答）。最常见的一种是请求超出了模型上下文：\
+     调大 QUILL_LLM_MAX_CONTEXT_TOKENS，或减少这一轮挂着的技能/工具\
+     （挂了多少可以在 GET /api/extensions/skills 的 model_can_see 里逐条数）。\
+     改完用同一条消息重试；细节跑 `quill doctor`。";
+
+/// 上游回的不是 HTTP 错误，但也没给出可用结果时的建议。
+fn advice_for_unusable_reply(e: &quill_provider::ProviderError) -> &'static str {
+    let _ = e;
+    "模型服务**活着**，但没有按协议回出可用的结果，它自己的原话在上一段里。\
+     下一步：先照那句话排查；这是 quill 与该模型端点之间的问题，跑 `quill doctor` \
+     打印完整诊断后再用同一条消息重试。"
+}
+
 fn s(row: &sqlx::sqlite::SqliteRow, name: &str) -> String {
     sqlx::Row::try_get::<Option<String>, _>(row, name)
         .ok()
@@ -488,9 +539,7 @@ pub async fn post_message(
     };
 
     let started = std::time::Instant::now();
-    let mut reply = provider.chat(&request).await.map_err(|e| {
-        ApiError::service_unavailable(format!("模型调用失败：{e}"))
-    })?;
+    let mut reply = provider.chat(&request).await.map_err(provider_failure)?;
 
     let mut tool_trace: Vec<Value> = Vec::new();
     let mut rounds = 0usize;
@@ -533,9 +582,7 @@ pub async fn post_message(
         } else {
             follow_up.with_tools(tools.clone())
         };
-        reply = provider.chat(&follow_up).await.map_err(|e| {
-            ApiError::service_unavailable(format!("模型在工具调用后的续答失败：{e}"))
-        })?;
+        reply = provider.chat(&follow_up).await.map_err(provider_failure)?;
     }
     let turn_ms = started.elapsed().as_millis() as i64;
 

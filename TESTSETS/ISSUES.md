@@ -515,7 +515,7 @@
 
 ## ISSUE-017 · README 的「怎么跑」指向 `runner.py`，而那个文件不存在
 
-**状态**：待修（2026-10-06 第一次真要跑那 100 条时发现）
+**状态**：已修（2026-10-06 写出了 `runner.py`，见文末回归）
 
 - **严重度**：低（文档问题，但挡着唯一的「主要路子」）
 - **现象**：`TESTSETS/README.md` 的「怎么跑」写的是
@@ -530,6 +530,180 @@
   那比明说「还没做」更坏，因为它让人以为只是没找到。
 - **回归**：无（文档没有自动测试）。加一条检查：README 里提到的每个
   `路径/文件` 都必须真实存在。
+- **已修**（2026-10-06）：写出了 `TESTSETS/runner.py`。选「把文件写出来」而不是
+  改文档，因为除了文件名之外还欠着一件更实的事：**没有能一次跑一批任务的驱动**，
+  手点 100 条本身就不现实。README 的描述（驱动 MCP 面板逐条发任务）现在是**真的**。
+  纯标准库，无第三方依赖；参数 `--base/--token/--out/--limit/--only/--source/--dry-run`。
+- **跑了什么**：
+  - `--dry-run` 全量：120 条任务的 skill slug 与 `TESTSETS/skills/*.md`
+    **完全对齐**（0 缺 0 多），并逐条报出缺哪几台 MCP 服务器。
+  - SkillsBench 真跑 3 条（`sb-3d-scan-calc` / `sb-ada-bathroom-plan-repair` /
+    `sb-adaptive-cruise-control`），结果写 `/tmp/quill-sb3b.jsonl`。
+  - 顺带把 100 条跑不完这件事**量了出来**，见 `STATUS.md`：
+    MCP-Atlas 50 条要 22 台外部服务器，SkillsBench 50 条的**输入夹具不在仓库**
+    （`/root/input/*`、`scan_data.stl` 等全缺）。进度仍是 **0/100**。
+- **跑的过程中 runner 自己出了个 bug，已修**：原 `verdict()` 把
+  「三个维度全部 unjudgeable」判成 **PASS** —— 也就是「什么都没验成」被算成通过。
+  这正是红线里最不许发生的那种假通过。现改为独立判成 **`UNJUDGEABLE`**，
+  并且「真的跑完」只认 `PASS + PARTIAL + FAIL`。
+  `sb-3d-scan-calc` 修前判 PASS，修后判 `UNJUDGEABLE` —— **同一个结果，
+  两次判定不同，差的正是这个洞**。
+- **回归**：暂无单测（本仓库的 Python 不进门禁）。人工核对项：
+  `sb-3d-scan-calc` 现在判 `UNJUDGEABLE` 而不是 `PASS`。
+
+---
+
+## ISSUE-018 · 模型已经回过话了，「下一步」却还在教用户「去确认端点活着 / 启动 llama-server」
+
+**状态**：已修（2026-10-06，真机跑 SkillsBench 时暴露）
+
+- **严重度**：中等（错误本身**如实**转述了上游返回；错的是它附带的处置建议，
+  会把用户引到一台根本没坏的机器前面反复排查）
+- **红线相关**：面向用户文案必须带「下一步：…」。本条不违反「有没有下一步」，
+  违反的是「这个下一步**对不对**」—— 给一句错的下一步，比不给更费时间。
+- **现象**（实测，不是推演）：`sb-adaptive-cruise-control` 与
+  `sb-ada-bathroom-plan-repair` 两条真机任务，上游原样回了：
+
+  ```
+  HTTP 400 {"error":{"code":400,
+    "message":"request (8525 tokens) exceeds the available context size (8192 tokens),
+               try increasing it",
+    "type":"exceed_context_size_error",
+    "n_prompt_tokens":8525,"n_ctx":8192}}
+  ```
+
+  quill 把这条**如实**转述成了 `provider_unavailable` / HTTP 503，然后说：
+
+  > → 下一步：模型服务不可用：先执行 `curl $QUILL_LLM_BASE_URL/models` 确认端点活着；
+  > 本地模型请先启动 llama-server，再用 `QUILL_LLM_BASE_URL` / `QUILL_LLM_MODEL`
+  > 指向正确的地址与模型名后重启 quill-server。
+
+  **端点明明是活的** —— 它刚结构化地回了 400，里面连 `n_prompt_tokens`
+  和 `n_ctx` 都给了。这句建议让用户去检查一个根本没坏的连接。
+- **根因**：`api_chat` 里有**两个** `map_err` 把 `ProviderError` 压成了同一个
+  `ApiError::ServiceUnavailable`。而 `ProviderUnavailable::next_step()` 是一条
+  固定串（「确认端点活着 / 启动 llama-server」），它只对
+  `NotConfigured` / `Unreachable` / `Timeout` 这几种成立。
+  `Status(400)` 属于**另一回事**：连上了、回了话、只是被拒。
+  两个完全不同的处境共用一句话，是本条的病根。
+  detail 里那句 `执行 quill doctor；重试没有意义，请先按上面这句把配置改对`
+  同样来自这条固定串，一并错。
+- **已修**：
+  - `ApiError` 新增变体 `ProviderRejected { detail, advice }`，
+    `code()` = `provider_rejected`，`status()` 仍是 **503**（对外形态不变，
+    免得已有前端分支失效），但 `next_step()` 返回**调用方按错误种类挑好的**那句。
+  - `api_chat` 新增 `provider_failure()` 做分流：连不上 → 走原来的
+    `ServiceUnavailable`；**连上了但被拒** → 走 `ProviderRejected`。
+    另加 `ADVICE_REJECTED_BY_STATUS`，措辞用「最常见的一种是上下文超了」
+    而非断言式说法 —— 因为**没有解析上游 body**，不该替上游断言原因。
+  - detail / status 形态保持不变，只改「下一步挂哪一句」，把改动面收在最小。
+- **回归**：
+  - `error::tests::provider_rejected_keeps_the_same_status_but_a_different_next_step`
+    —— 断言连不上与被拒**状态码相同、错误码不同、下一步不同**，并且
+    「真连不上」的那句里**必须仍然**含「确认端点活着」
+    （别把一个 bug 修成另一个 bug）；反向断言被拒时**不得**再出现
+    `llama-server` 三个字。
+  - `error::tests::both_provider_outcomes_hand_the_user_a_distinct_actionable_next_step`
+    —— 断言两条 `next_step` 互不相同、长度 > 20、含可执行动作。
+    **这里刻意不断言字面量「下一步」三个字**：`next_step` 是结构化字段，
+    前端把它渲染成独立段落（`Page.tsx` 的 `.form-error-next`），标签由字段名承担，
+    且仓库既有的 `unauthorized` / `too_many_requests` / `internal` 三条
+    `next_step` 都不含这三个字 —— 要断言它就得先改那三条，属于无谓的措辞 churn。
+  - 全量 `.wsl-verify-persona.sh`：**959 passed / 0 failed**。
+- **真机复跑**（重新 `cargo build` → 重启 quill-server → 重跑
+  `sb-adaptive-cruise-control`，结果在 `/tmp/quill-fix-018.jsonl`）：
+  ```
+  修前  code=provider_unavailable
+        → 下一步：…确认端点活着…启动 llama-server…          ← 端点明明是活的
+  修后  code=provider_rejected
+        → 下一步：模型服务**活着**并回了一个错误状态码，它自己的原话在上一段里。
+          下一步：照那句话改，**不要**去重启模型服务（它正在正常应答）。
+          最常见的一种是请求超出了模型上下文：调大 QUILL_LLM_MAX_CONTEXT_TOKENS，
+          或减少这一轮挂着的技能/工具…改完用同一条消息重试；细节跑 `quill doctor`。
+  ```
+  错误码与建议都在真服务上验过，不是只有单测绿。
+- **残留（不算本条修完）**：detail 里**还嵌着另一句**旧的「下一步：执行
+  `quill doctor`；重试没有意义，请先按上面这句把配置改对」，界面上会渲染成
+  第二个段落。用户看到两条下一步，一条含糊一条具体，且含糊那条的
+  「上面这句」现在指的是上游那段 JSON。**另立 ISSUE-020 跟。**
+
+---
+
+## ISSUE-019 · 挂几个技能就把请求撑爆 8192 上下文，而 quill 不预检、也不点名真因
+
+**状态**：待修（2026-10-06，与 ISSUE-018 同一次真机跑暴露；本轮只记录，未修）
+
+- **严重度**：中等（用户会看到「这条任务发不出去」，但拿不到「为什么」和「怎么办」）
+- **现象**（实测数字，全部来自 `TESTSETS/tasks.json` 与磁盘上的真实技能正文）：
+
+  | 任务 | prompt 字符 | 挂的技能 | 技能正文字符合计 | 合计 | 上游实报 |
+  |---|---|---|---|---|---|
+  | `sb-adaptive-cruise-control` | 2579 | 5 个 | 9375 | 11954 | `n_prompt_tokens=8525` |
+  | `sb-ada-bathroom-plan-repair` | 9459 | 3 个 | 13935 | 23394 | `n_prompt_tokens=9804` |
+
+  两条的 `n_ctx` 都是 **8192**。也就是说：**装上技能**之后，请求本身就已经越界，
+  根本轮不到模型作答 —— 用户看到的是一条与「我这条任务问的是什么」毫无关系的失败。
+- **别把它算成一件事的两倍**（这条容易讲歪，如实说）：
+  - `sb-adaptive-cruise-control` 里，**技能占了输入的 78%**（9375 / 11954）。
+    不挂技能只发 prompt 约 2579 字符，是装得下的 —— 这里**确实是挂技能撑爆的**。
+  - `sb-ada-bathroom-plan-repair` 的 prompt 自己就有 9459 字符，**它自己就已经越界了**。
+    这里挂技能只是让情况更糟，**单归到「技能撑爆」是不诚实的**。
+- **根因**：`ISSUE-007` 说「SKILL 正文整段进工具描述，每轮请求都要为它付 token」。
+  本条是它的**后果面**：付到什么程度没人量过、也没有任何地方拦一下 ——
+  quill 不估 token、不看上下文窗口、直接把可能越界的请求发出去，
+  然后由上游用一句 `exceed_context_size_error` 兜底，再由 ISSUE-018 那条
+  错误的建议把用户支到「去确认端点活着」。三个问题串成一条失败路径。
+- **查过了，别冤枉它**：quill 确实有 `compaction_threshold_tokens` 字段
+  （实测 `/healthz` 报 `8000`，而这条失败请求是 8525 token ——
+  看着像「阈值设了却没拦住」）。**但那不是 bug，是诚实披露**：
+  `ChatPage.tsx` 的界面原文就写着「已配置压缩阈值 {{threshold}} tokens，
+  **但压缩还没实现**：超过上限不会自动摘要，需要自己新建会话」。
+  仓库里也确实没有任何压缩实现（`quill-agent` 搜 `compact` 零命中）。
+  所以这条 ISSUE 的准确说法不是「阈值失灵」，而是：
+  **本地没有任何拦截点**，唯一的兜底在上游，而上游兜底完还会被 ISSUE-018
+  带偏一次。
+- **修复方向（未定）**：发请求前做一次 token 预检（超了就**在本地**拦下来，
+  并点名「是这些技能的正文把请求撑大了：<slug 列表>」），而不是等上游回 400。
+  真正的根治是 ISSUE-007 本身（别把整段正文塞进工具描述）。
+  **本轮不修**：修它要动工具描述的形态，超出本轮范围。
+- **回归**：修的时候必须有一条「预检挡住越界请求时，报错里要列出是哪些技能撑大的」。
+  4B 模型答不上来不算 bug，但**请求压根发不出去**算。
+
+---
+
+## ISSUE-020 · 一个错误信封里有**两条**「下一步」，其中一条还藏在 detail 里
+
+**状态**：待修（2026-10-06，验证 ISSUE-018 的修复时撞见）
+
+- **严重度**：低到中等（信息都在，但互相打架；用户不知道该照哪句做）
+- **现象**（真机实测，`sb-adaptive-cruise-control` 修复后的返回）：
+  `Page.tsx:65-70` 把 `detail` 与 `next_step` 渲染成**两个独立段落**，
+  而 `detail` 本身是由 `format!("模型调用失败：{e}")` 拼的，
+  `{e}` 是 `ProviderError` 的 `Display`，而它的 `tail()` 会追加
+  「→ 下一步：执行 `quill doctor`；…」。于是界面长这样：
+
+  ```
+  模型调用失败：LLM 服务返回 HTTP 400：{"error":{…"n_prompt_tokens":8525…}}
+  → 下一步：执行 `quill doctor`；重试没有意义，请先按上面这句把配置改对
+
+  模型服务**活着**并回了一个错误状态码，它自己的原话在上一段里。下一步：照那句话改，
+  **不要**去重启模型服务…最常见的一种是请求超出了模型上下文…
+  ```
+
+  两句都自称「下一步」。第二句（结构化的那个）是对的；第一句含糊，而且它说的
+  「上面这句」现在指的是**上游那段 JSON**，不是某个配置项。
+- **根因**：`next_step` 既是**结构化字段**，又已经被拼进了 detail 的文本里 ——
+  同一件事有两个出口，而其中一个出口没跟着 ISSUE-018 一起改。
+  这不是 ISSUE-018 引入的（改之前就是两条），但 ISSUE-018 修完之后它更显眼了：
+  现在两句的**具体程度差得很远**，用户更容易只盯着结构化那句而忽略 detail 里的。
+- **修复方向（未定）**：让「下一步」只有**一个**出口。最直接的做法是
+  `ProviderError` 的 `Display` **不再**拼 `→ 下一步：…`，
+  下一步统一由 `ApiError::next_step()` 提供 —— 那个字段本来就是为此存在的。
+  改之前要盘一遍有多少调用点把 `ProviderError` 直接 `to_string()` 之后当用户可见文案用，
+  那些地方需要显式补 `next_step`，**不许**顺手把下一步删干净。
+- **回归**：一条断言「`detail` 里不含 `→ 下一步`」的测试，外加一条
+  「`ProviderError` 直接 `to_string()` 之后仍带得上下一步」的测试 ——
+  钉住的是「只有一个出口」，不是「没有下一步」。
 
 ---
 

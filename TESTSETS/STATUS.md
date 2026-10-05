@@ -99,6 +99,39 @@ SkillsBench v1.1 / Apache-2.0，916 字节）：
 **卡在登录**：运行时把登录表单判为「需要用户接管」，不许我自己填任何账号/令牌，
 已就此向你提问。**登录之后浏览器回归才算真正走通。**
 
+## 用 `runner.py` 真跑了 3 条（2026-10-06，本轮）
+
+`--dry-run` 全量先跑了一遍：**120 个 skill slug 与 `TESTSETS/skills/*.md` 完全对齐**
+（0 缺 0 多），并逐条报出缺哪几台 MCP 服务器。然后真跑了 3 条 SkillsBench：
+
+| 任务 | 判定 | 观测到的 |
+|---|---|---|
+| `sb-3d-scan-calc` | `UNJUDGEABLE` | 链路通；模型真的调了 `notes__read-note` 与 `mesh-analysis`，两个都 `ok=true` |
+| `sb-ada-bathroom-plan-repair` | `FAIL` | 请求 9804 token > 8192 上下文，压根没发出去（见 ISSUE-018 / 019） |
+| `sb-adaptive-cruise-control` | `FAIL` | 同上，8525 token > 8192 |
+
+**进度仍是 0/100**，这三条**不计入**：跑不完不是代码问题，是缺外部凭据与基准夹具
+（下一节有实测数字）。上面每条都给了观测值，没有一条是靠「没报错」推断通过的。
+
+**这一轮最值钱的产出是 `runner.py` 自己暴露的两个洞**：
+
+1. **假通过**：`verdict()` 曾把「三个维度全部 unjudgeable」判成 **PASS** ——
+   「什么都没验成」被算成通过。已修成独立的 `UNJUDGEABLE`，
+   「真的跑完」只认 `PASS + PARTIAL + FAIL`。`sb-3d-scan-calc` 修前 PASS、修后
+   `UNJUDGEABLE`，差的就是这个洞。
+2. **错误建议**：模型**已经回过话**（回的是 HTTP 400 `exceed_context_size_error`），
+   quill 却说「确认端点活着 / 启动 llama-server」。端点是活的，它刚结构化地回了 400。
+   已修并在真机上复跑验过：错误码 `provider_unavailable` → `provider_rejected`，
+   建议换成「不要去重启模型服务，它正在正常应答」（ISSUE-018）。
+3. **两条「下一步」打架**：detail 里还嵌着一句旧的含糊建议，和结构化的
+   `next_step` 一起渲染成两个段落（ISSUE-020，**未修**）。
+
+**顺带查清、并且不算 bug 的一件事**：`/healthz` 报的
+`compaction_threshold_tokens=8000` 看着像「设了阈值却没拦住 8525 的请求」，
+但前端 `ChatPage.tsx` **明写了**「已配置压缩阈值，但压缩还没实现：
+超过上限不会自动摘要，需要自己新建会话」，仓库里也确实没有压缩实现。
+那是**诚实披露**，不是谎 —— 本地没有拦截点这件事，界面已经告诉了用户。
+
 ## 100 条为什么在这里跑不完（实测，不是猜测）
 
 数清楚了，两段各有各的硬缺口：
@@ -167,13 +200,13 @@ MCP-Atlas 那 50 条标成跑过 —— 那正是本项目最不能出的错。
 **不要**用 `quill-mcp-stub` 之类冒充 Airtable 去把 MCP-Atlas 那 50 条标成跑过 ——
 界面显示「模型调得到」而实际调的是一个只会回显的子进程，那正是本项目最不能出的错。
 
-**另外：README 里那个「主要路子」的 `runner.py` 并不存在。** 上面三条不管选哪条，
-逐条驱动都得现写（`README.md` 写「`runner.py` 驱动 MCP 工具面板逐条发任务」，
-而 `TESTSETS/` 下只有 `build_tasks.py`）。见 ISSUE-017。
-2026-10-06 那几轮验证用的脚本（起服务、两条端到端、数依赖）是本机临时脚本，
-**被 `.gitignore` 的 `/.wsl-*.sh` 规则挡在仓库外**，所以别指望 clone 下来就有 ——
-需要的话照着 STATUS.md 里记的步骤重写，或者干脆把那几条固化成一个正经的
-`TESTSETS/runner.py`（那本来就该是 README 说的那个东西）。
+**`runner.py` 已经写出来了**（2026-10-06，ISSUE-017 已修）。上面三条不管选哪条，
+逐条驱动都不用再从零写：纯标准库，参数
+`--base/--token/--out/--limit/--only/--source/--dry-run`，直接打
+`/api/extensions/*` 与 `/api/sessions/*`。用法见 `TESTSETS/runner.py` 顶部说明。
+2026-10-06 那几轮验证用的起服务脚本仍是本机临时脚本，
+**被 `.gitignore` 的 `/.wsl-*.sh` 规则挡在仓库外**，别指望 clone 下来就有 ——
+需要的话照着 STATUS.md 里记的步骤重写。
 
 ### 跑之前要知道的三件事（2026-10-06 实测更新）
 
