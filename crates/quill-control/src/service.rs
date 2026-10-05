@@ -224,6 +224,13 @@ impl ControlPlane {
         self.policy
     }
 
+    /// 库里一共多少个用户。`/api/setup/status` 用它判定「还需要首管引导」——
+    /// 与 [`Self::create_first_owner`] 的判定同源，避免出现前端显示引导页、
+    /// 点下去却必然 409 的错位。
+    pub async fn user_count(&self) -> Result<i64, ControlError> {
+        repo::count_users(&self.pool).await
+    }
+
     pub async fn create_first_owner(
         &self,
         req: &RegistrationRequest,
@@ -231,10 +238,16 @@ impl ControlPlane {
         let now = self.clock.now_millis();
         let (username, norm, display) = self.validate_registration(req)?;
 
-        let digest = self.hasher.hash(self.entropy.as_ref(), &req.password);
+        // 「已经有用户了吗」这一步必须排在算摘要**之前**。
+        // 摘要要走 PBKDF2 60 万次迭代（实测单次约 5.8 秒），而
+        // `POST /api/setup/initial-admin` 是个**不需要鉴权**的公开端点。
+        // 顺序反了的话，任何人都能靠反复 POST 把工作线程的 CPU 打满，
+        // 而这条路径本来应该是一个纳秒级的 count 查询就结束。
         if repo::count_users(&self.pool).await? > 0 {
             return Err(ControlError::FirstOwnerExists);
         }
+
+        let digest = self.hasher.hash(self.entropy.as_ref(), &req.password);
         let id = UserId::from_bytes(self.new_uuid_bytes());
         repo::insert_user(
             &self.pool,

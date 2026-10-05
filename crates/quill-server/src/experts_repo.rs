@@ -15,8 +15,8 @@ const OP_LIST: &str = "列出专家";
 const OP_PUT: &str = "写入专家";
 const OP_ROSTER: &str = "读取专家名册";
 
-const COLUMNS: &str = "id, owner_user_id, display_name, description, visibility, \
-                       default_enabled, is_builtin, deleted_at";
+const COLUMNS: &str = "id, owner_user_id, display_name, description, instructions, model, \
+                       source_template, visibility, default_enabled, is_builtin, deleted_at";
 
 #[derive(Debug, Clone)]
 pub struct SqlxExpertRepository {
@@ -68,15 +68,19 @@ async fn sql_list_owned(pool: &sqlx::SqlitePool, owner: UserId) -> Result<Vec<Ex
 pub(crate) const PUT_SQL: &str = "INSERT INTO experts (\
      id, owner_user_id, display_name, version, description, role_summary, \
      visibility, tool_policy_json, tags_json, license, default_enabled, is_builtin, \
-     asset_hash, persona_hash, skill_count, created_at, updated_at, deleted_at\
-   ) VALUES (?, ?, ?, ?, ?, '', ?, '{}', '[]', '', ?, ?, ?, ?, 0, ?, ?, ?) \
+     asset_hash, persona_hash, skill_count, created_at, updated_at, deleted_at, \
+     instructions, model, source_template\
+   ) VALUES (?, ?, ?, ?, ?, '', ?, '{}', '[]', '', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?) \
    ON CONFLICT (owner_user_id, id) DO UPDATE SET \
      display_name = excluded.display_name, \
      description = excluded.description, \
      visibility = excluded.visibility, \
      default_enabled = excluded.default_enabled, \
      updated_at = excluded.updated_at, \
-     deleted_at = excluded.deleted_at";
+     deleted_at = excluded.deleted_at, \
+     instructions = excluded.instructions, \
+     model = excluded.model, \
+     source_template = excluded.source_template";
 
 pub(crate) const ROSTER_SQL: &str = "SELECT id FROM experts \
      WHERE deleted_at IS NULL \
@@ -90,6 +94,10 @@ async fn sql_put(pool: &sqlx::SqlitePool, expert: Expert) -> Result<(), AgentErr
     let now = now_ms();
     let deleted_at: Option<i64> = if expert.is_deleted() { Some(now) } else { None };
     let asset_hash = digest32("experts.asset_hash", &[id.as_bytes()]);
+    // persona_hash 口径：仍只对 id 取摘要，**不把 instructions 算进去**。
+    // 实测踩过的坑：把人格正文混进摘要后，每次改人格都会改写这一列，而当前
+    // 全仓库没有任何读取方消费它——只会在旧库上凭空产生一次无意义的行重写。
+    // 等真有「人格指纹对账」需求时，再用一条新迁移把它切到内容摘要。
     let persona_hash = digest32("experts.persona_hash", &[id.as_bytes()]);
 
     sqlx::query(PUT_SQL)
@@ -106,6 +114,9 @@ async fn sql_put(pool: &sqlx::SqlitePool, expert: Expert) -> Result<(), AgentErr
         .bind(now)
         .bind(now)
         .bind(deleted_at)
+        .bind(expert.instructions())
+        .bind(expert.model())
+        .bind(expert.source_template())
         .execute(pool)
         .await
         .map_err(|e| storage_error(OP_PUT, e))?;
@@ -144,6 +155,9 @@ fn row_into_expert(row: &SqliteRow) -> Result<Expert, AgentError> {
     let owner_raw: Vec<u8> = col!(row, Vec<u8>, "owner_user_id", OP_GET);
     let display_name: String = col!(row, String, "display_name", OP_GET);
     let description: String = col!(row, String, "description", OP_GET);
+    let instructions: String = col!(row, String, "instructions", OP_GET);
+    let model: Option<String> = col!(row, Option<String>, "model", OP_GET);
+    let source_template: Option<String> = col!(row, Option<String>, "source_template", OP_GET);
     let visibility_raw: String = col!(row, String, "visibility", OP_GET);
     let default_enabled: i64 = col!(row, i64, "default_enabled", OP_GET);
     let is_builtin: i64 = col!(row, i64, "is_builtin", OP_GET);
@@ -181,7 +195,7 @@ fn row_into_expert(row: &SqliteRow) -> Result<Expert, AgentError> {
                 "专家 {id} 是内置专家但已被软删除：内置专家受保护，不可删除"
             )));
         }
-        Expert::builtin(id.clone(), display_name, description)?
+        Expert::builtin_with_source(id.clone(), display_name, description, instructions, model, source_template)?
     } else {
         if visibility != Visibility::UserAuthored {
             return Err(crate::db::invariant_broken(format!(
@@ -189,7 +203,15 @@ fn row_into_expert(row: &SqliteRow) -> Result<Expert, AgentError> {
                  自建专家只能是 user_authored（共享可见性由资源分发写入，不由本端口写）"
             )));
         }
-        let mut e = Expert::user_authored(owner, id.clone(), display_name, description)?;
+        let mut e = Expert::user_authored_with_source(
+            owner,
+            id.clone(),
+            display_name,
+            description,
+            instructions,
+            model,
+            source_template,
+        )?;
         if default_enabled != 1 {
             e.set_default_enabled(&owner, false)?;
         }
@@ -268,6 +290,54 @@ mod tests {
         assert!(
             update_set.contains("deleted_at = excluded.deleted_at"),
             "必须能通过 upsert 复活软删行（deleted_at → NULL）：{update_set}"
+        );
+    }
+
+    #[test]
+    fn put_sql_writes_and_rewrites_both_persona_columns() {
+        let column_list = PUT_SQL
+            .split(") VALUES")
+            .next()
+            .expect("语句必须含列清单段");
+        for c in ["instructions", "model", "source_template"] {
+            assert!(
+                column_list.contains(c),
+                "INSERT 必须显式写出 {c}（靠默认值插入会让人格静默丢失）：{PUT_SQL}"
+            );
+        }
+        let update_set = PUT_SQL
+            .split("DO UPDATE SET")
+            .nth(1)
+            .expect("语句必须含 DO UPDATE SET");
+        for c in ["instructions", "model", "source_template"] {
+            assert!(
+                update_set.contains(&format!("{c} = excluded.{c}")),
+                "PATCH 改人格必须真的落库，DO UPDATE 段缺 {c}：{update_set}"
+            );
+        }
+        assert!(
+            COLUMNS.contains("instructions")
+                && COLUMNS.contains("model")
+                && COLUMNS.contains("source_template"),
+            "SELECT 必须读出三列：{COLUMNS}"
+        );
+    }
+
+    /// persona_hash 的口径不能被顺手扩成「人格正文 + 来源模板一起摘要」：
+    /// 那样每次 PATCH 都会重写这一列，而全仓库没有读取方消费它。
+    #[test]
+    fn persona_hash_still_only_digests_the_expert_id() {
+        let update_set = PUT_SQL
+            .split("DO UPDATE SET")
+            .nth(1)
+            .expect("语句必须含 DO UPDATE SET");
+        assert!(
+            !update_set.contains("persona_hash"),
+            "摘要列不得在 upsert 里被改写（它只对 id 取摘要）：{update_set}"
+        );
+        assert!(
+            update_set.contains("source_template = excluded.source_template"),
+            "来源模板作为普通列更新：{update_set}"
         );
     }
 }

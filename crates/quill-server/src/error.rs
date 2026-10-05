@@ -45,6 +45,17 @@ pub enum ApiError {
         detail: String,
     },
 
+    ProviderUnavailable {
+        detail: String,
+    },
+
+    /// 请求过于频繁。登录端点用它挡住「反复 POST 把 PBKDF2 的 CPU 打满」。
+    TooManyRequests {
+        detail: String,
+        /// 建议客户端等待的秒数。会原样写进 `Retry-After` 响应头。
+        retry_after_secs: u64,
+    },
+
     Internal {
         detail: String,
     },
@@ -91,6 +102,18 @@ impl ApiError {
         }
     }
 
+    pub fn service_unavailable(detail: impl Into<String>) -> Self {
+        Self::ProviderUnavailable {
+            detail: detail.into(),
+        }
+    }
+
+    pub fn storage_unavailable_detail(detail: impl Into<String>) -> Self {
+        Self::StorageUnavailable {
+            detail: detail.into(),
+        }
+    }
+
     pub fn method_not_allowed(method: impl Into<String>, path: impl Into<String>) -> Self {
         Self::MethodNotAllowed {
             method: method.into(),
@@ -104,6 +127,22 @@ impl ApiError {
         }
     }
 
+    pub fn too_many_requests(detail: impl Into<String>, retry_after_secs: u64) -> Self {
+        Self::TooManyRequests {
+            detail: detail.into(),
+            // 0 秒会让客户端立刻重试，等于没限流；至少给 1 秒。
+            retry_after_secs: retry_after_secs.max(1),
+        }
+    }
+
+    /// 客户端该等多久再重试。非 429 一律为 `None`。
+    pub fn retry_after_secs(&self) -> Option<u64> {
+        match self {
+            Self::TooManyRequests { retry_after_secs, .. } => Some(*retry_after_secs),
+            _ => None,
+        }
+    }
+
     pub fn status(&self) -> StatusCode {
         match self {
             Self::Unauthorized { .. } => StatusCode::UNAUTHORIZED,
@@ -113,7 +152,10 @@ impl ApiError {
             Self::BadRequest { .. } => StatusCode::BAD_REQUEST,
             Self::Conflict { .. } => StatusCode::CONFLICT,
             Self::NotImplemented { .. } => StatusCode::NOT_IMPLEMENTED,
-            Self::StorageUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
+            Self::StorageUnavailable { .. } | Self::ProviderUnavailable { .. } => {
+                StatusCode::SERVICE_UNAVAILABLE
+            }
+            Self::TooManyRequests { .. } => StatusCode::TOO_MANY_REQUESTS,
             Self::Internal { .. } => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -129,6 +171,8 @@ impl ApiError {
             Self::Conflict { .. } => "conflict",
             Self::NotImplemented { .. } => "not_implemented",
             Self::StorageUnavailable { .. } => "storage_unavailable",
+            Self::ProviderUnavailable { .. } => "provider_unavailable",
+            Self::TooManyRequests { .. } => "too_many_requests",
             Self::Internal { .. } => "internal_error",
         }
     }
@@ -148,6 +192,8 @@ impl ApiError {
                 format!("路由 {method} {path} 已登记，但能力尚未实现")
             }
             Self::StorageUnavailable { detail } => detail.clone(),
+            Self::ProviderUnavailable { detail } => detail.clone(),
+            Self::TooManyRequests { detail, .. } => detail.clone(),
             Self::Internal { detail } => detail.clone(),
         }
     }
@@ -194,9 +240,20 @@ impl ApiError {
                  若提示缺表，按 crates/quill-store/migrations/0001_init.sql 执行迁移后重启服务；\
                  若提示打不开数据库，用 `QUILL_DB_PATH` 指向一个可写路径后重启。"
             }
+            Self::ProviderUnavailable { .. } => {
+                "模型服务不可用：先执行 `curl $QUILL_LLM_BASE_URL/models` 确认端点活着；\
+                 本地模型请先启动 llama-server，再用 `QUILL_LLM_BASE_URL` / `QUILL_LLM_MODEL` \
+                 指向正确的地址与模型名后重启 quill-server。"
+            }
             Self::Internal { .. } => {
                 "查看服务端 stderr 日志中带请求 ID 的记录定位真实原因（客户端只拿到可读说明，\
                  不会收到内部栈）；然后执行 `quill doctor` 打印完整诊断，修复后用同一请求重试。"
+            }
+            Self::TooManyRequests { .. } => {
+                "登录尝试过于密集，已被临时挡下。等响应头 `Retry-After` 指定的秒数过后再重试；\
+                 若是脚本在轮询登录，请把间隔放宽到 1 秒以上，不要靠并发硬撞。\
+                 本实例的策略是「同一用户名 + 同一来源 IP 在滑动窗口内累计失败 N 次即锁定」，\
+                 成功登录会清空该窗口，所以正常用户不会被误伤。"
             }
         }
     }
@@ -229,6 +286,14 @@ impl IntoResponse for ApiError {
                     .insert(axum::http::header::WWW_AUTHENTICATE, v);
             }
         }
+        if let Some(secs) = self.retry_after_secs() {
+            // Retry-After 的合法取值是秒数或 HTTP 日期，这里固定用秒数。
+            if let Ok(v) = secs.to_string().parse() {
+                response
+                    .headers_mut()
+                    .insert(axum::http::header::RETRY_AFTER, v);
+            }
+        }
         response
     }
 }
@@ -247,6 +312,31 @@ mod tests {
     }
 
     #[test]
+    fn a_dead_model_endpoint_does_not_send_the_operator_to_the_database() {
+        let llm = ApiError::service_unavailable("本实例没有可用的模型服务");
+        let db = ApiError::storage_unavailable("数据库打不开");
+
+        assert_eq!(llm.code(), "provider_unavailable");
+        assert_eq!(db.code(), "storage_unavailable");
+        assert_ne!(llm.code(), db.code(), "两类故障必须是不同的错误码");
+
+        assert!(
+            llm.next_step().contains("QUILL_LLM_BASE_URL"),
+            "模型故障的修复建议要指向模型环境变量：{}",
+            llm.next_step()
+        );
+        assert!(
+            llm.next_step() != db.next_step(),
+            "模型故障与存储故障的修复建议必须不同，否则会把人引去查数据库"
+        );
+        assert!(
+            db.next_step().contains("--section=db"),
+            "存储故障仍要指向 db 段：{}",
+            db.next_step()
+        );
+    }
+
+    #[test]
     fn every_variant_carries_a_non_empty_next_step() {
         let cases = [
             ApiError::unauthorized(),
@@ -258,12 +348,37 @@ mod tests {
             ApiError::method_not_allowed("POST", "/healthz"),
             ApiError::not_implemented_for_test(),
             ApiError::storage_unavailable("数据库打不开"),
+            ApiError::too_many_requests("登录太频繁", 30),
             ApiError::internal("内部错误"),
         ];
         for c in &cases {
             assert!(!c.detail().trim().is_empty(), "{c:?} 缺中文说明");
             assert!(!c.next_step().trim().is_empty(), "{c:?} 缺下一步指引");
         }
+    }
+
+    #[test]
+    fn too_many_requests_is_429_and_says_how_long_to_wait() {
+        let e = ApiError::too_many_requests("登录尝试过于频繁", 42);
+        assert_eq!(e.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(e.code(), "too_many_requests");
+        assert_eq!(e.retry_after_secs(), Some(42));
+    }
+
+    #[test]
+    fn a_zero_second_retry_hint_is_clamped_so_clients_do_not_hot_loop() {
+        let e = ApiError::too_many_requests("登录尝试过于频繁", 0);
+        assert_eq!(
+            e.retry_after_secs(),
+            Some(1),
+            "Retry-After: 0 等于没限流，客户端会立刻再撞一次"
+        );
+    }
+
+    #[test]
+    fn retry_after_is_only_set_for_429() {
+        assert_eq!(ApiError::unauthorized().retry_after_secs(), None);
+        assert_eq!(ApiError::internal("x").retry_after_secs(), None);
     }
 
     #[test]

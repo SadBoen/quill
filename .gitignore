@@ -2,6 +2,20 @@
 /target/
 **/*.rs.bk
 
+# vendor/ 与 .octop-ref/ 是**只读参考源码**，本地保留但不入库。
+#
+# 为什么不入库：
+# - vendor/goose 有 238MB，其中大头是 documentation 的博客图片与 meetup 照片，
+#   对编译一行都用不上，却会让每次 clone 都很慢、仓库无限膨胀。
+# - 它们都有独立的上游与版本，quill 已经在 UPSTREAM.md 里记了出处与 pin，
+#   需要时按那份记录重新拉即可；把整个第三方仓库抄进自己的历史没有意义。
+#
+# 怎么取回（首次 clone 后）：
+#   bash .scripts/fetch-vendor.sh
+# 它按 UPSTREAM.md 记录的 pin 精确 checkout，不跟踪主分支。
+/vendor/
+/.octop-ref/
+
 /data/
 /workspace/
 *.db
@@ -50,3 +64,15 @@ __pycache__/
 *.pyc
 
 /.demo/
+
+# WSL 里的临时验证脚本（PowerShell 会吞多行 bash，只能落成文件再 wsl -e bash 跑）
+/.wsl-*.sh
+
+# 抓 LLM 请求/响应留下的原始报文
+/.llm-req*.json
+/.llm-resp*.json
+/.llm-stream.txt
+
+# Octop 设计参考：README 与 sparse checkout 保留（记录出处），截图不进仓库
+/.octop-ref/*.png
+/.octop-ref/*.jpg

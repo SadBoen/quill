@@ -11,6 +11,7 @@ members = [
     "crates/quill-agent",
     "crates/quill-ext-hub",
     "crates/quill-backup",
+    "crates/quill-provider",
     "crates/quill-upgrade",
     "crates/quill-xtask",
 

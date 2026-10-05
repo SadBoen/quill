@@ -1,7 +1,7 @@
 mod common;
 mod dispatch_seed;
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -47,6 +47,11 @@ fn state(t: &TestDb) -> AppState {
         tokens: Arc::new(resolver),
         db: Some(t.bridge()),
         db_problem: None,
+        llm: Arc::new(RwLock::new(None)),
+        llm_config: Arc::new(RwLock::new(Default::default())),
+        providers: Arc::new(RwLock::new(Default::default())),
+        login_limiter: Arc::new(Default::default()),
+        pbkdf2: quill_control::Pbkdf2Params::for_tests(),
     }
 }
 
@@ -63,6 +68,11 @@ fn state_without_db() -> AppState {
         tokens: Arc::new(resolver),
         db: None,
         db_problem: Some("测试注入：数据库 /var/lib/quill/quill.db 打不开".to_string()),
+        llm: Arc::new(RwLock::new(None)),
+        llm_config: Arc::new(RwLock::new(Default::default())),
+        providers: Arc::new(RwLock::new(Default::default())),
+        login_limiter: Arc::new(Default::default()),
+        pbkdf2: quill_control::Pbkdf2Params::for_tests(),
     }
 }
 

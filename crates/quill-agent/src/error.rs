@@ -21,6 +21,28 @@ pub enum AgentError {
         reason: &'static str,
     },
 
+    /// 人格正文（对应 goose custom agent 的 markdown 正文）不合法。
+    ExpertInstructionsInvalid {
+        raw: String,
+
+        reason: &'static str,
+    },
+
+    /// 偏好模型名不合法。`None` 合法（= 跟随实例默认模型），`Some(空串)` 不合法。
+    ExpertModelInvalid {
+        raw: String,
+
+        reason: &'static str,
+    },
+
+    /// 来源模板 id 不合法。`None` 合法（= 不来自模板），
+    /// `Some(不符合 ^[a-z0-9-]{1,64}$)` 不合法。
+    ExpertSourceTemplateInvalid {
+        raw: String,
+
+        reason: &'static str,
+    },
+
     ExpertBuiltinProtected {
         id: ExpertId,
     },
@@ -102,6 +124,9 @@ impl AgentError {
             Self::ExpertNotFound { .. } => "expert_not_found",
             Self::ExpertExists { .. } => "expert_exists",
             Self::ExpertDisplayNameInvalid { .. } => "expert_display_name_invalid",
+            Self::ExpertInstructionsInvalid { .. } => "expert_instructions_invalid",
+            Self::ExpertModelInvalid { .. } => "expert_model_invalid",
+            Self::ExpertSourceTemplateInvalid { .. } => "expert_source_template_invalid",
             Self::ExpertBuiltinProtected { .. } => "expert_builtin_protected",
             Self::ExpertNotModifiable { .. } => "expert_not_modifiable",
             Self::ExpertDeleted { .. } => "expert_deleted",
@@ -122,6 +147,9 @@ impl AgentError {
             Self::ExpertNotFound { .. }
             | Self::ExpertExists { .. }
             | Self::ExpertDisplayNameInvalid { .. }
+            | Self::ExpertInstructionsInvalid { .. }
+            | Self::ExpertModelInvalid { .. }
+            | Self::ExpertSourceTemplateInvalid { .. }
             | Self::ExpertBuiltinProtected { .. }
             | Self::ExpertNotModifiable { .. }
             | Self::ExpertDeleted { .. } => format!("{DOCTOR_CMD} --section=experts"),
@@ -167,6 +195,22 @@ impl fmt::Display for AgentError {
             }
             Self::ExpertDisplayNameInvalid { raw, reason } => {
                 write!(f, "专家显示名不合法：{reason}。你填的是「{raw}」")?;
+                tail(f, self)
+            }
+            Self::ExpertInstructionsInvalid { raw, reason } => {
+                write!(
+                    f,
+                    "专家人格正文不合法：{reason}。你填了 {} 个字符",
+                    raw.chars().count()
+                )?;
+                tail(f, self)
+            }
+            Self::ExpertModelInvalid { raw, reason } => {
+                write!(f, "专家偏好模型名不合法：{reason}。你填的是「{raw}」")?;
+                tail(f, self)
+            }
+            Self::ExpertSourceTemplateInvalid { raw, reason } => {
+                write!(f, "专家来源模板不合法：{reason}。你填的是「{raw}」")?;
                 tail(f, self)
             }
             Self::ExpertBuiltinProtected { id } => {
@@ -293,6 +337,9 @@ impl From<AgentError> for AdapterError {
             }
             AgentError::ExpertExists { .. }
             | AgentError::ExpertDisplayNameInvalid { .. }
+            | AgentError::ExpertInstructionsInvalid { .. }
+            | AgentError::ExpertModelInvalid { .. }
+            | AgentError::ExpertSourceTemplateInvalid { .. }
             | AgentError::ChainCycle { .. }
             | AgentError::ChainTooDeep { .. }
             | AgentError::DispatchIllegalTransition { .. }
@@ -334,6 +381,18 @@ mod tests {
                 raw: String::new(),
                 reason: "不能为空",
             },
+            AgentError::ExpertInstructionsInvalid {
+                raw: "x".repeat(20_001),
+                reason: "超过 20000 个字符",
+            },
+            AgentError::ExpertModelInvalid {
+                raw: "   ".into(),
+                reason: "trim 后为空",
+            },
+            AgentError::ExpertSourceTemplateInvalid {
+                raw: "AI Coding".into(),
+                reason: "含非法字符",
+            },
             AgentError::ExpertBuiltinProtected {
                 id: expert("builtin-helper"),
             },
@@ -373,7 +432,7 @@ mod tests {
     #[test]
     fn every_error_carries_a_copyable_command() {
         let all = one_of_each();
-        assert_eq!(all.len(), 14, "变体数变了，请同步本测试的样本清单");
+        assert_eq!(all.len(), 17, "变体数变了，请同步本测试的样本清单");
         for e in &all {
             let cmd = e.fix_command();
             assert!(!cmd.contains('\n'), "[{}] 命令不是单行：{cmd}", e.code());
@@ -413,7 +472,7 @@ mod tests {
         for e in one_of_each() {
             assert!(seen.insert(e.code()), "错误码重复：{}", e.code());
         }
-        assert_eq!(seen.len(), 14, "已检查 14 个变体，14 个码必须互不相同");
+        assert_eq!(seen.len(), 17, "已检查 17 个变体，17 个码必须互不相同");
     }
 
     #[test]

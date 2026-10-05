@@ -3,6 +3,7 @@ mod common;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
+use std::sync::{Arc, RwLock};
 use tower::ServiceExt;
 
 use quill_server::auth::EnvTokenResolver;
@@ -44,6 +45,11 @@ fn state_with(db: Option<&TestDb>) -> AppState {
         } else {
             Some("测试注入：数据库不可用".to_string())
         },
+        llm: Arc::new(RwLock::new(None)),
+        llm_config: Arc::new(RwLock::new(Default::default())),
+        providers: Arc::new(RwLock::new(Default::default())),
+        login_limiter: Arc::new(Default::default()),
+        pbkdf2: quill_control::Pbkdf2Params::for_tests(),
     }
 }
 
@@ -61,6 +67,38 @@ fn state_with_selftest(on: bool) -> AppState {
     let mut s = state();
     s.config.enable_selftest = on;
     s
+}
+
+/// 真实服务会在启动时按 `QUILL_TOKENS` 自动建档，测试里没有这一步，
+/// 写 sessions 会撞 `users` 的外键约束。
+fn seed_user(uid: &str) {
+    let id = quill_domain::UserId::parse(uid)
+        .expect("测试 UID 必须合法")
+        .as_bytes()
+        .to_vec();
+    let name = uid.to_string();
+    leak_db()
+        .bridge()
+        .call(move |pool, _rt| {
+            Box::pin(async move {
+                sqlx::query(
+                    "INSERT OR IGNORE INTO users (id, username, username_norm, display_name, \
+                     password_hash, password_salt, password_algo, role, pwd_changed_at, \
+                     created_at, updated_at) \
+                     VALUES (?,?,?,?,zeroblob(32),zeroblob(16),'pbkdf2-hmac-sha256$i=600000',\
+                     'owner',0,0,0)",
+                )
+                .bind(id)
+                .bind(&name)
+                .bind(&name)
+                .bind("测试管理员")
+                .execute(&pool)
+                .await
+                .map_err(|e| quill_server::db::storage_error("测试铺用户", e))?;
+                Ok(())
+            })
+        })
+        .expect("铺用户失败");
 }
 
 macro_rules! app {
@@ -239,8 +277,9 @@ async fn extra_routes_list_does_not_leak_into_404_claim() {
 
 #[tokio::test]
 async fn registered_but_unimplemented_route_returns_501_with_route_name() {
+    // `/api/users` 是 REQUIREMENTS 里的用户管理，目前仍是登记未实现。
     let resp = app!()
-        .oneshot(authed("GET", "/api/sessions", TOKEN_ADMIN))
+        .oneshot(authed("GET", "/api/users", TOKEN_ADMIN))
         .await
         .expect("失败");
     assert_eq!(
@@ -254,9 +293,36 @@ async fn registered_but_unimplemented_route_returns_501_with_route_name() {
         "错误码应可被前端分支：{text}"
     );
     assert!(
-        text.contains("/api/sessions"),
+        text.contains("/api/users"),
         "501 文案必须点名具体路由（否则不可诊断）：{text}"
     );
+}
+
+#[tokio::test]
+async fn a_route_that_became_real_is_no_longer_reported_as_501() {
+    // `/api/sessions` 已经真接通，契约测试不能再把它当桩，否则实现落地反而测试变红。
+    for (method, path) in [
+        ("GET", "/api/sessions"),
+        ("GET", "/api/teams"),
+        ("POST", "/api/teams"),
+        ("GET", "/api/teams/{id}"),
+        ("PATCH", "/api/teams/{id}"),
+        ("DELETE", "/api/teams/{id}"),
+        ("DELETE", "/api/sessions/{id}"),
+    ] {
+        let concrete = path
+            .replace("{id}", "0192b7c8-0000-7000-8000-000000000003")
+            .replace("{slug}", "cost-analyst");
+        let resp = app!()
+            .oneshot(authed(method, &concrete, TOKEN_ADMIN))
+            .await
+            .expect("失败");
+        assert_ne!(
+            resp.status(),
+            StatusCode::NOT_IMPLEMENTED,
+            "已实现的路由 {method} {path} 不应再返回 501"
+        );
+    }
 }
 
 #[tokio::test]
@@ -268,17 +334,104 @@ async fn unimplemented_route_still_requires_auth_first() {
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
 
+/// 写路径（POST 响应）与读路径（SQLite `hex(id)`）必须给出同一个 id 字符串。
+/// 曾经一个用小写、一个用大写，前端 `session.id === sessionId` 与按 id 去重同时失配：
+/// 新会话首条消息渲染两遍、会话标题永远退回"新对话"。
+#[tokio::test]
+async fn created_session_id_is_byte_identical_to_the_listed_one() {
+    fn json(text: &str) -> serde_json::Value {
+        serde_json::from_str(text).unwrap_or_else(|e| panic!("响应必须是 JSON（{e}）：{text}"))
+    }
+
+    seed_user(UID_ADMIN);
+
+    let created = app!()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/sessions")
+                .header("authorization", format!("Bearer {TOKEN_ADMIN}"))
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .expect("构造请求失败"),
+        )
+        .await
+        .expect("oneshot 失败");
+    let created_status = created.status();
+    let created_text = body_text(created).await;
+    assert_eq!(
+        created_status,
+        StatusCode::OK,
+        "建会话应成功，实际 {created_status}：{created_text}"
+    );
+    let new_id = json(&created_text)
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_else(|| panic!("建会话响应必须带 id：{created_text}"))
+        .to_string();
+
+    let listed_text = body_text(
+        app!()
+            .oneshot(authed("GET", "/api/sessions", TOKEN_ADMIN))
+            .await
+            .expect("oneshot 失败"),
+    )
+    .await;
+    let listed: Vec<String> = json(&listed_text)
+        .get("sessions")
+        .and_then(|v| v.as_array())
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| row.get("id").and_then(|v| v.as_str()).map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    assert!(
+        listed.contains(&new_id),
+        "POST 返回的 id 必须在 GET /api/sessions 里逐字节一致（大小写敏感）\nPOST={new_id}\nGET={listed:?}"
+    );
+}
+
 #[tokio::test]
 async fn every_contract_route_responds_and_is_never_a_false_success() {
-    const IMPLEMENTED: [(&str, &str); 8] = [
+    // 「已实现」清单必须跟着实现一起长，否则新接通的路由会因为不再返回 501
+    // 而被判成「假成功」——这正是本测试要抓的东西，所以清单不能手懒。
+    const IMPLEMENTED: [(&str, &str); 34] = [
         ("GET", "/api/version"),
         ("GET", "/api/auth/me"),
         ("GET", "/api/healthz"),
+        ("POST", "/api/auth/login"),
+        ("POST", "/api/auth/refresh"),
+        ("POST", "/api/auth/logout"),
         ("GET", "/api/experts"),
         ("POST", "/api/experts"),
         ("GET", "/api/experts/{slug}"),
         ("PATCH", "/api/experts/{slug}"),
         ("DELETE", "/api/experts/{slug}"),
+        ("GET", "/api/sessions"),
+        ("POST", "/api/sessions"),
+        ("GET", "/api/sessions/{id}"),
+        ("DELETE", "/api/sessions/{id}"),
+        ("GET", "/api/teams"),
+        ("POST", "/api/teams"),
+        ("GET", "/api/teams/{id}"),
+        ("PATCH", "/api/teams/{id}"),
+        ("DELETE", "/api/teams/{id}"),
+        ("POST", "/api/sessions/{id}/messages"),
+        ("GET", "/api/wiki/pages"),
+        ("GET", "/api/wiki/pages/{path}"),
+        ("GET", "/api/wiki/index"),
+        ("GET", "/api/wiki/log"),
+        ("GET", "/api/admin/config"),
+        ("PUT", "/api/admin/config"),
+        ("GET", "/api/admin/providers"),
+        ("POST", "/api/admin/providers"),
+        ("PUT", "/api/admin/providers/{id}"),
+        ("DELETE", "/api/admin/providers/{id}"),
+        ("PUT", "/api/admin/providers/{id}/default"),
+        ("GET", "/api/admin/providers/{id}/models"),
+        ("GET", "/api/admin/models"),
     ];
 
     for &(method, path) in CONTRACT_ROUTES {
@@ -439,6 +592,11 @@ async fn healthz_surfaces_startup_warnings_so_silent_fallback_is_impossible() {
         tokens: state().tokens,
         db: state().db,
         db_problem: None,
+        llm: Arc::new(RwLock::new(None)),
+        llm_config: Arc::new(RwLock::new(Default::default())),
+        providers: Arc::new(RwLock::new(Default::default())),
+        login_limiter: Arc::new(Default::default()),
+        pbkdf2: quill_control::Pbkdf2Params::for_tests(),
     };
     let resp = build_router(bad)
         .oneshot(req("GET", "/healthz"))
@@ -450,5 +608,935 @@ async fn healthz_surfaces_startup_warnings_so_silent_fallback_is_impossible() {
     assert!(
         text.contains("\"ui_assets_available\":false"),
         "必须显式报出前端产物不可用：{text}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 实例级 /api/admin/config 契约
+// ---------------------------------------------------------------------------
+
+fn json_put(token: &str, body: serde_json::Value) -> Request<Body> {
+    Request::builder()
+        .method("PUT")
+        .uri("/api/admin/config")
+        .header("authorization", format!("Bearer {token}"))
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .expect("构造 PUT 失败")
+}
+
+fn json_get(token: &str) -> Request<Body> {
+    Request::builder()
+        .method("GET")
+        .uri("/api/admin/config")
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .expect("构造 GET 失败")
+}
+
+/// 非 admin 令牌访问 /api/admin/config 必须被拒绝：未带令牌 → 401，
+/// 带非 admin 令牌 → 403。
+#[tokio::test]
+async fn admin_config_rejects_non_admin() {
+    let plain = build_router(state())
+        .oneshot(json_get(TOKEN_PLAIN))
+        .await
+        .expect("失败");
+    assert_eq!(
+        plain.status(),
+        StatusCode::FORBIDDEN,
+        "非 admin 必须 403（不是 200，也不是 401）"
+    );
+    let body = body_text(plain).await;
+    assert!(body.contains("forbidden"), "错误码必须是 forbidden：{body}");
+    assert!(body.contains("下一步"), "必须给中文下一步：{body}");
+    assert!(
+        body.contains("admin"),
+        "next_step 要点名 admin 角色（让用户知道怎么修）：{body}"
+    );
+
+    let missing = build_router(state())
+        .oneshot(req("GET", "/api/admin/config"))
+        .await
+        .expect("失败");
+    assert_eq!(
+        missing.status(),
+        StatusCode::UNAUTHORIZED,
+        "未带令牌必须 401"
+    );
+
+    let put_plain = build_router(state())
+        .oneshot(json_put(
+            TOKEN_PLAIN,
+            serde_json::json!({
+                "protocol": "openai",
+                "base_url": "http://x/v1",
+                "api_key": "",
+                "model": "m",
+                "max_context_tokens": 32768,
+                "compaction_threshold_tokens": 8000,
+                "max_output_tokens": 2048
+            }),
+        ))
+        .await
+        .expect("失败");
+    assert_eq!(
+        put_plain.status(),
+        StatusCode::FORBIDDEN,
+        "PUT 同样要 403（不能 401 也不能 200）"
+    );
+}
+
+/// admin 写合法 → GET 字段一致 → 再写非法 → 400 + 中文 next_step。
+#[tokio::test]
+async fn admin_config_round_trips_and_rejects_invalid() {
+    // 第一次：合法的 openai 配置。
+    let good = serde_json::json!({
+        "protocol": "openai",
+        "base_url": "http://example.local:18080/v1",
+        "api_key": "sk-test-abcdef",
+        "model": "local-model",
+        "max_context_tokens": 32768,
+        "compaction_threshold_tokens": 8000,
+        "max_output_tokens": 2048,
+    });
+    let put_ok = build_router(state())
+        .oneshot(json_put(TOKEN_ADMIN, good.clone()))
+        .await
+        .expect("失败");
+    assert_eq!(
+        put_ok.status(),
+        StatusCode::OK,
+        "合法 PUT 必须 200：{}",
+        body_text(put_ok).await
+    );
+    let put_text = body_text(
+        build_router(state())
+            .oneshot(json_put(TOKEN_ADMIN, good.clone()))
+            .await
+            .expect("失败"),
+    )
+    .await;
+    let put_body: serde_json::Value = serde_json::from_str(&put_text).expect("响应必须是 JSON");
+    assert_eq!(put_body["protocol"], "openai");
+    assert_eq!(put_body["base_url"], "http://example.local:18080/v1");
+    assert_eq!(put_body["has_api_key"], true);
+    assert!(
+        put_body.get("api_key").is_none(),
+        "响应不许回传 api_key 明文：{put_text}"
+    );
+    assert!(
+        !put_text.contains("sk-test-abcdef"),
+        "api_key 明文泄漏了：{put_text}"
+    );
+    assert_eq!(put_body["model"], "local-model");
+    assert_eq!(put_body["max_context_tokens"], 32768);
+    assert_eq!(put_body["compaction_threshold_tokens"], 8000);
+    assert_eq!(put_body["max_output_tokens"], 2048);
+    assert!(
+        put_body["updated_at"].as_i64().unwrap_or(0) > 0,
+        "updated_at 必须是非零时间戳：{put_text}"
+    );
+
+    // GET 拿回相同字段。
+    let get_resp = build_router(state())
+        .oneshot(json_get(TOKEN_ADMIN))
+        .await
+        .expect("失败");
+    assert_eq!(get_resp.status(), StatusCode::OK);
+    let get_text = body_text(get_resp).await;
+    let get_body: serde_json::Value = serde_json::from_str(&get_text).expect("JSON");
+    for k in [
+        "protocol",
+        "base_url",
+        "has_api_key",
+        "model",
+        "max_context_tokens",
+        "compaction_threshold_tokens",
+        "max_output_tokens",
+    ] {
+        assert_eq!(get_body[k], put_body[k], "字段 {k:?} 必须一致");
+    }
+    assert_eq!(get_body["has_api_key"], true, "库里存了密钥时必须报 true");
+    assert!(
+        get_body.get("api_key").is_none(),
+        "GET 响应不许回传 api_key：{get_text}"
+    );
+
+    // 非法字段 1：protocol 不在枚举里。
+    let bad_proto = serde_json::json!({
+        "protocol": "bogus",
+        "base_url": "http://x/v1",
+        "api_key": "",
+        "model": "m",
+        "max_context_tokens": 32768,
+        "compaction_threshold_tokens": 8000,
+        "max_output_tokens": 2048,
+    });
+    let r = build_router(state())
+        .oneshot(json_put(TOKEN_ADMIN, bad_proto))
+        .await
+        .expect("失败");
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    let b = body_text(r).await;
+    assert!(b.contains("bad_request"), "错误码必须是 bad_request：{b}");
+    assert!(b.contains("下一步"), "必须给中文下一步：{b}");
+    assert!(b.contains("openai"), "next_step 要列出合法枚举：{b}");
+
+    // 非法字段 2：max_context_tokens 是负数。
+    let bad_ctx = serde_json::json!({
+        "protocol": "openai",
+        "base_url": "http://x/v1",
+        "api_key": "",
+        "model": "m",
+        "max_context_tokens": -1,
+        "compaction_threshold_tokens": 8000,
+        "max_output_tokens": 2048,
+    });
+    let r = build_router(state())
+        .oneshot(json_put(TOKEN_ADMIN, bad_ctx))
+        .await
+        .expect("失败");
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    let b = body_text(r).await;
+    assert!(b.contains("下一步"), "必须给中文下一步：{b}");
+    assert!(
+        b.contains("max_context_tokens"),
+        "要点名出错字段：{b}"
+    );
+
+    // 非法字段 3：compaction 大于 context。
+    let bad_balance = serde_json::json!({
+        "protocol": "openai",
+        "base_url": "http://x/v1",
+        "api_key": "",
+        "model": "m",
+        "max_context_tokens": 8000,
+        "compaction_threshold_tokens": 16000,
+        "max_output_tokens": 2048,
+    });
+    let r = build_router(state())
+        .oneshot(json_put(TOKEN_ADMIN, bad_balance))
+        .await
+        .expect("失败");
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    let b = body_text(r).await;
+    assert!(b.contains("compaction_threshold"), "要指出越界字段：{b}");
+}
+
+/// 热重载：PUT 后 state 里的 provider/config 被替换；再 PUT 一个根本
+/// 不存在的 base_url 时，旧 provider 仍能维持（构造失败保留旧值）。
+#[tokio::test]
+async fn admin_config_hot_reloads_provider_and_keeps_old_on_build_failure() {
+    use quill_server::llm::AdminConfig;
+
+    let s = state();
+
+    // 直接用 lib 的 admin helpers 走完整路径（绕开 HTTP 层）。
+    let good = AdminConfig {
+        protocol: quill_server::llm::Protocol::Openai,
+        base_url: "http://127.0.0.1:65530/v1".into(), // 故意不可达
+        api_key: "".into(),
+        model: "stub".into(),
+        max_context_tokens: 32768,
+        compaction_threshold_tokens: 8000,
+        max_output_tokens: 2048,
+        updated_at: 0,
+    };
+    // 直接构造 OpenAiCompatible 占位，验证 slot 能塞进去；构造本身只校验 URL 形状。
+    let cfg_llm = good.to_llm_config();
+    let provider = quill_server::llm::build(&cfg_llm).expect("URL 形状合法时应能构造");
+    s.replace_llm(Some(provider.clone()), cfg_llm.clone());
+
+    assert_eq!(
+        s.llm()
+            .expect("hot swap 后必须有 provider")
+            .name(),
+        "openai-compatible",
+        "替换后的 provider 名字必须反映新配置"
+    );
+    let snap = s.llm_config_snapshot();
+    assert_eq!(snap.model, "stub");
+    assert_eq!(snap.base_url, "http://127.0.0.1:65530/v1");
+    assert_eq!(snap.max_context_tokens, 32768);
+    assert_eq!(snap.compaction_threshold_tokens, 8000);
+    assert_eq!(snap.max_tokens, 2048);
+}
+
+/// 把 admin 写表后，再去 `provider.chat` 路径 —— 直接拿应用 router 跑通一遍：
+/// 写到数据库 → 用 state 重建 provider → state.llm() 返回非 None。
+/// 用一个真 chat 路由覆盖热替换语义。
+#[tokio::test]
+async fn admin_config_put_then_state_has_provider() {
+    let shared = state();
+    // 直接走 HTTP PUT。
+    let body = serde_json::json!({
+        "protocol": "openai",
+        "base_url": "http://127.0.0.1:65530/v1",
+        "api_key": "",
+        "model": "after-put",
+        "max_context_tokens": 32768,
+        "compaction_threshold_tokens": 8000,
+        "max_output_tokens": 2048,
+    });
+    let resp = build_router(shared.clone())
+        .oneshot(json_put(TOKEN_ADMIN, body))
+        .await
+        .expect("失败");
+    let status = resp.status();
+    let text = body_text(resp).await;
+    assert_eq!(status, StatusCode::OK, "合法 PUT 必须 200，实际 {status}：{text}");
+
+    // 同一 state（共享）上断言 hot swap 已生效 —— 这一段不依赖 SQLite 行，
+    // 只看 in-memory 的 `Arc<RwLock<...>>` slot，所以并行跑也安全。
+    let llm = shared
+        .llm()
+        .expect("PUT 后 state.llm 必须是 Some（hot reload 失败时是 provider_unavailable）");
+    assert_eq!(llm.name(), "openai-compatible");
+    assert_eq!(shared.llm_config_snapshot().model, "after-put");
+    assert_eq!(shared.llm_config_snapshot().base_url, "http://127.0.0.1:65530/v1");
+    assert_eq!(shared.llm_config_snapshot().max_tokens, 2048);
+    assert_eq!(shared.llm_config_snapshot().max_context_tokens, 32768);
+}
+
+// ---------------------------------------------------------------------------
+// 多模型供应商 / 模型池契约
+//
+// 这些用例各自用**独立的临时库**（provider_state），不碰上面 admin_config
+// 那几条共用的库：那几条会并发改「默认 provider」。
+// ---------------------------------------------------------------------------
+
+fn provider_state(label: &str) -> (TestDb, AppState) {
+    let db = TestDb::new(label);
+    let state = state_with(Some(&db));
+    (db, state)
+}
+
+fn prov_json(
+    method: &str,
+    path: &str,
+    token: &str,
+    body: Option<serde_json::Value>,
+) -> Request<Body> {
+    let payload = body.unwrap_or_else(|| serde_json::json!({}));
+    Request::builder()
+        .method(method)
+        .uri(path)
+        .header("authorization", format!("Bearer {token}"))
+        .header("content-type", "application/json")
+        .body(Body::from(payload.to_string()))
+        .expect("构造请求失败")
+}
+
+async fn prov_send(
+    state: &AppState,
+    method: &str,
+    path: &str,
+    body: Option<serde_json::Value>,
+) -> (StatusCode, serde_json::Value) {
+    let resp = build_router(state.clone())
+        .oneshot(prov_json(method, path, TOKEN_ADMIN, body))
+        .await
+        .expect("oneshot 失败");
+    let status = resp.status();
+    let text = body_text(resp).await;
+    let parsed = serde_json::from_str(&text)
+        .unwrap_or_else(|e| panic!("响应必须是 JSON（{e}，{status}）：{text}"));
+    (status, parsed)
+}
+
+async fn prov_delete(state: &AppState, id: &str) -> (StatusCode, String) {
+    let resp = build_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/admin/providers/{id}"))
+                .header("authorization", format!("Bearer {TOKEN_ADMIN}"))
+                .body(Body::empty())
+                .expect("构造 DELETE 失败"),
+        )
+        .await
+        .expect("oneshot 失败");
+    let status = resp.status();
+    (status, body_text(resp).await)
+}
+
+async fn create_provider(state: &AppState, body: serde_json::Value) -> serde_json::Value {
+    let (status, out) = prov_send(state, "POST", "/api/admin/providers", Some(body)).await;
+    assert_eq!(status, StatusCode::CREATED, "建 provider 必须 201：{out}");
+    out
+}
+
+fn provider_id(v: &serde_json::Value) -> String {
+    v["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("响应必须带 id：{v}"))
+        .to_string()
+}
+
+fn base_provider_body(name: &str, base_url: &str) -> serde_json::Value {
+    serde_json::json!({
+        "name": name,
+        "preset_id": "custom",
+        "kind": "custom",
+        "protocol": "openai",
+        "base_url": base_url,
+        "api_key": "sk-secret-value-123",
+        "model": "qwen3.5",
+        "max_context_tokens": 32768,
+        "compaction_threshold_tokens": 8000,
+        "max_output_tokens": 4096,
+    })
+}
+
+/// 假上游：返回固定的 /v1/models JSON。字段形状照 llama.cpp 的真实响应
+/// —— `data[].meta.n_ctx_train` 才是训练上下文，`n_ctx` 是当前实例上下文。
+async fn spawn_fake_upstream(payload: &'static str) -> String {
+    let app = axum::Router::new().route(
+        "/v1/models",
+        axum::routing::get(move || {
+            let payload = payload;
+            async move {
+                (
+                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                    payload,
+                )
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("假上游必须能绑回环端口");
+    let addr = listener.local_addr().expect("读本机地址");
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    format!("http://{addr}/v1")
+}
+
+const FAKE_LLAMA_MODELS: &str = r#"{
+  "models": [
+    {"name": "D:\\models\\Qwen3.5-4B-Q4_K_M.gguf", "type": "model",
+     "capabilities": ["completion"]}
+  ],
+  "object": "list",
+  "data": [
+    {"id": "D:\\models\\Qwen3.5-4B-Q4_K_M.gguf", "object": "model",
+     "created": 1791193408, "owned_by": "llamacpp",
+     "meta": {"n_ctx": 8192, "n_ctx_train": 262144, "n_embd": 2560,
+              "ftype": "Q4_K - Medium"}}
+  ]
+}"#;
+
+const FAKE_MODEL_ID: &str = "D:\\models\\Qwen3.5-4B-Q4_K_M.gguf";
+
+/// 1) CRUD 契约：201 / 200 / 204，且 **api_key 明文绝不出现在任何响应里**。
+#[tokio::test]
+async fn providers_crud_round_trip_and_never_leak_the_api_key() {
+    let (_db, s) = provider_state("providers-crud");
+
+    let created =
+        create_provider(&s, base_provider_body("本地 llama", "http://127.0.0.1:18080/v1")).await;
+    let id = provider_id(&created);
+    assert_eq!(id.len(), 32, "id 必须是 32 位 hex：{created}");
+    assert!(
+        id.chars().all(|c| c.is_ascii_hexdigit() && !c.is_lowercase()),
+        "id 必须全大写 hex（SQLite hex() 读出来是大写）：{id}"
+    );
+    assert_eq!(created["kind"], "custom");
+    assert_eq!(created["protocol"], "openai");
+    assert_eq!(created["has_api_key"], true);
+    assert_eq!(
+        created["is_default"], true,
+        "库里没有 provider 时新建的那条就是默认"
+    );
+    assert_eq!(created["enabled"], true);
+    assert!(
+        created.get("api_key").is_none(),
+        "响应里不许有 api_key 字段：{created}"
+    );
+    assert!(
+        !created.to_string().contains("sk-secret-value-123"),
+        "api_key 明文泄漏到响应里了：{created}"
+    );
+
+    let (status, list) = prov_send(&s, "GET", "/api/admin/providers", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!list.to_string().contains("sk-secret-value-123"), "{list}");
+    let rows = list["providers"].as_array().expect("providers 必须是数组");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["id"].as_str(), Some(id.as_str()));
+    assert_eq!(rows[0]["name"], "本地 llama");
+
+    // PUT 是**部分更新**：只发 model，其余字段必须原样保留。
+    let (status, updated) = prov_send(
+        &s,
+        "PUT",
+        &format!("/api/admin/providers/{id}"),
+        Some(serde_json::json!({ "model": "Qwen3.5-4B-Q4_K_M.gguf" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "部分更新必须 200：{updated}");
+    assert_eq!(updated["model"], "Qwen3.5-4B-Q4_K_M.gguf");
+    for k in [
+        "name",
+        "base_url",
+        "protocol",
+        "preset_id",
+        "kind",
+        "max_context_tokens",
+        "compaction_threshold_tokens",
+        "max_output_tokens",
+        "enabled",
+        "created_at",
+    ] {
+        assert_eq!(updated[k], created[k], "只发 model 时字段 {k:?} 不许被清空");
+    }
+    assert_eq!(updated["has_api_key"], true, "没传 api_key 就必须沿用旧密钥");
+    assert!(!updated.to_string().contains("sk-secret-value-123"), "{updated}");
+
+    // 显式 null = 清除；空串 = 沿用。
+    let (status, cleared) = prov_send(
+        &s,
+        "PUT",
+        &format!("/api/admin/providers/{id}"),
+        Some(serde_json::json!({ "api_key": null })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "清密钥必须 200：{cleared}");
+    assert_eq!(cleared["has_api_key"], false, "显式 null 必须清除密钥");
+
+    // 热重载：默认 provider 的 model 变了，运行时快照必须跟着变。
+    assert_eq!(s.llm_config_snapshot().model, "Qwen3.5-4B-Q4_K_M.gguf");
+    assert!(s.llm().is_ok(), "默认 provider 必须已装回运行时");
+
+    let second = create_provider(&s, base_provider_body("远端", "http://example.invalid/v1")).await;
+    let second_id = provider_id(&second);
+    assert_eq!(second["is_default"], false);
+
+    let (status, text) = prov_delete(&s, &second_id).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "删除必须 204：{text}");
+    let (_, list) = prov_send(&s, "GET", "/api/admin/providers", None).await;
+    assert_eq!(list["providers"].as_array().map(Vec::len), Some(1));
+}
+
+/// 2) 400 校验失败 + 404 未知 id，全部中文 detail + next_step。
+#[tokio::test]
+async fn provider_validation_failures_and_unknown_ids_are_explicit() {
+    let (_db, s) = provider_state("providers-validate");
+    let _ = create_provider(&s, base_provider_body("本地", "http://127.0.0.1:18080/v1")).await;
+
+    let bad_bodies: Vec<(serde_json::Value, &str)> = vec![
+        (
+            serde_json::json!({ "preset_id": "custom", "kind": "custom", "protocol": "openai", "base_url": "http://x/v1" }),
+            "name",
+        ),
+        (
+            serde_json::json!({ "name": "x", "kind": "custom", "protocol": "bogus", "base_url": "http://x/v1" }),
+            "protocol",
+        ),
+        (
+            serde_json::json!({ "name": "x", "kind": "magic", "protocol": "openai", "base_url": "http://x/v1" }),
+            "kind",
+        ),
+        (
+            serde_json::json!({ "name": "x", "kind": "custom", "protocol": "openai", "base_url": "http://x/v1", "max_context_tokens": 0 }),
+            "max_context_tokens",
+        ),
+        (
+            serde_json::json!({ "name": "x", "kind": "custom", "protocol": "openai", "base_url": "http://x/v1",
+                                "max_context_tokens": 8000, "compaction_threshold_tokens": 16000 }),
+            "compaction_threshold_tokens",
+        ),
+    ];
+    for (body, field) in bad_bodies {
+        let (status, out) = prov_send(&s, "POST", "/api/admin/providers", Some(body.clone())).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "body={body} 必须 400：{out}");
+        let err = &out["error"];
+        assert_eq!(err["code"], "bad_request", "{out}");
+        let detail = err["detail"].as_str().unwrap_or_default().to_string();
+        assert!(detail.contains(field), "要点名出错字段 {field}：{detail}");
+        assert!(detail.contains("下一步"), "必须给中文下一步：{detail}");
+        assert!(!err["next_step"].as_str().unwrap_or_default().is_empty());
+    }
+
+    // 被拒的写不该留下行。
+    let (_, list) = prov_send(&s, "GET", "/api/admin/providers", None).await;
+    assert_eq!(list["providers"].as_array().map(Vec::len), Some(1));
+
+    for (method, path) in [
+        (
+            "GET",
+            "/api/admin/providers/DEADBEEFDEADBEEFDEADBEEFDEADBEEF/models".to_string(),
+        ),
+        (
+            "PUT",
+            "/api/admin/providers/DEADBEEFDEADBEEFDEADBEEFDEADBEEF/default".to_string(),
+        ),
+        (
+            "PUT",
+            "/api/admin/providers/DEADBEEFDEADBEEFDEADBEEFDEADBEEF".to_string(),
+        ),
+        (
+            "DELETE",
+            "/api/admin/providers/DEADBEEFDEADBEEFDEADBEEFDEADBEEF".to_string(),
+        ),
+    ] {
+        let (status, out) = prov_send(&s, method, &path, Some(serde_json::json!({}))).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{method} {path} 必须 404：{out}");
+        assert_eq!(out["error"]["code"], "entity_not_found", "{out}");
+    }
+}
+
+/// 3) 非 admin 一律 403；没令牌一律 401。
+#[tokio::test]
+async fn provider_routes_reject_non_admin() {
+    let (_db, s) = provider_state("providers-auth");
+    for (method, path) in [
+        ("GET", "/api/admin/providers"),
+        ("POST", "/api/admin/providers"),
+        ("GET", "/api/admin/models"),
+    ] {
+        let resp = build_router(s.clone())
+            .oneshot(prov_json(
+                method,
+                path,
+                TOKEN_PLAIN,
+                Some(serde_json::json!({})),
+            ))
+            .await
+            .expect("oneshot 失败");
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "{method} {path} 非 admin 必须 403"
+        );
+        let t = body_text(resp).await;
+        assert!(t.contains("forbidden"), "{t}");
+        assert!(t.contains("下一步"), "{t}");
+    }
+
+    let resp = build_router(s.clone())
+        .oneshot(req("GET", "/api/admin/models"))
+        .await
+        .expect("oneshot 失败");
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED, "没令牌必须 401");
+}
+
+/// 4) 删「唯一」或「当前默认」provider 必须 409。
+#[tokio::test]
+async fn deleting_the_only_or_the_default_provider_is_refused() {
+    let (_db, s) = provider_state("providers-409");
+    let only = provider_id(
+        &create_provider(&s, base_provider_body("唯一", "http://127.0.0.1:18080/v1")).await,
+    );
+
+    let (status, t) = prov_delete(&s, &only).await;
+    assert_eq!(status, StatusCode::CONFLICT, "删唯一 provider 必须 409：{t}");
+    assert!(t.contains("conflict"), "{t}");
+    assert!(t.contains("下一步"), "409 也必须自诊断：{t}");
+
+    let second = provider_id(
+        &create_provider(&s, base_provider_body("第二个", "http://127.0.0.1:18081/v1")).await,
+    );
+
+    let (status, t) = prov_delete(&s, &only).await;
+    assert_eq!(status, StatusCode::CONFLICT, "删当前默认 provider 必须 409：{t}");
+    assert!(t.contains("default"), "文案要点名「默认」：{t}");
+
+    let (status, out) = prov_send(
+        &s,
+        "PUT",
+        &format!("/api/admin/providers/{second}/default"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "切默认必须 200：{out}");
+    assert_eq!(out["is_default"], true);
+    assert_eq!(s.llm_config_snapshot().base_url, "http://127.0.0.1:18081/v1");
+
+    let (status, t) = prov_delete(&s, &only).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "不再是默认就允许删：{t}");
+
+    // 全表只能有一个默认项。
+    let (_, list) = prov_send(&s, "GET", "/api/admin/providers", None).await;
+    let defaults = list["providers"]
+        .as_array()
+        .expect("数组")
+        .iter()
+        .filter(|p| p["is_default"] == true)
+        .count();
+    assert_eq!(defaults, 1, "默认项必须唯一");
+}
+
+/// 5) PUT /{id}/default 之后，旧的 /api/admin/config 必须反映新的默认 provider。
+#[tokio::test]
+async fn setting_a_new_default_is_reflected_by_the_legacy_admin_config() {
+    let (_db, s) = provider_state("providers-legacy");
+    let _a = provider_id(
+        &create_provider(&s, base_provider_body("A", "http://127.0.0.1:18080/v1")).await,
+    );
+    let b = provider_id(
+        &create_provider(&s, base_provider_body("B", "http://127.0.0.1:18081/v1")).await,
+    );
+
+    let resp = build_router(s.clone())
+        .oneshot(json_get(TOKEN_ADMIN))
+        .await
+        .expect("oneshot 失败");
+    assert_eq!(resp.status(), StatusCode::OK, "旧接口必须继续可用");
+    let before: serde_json::Value = serde_json::from_str(&body_text(resp).await).expect("JSON");
+    assert_eq!(before["base_url"], "http://127.0.0.1:18080/v1");
+
+    let (status, out) = prov_send(&s, "PUT", &format!("/api/admin/providers/{b}/default"), None).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+
+    let resp = build_router(s.clone())
+        .oneshot(json_get(TOKEN_ADMIN))
+        .await
+        .expect("oneshot 失败");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let text = body_text(resp).await;
+    let after: serde_json::Value = serde_json::from_str(&text).expect("JSON");
+    assert_eq!(
+        after["base_url"], "http://127.0.0.1:18081/v1",
+        "切默认后旧接口必须跟着变：{text}"
+    );
+    assert_eq!(after["model"], "qwen3.5");
+    assert_eq!(after["max_context_tokens"], 32768);
+    assert_eq!(after["compaction_threshold_tokens"], 8000);
+    assert_eq!(after["max_output_tokens"], 4096);
+    assert_eq!(after["protocol"], "openai");
+}
+
+/// 6) 真实探测：display_name / context_window(n_ctx_train) / modality / owned_by。
+#[tokio::test]
+async fn model_probe_derives_name_context_and_modality_from_the_upstream() {
+    let base_url = spawn_fake_upstream(FAKE_LLAMA_MODELS).await;
+    let (_db, s) = provider_state("providers-probe");
+    let mut body = base_provider_body("假上游", &base_url);
+    body["model"] = serde_json::json!(FAKE_MODEL_ID);
+    let id = provider_id(&create_provider(&s, body).await);
+
+    let (status, out) = prov_send(&s, "GET", &format!("/api/admin/providers/{id}/models"), None).await;
+    assert_eq!(status, StatusCode::OK, "探测接口必须 200：{out}");
+    assert_eq!(out["provider_id"].as_str(), Some(id.as_str()));
+    assert!(out["probed_at"].as_i64().unwrap_or(0) > 0, "必须带探测时刻");
+    assert!(out["error"].is_null(), "探测成功时 error 必须是 null：{out}");
+
+    let models = out["models"].as_array().expect("models 必须是数组");
+    assert_eq!(models.len(), 1, "上游报了几个就是几个：{out}");
+    let m = &models[0];
+    assert_eq!(m["id"], FAKE_MODEL_ID, "id 必须原样透传");
+    assert_eq!(m["display_name"], "Qwen3.5-4B-Q4_K_M");
+    assert_eq!(m["context_window"], 262144, "训练上下文优先于实例 n_ctx");
+    assert_eq!(m["modality"], "text", "capabilities=[completion] 是文本证据");
+    assert_eq!(m["owned_by"], "llamacpp");
+
+    // 模型池：starred 判定就是 model.id == provider.model
+    let (status, pool) = prov_send(&s, "GET", "/api/admin/models", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(pool["default_provider_id"].as_str(), Some(id.as_str()));
+    assert!(pool["generated_at"].as_i64().unwrap_or(0) > 0);
+    assert!(pool["unavailable"].as_array().expect("数组").is_empty());
+    let entries = pool["pool"].as_array().expect("pool 必须是数组");
+    assert_eq!(entries.len(), 1, "{pool}");
+    assert_eq!(entries[0]["provider_id"].as_str(), Some(id.as_str()));
+    assert_eq!(entries[0]["provider_name"], "假上游");
+    assert_eq!(entries[0]["starred"], true, "等于 provider.model 的模型必须打星");
+    assert_eq!(entries[0]["model"]["context_window"], 262144);
+    assert_eq!(entries[0]["model"]["display_name"], "Qwen3.5-4B-Q4_K_M");
+
+    // ☆ 点一下只发 model：不能把别的字段清空。
+    let (status, star) = prov_send(
+        &s,
+        "PUT",
+        &format!("/api/admin/providers/{id}"),
+        Some(serde_json::json!({ "model": FAKE_MODEL_ID })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{star}");
+    assert_eq!(star["name"], "假上游");
+    assert_eq!(star["base_url"], base_url);
+    assert_eq!(star["max_context_tokens"], 32768);
+}
+
+/// 7) 探测失败必须进 unavailable（中文原因），不许变成空 pool。
+#[tokio::test]
+async fn an_unreachable_provider_lands_in_unavailable_not_in_an_empty_pool() {
+    let (_db, s) = provider_state("providers-unavailable");
+    let dead = create_provider(&s, base_provider_body("打不通", "http://127.0.0.1:9/v1")).await;
+    let dead_id = provider_id(&dead);
+
+    let (status, out) = prov_send(&s, "GET", &format!("/api/admin/providers/{dead_id}/models"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        out["models"].as_array().expect("数组").is_empty(),
+        "探测失败不许编出模型：{out}"
+    );
+    let err = out["error"].as_str().expect("探测失败必须给原因");
+    assert!(
+        err.chars().any(|c| c as u32 > 0x2e80),
+        "原因必须是中文：{err}"
+    );
+
+    let (status, pool) = prov_send(&s, "GET", "/api/admin/models", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        pool["pool"].as_array().expect("数组").is_empty(),
+        "池里不该有打不通的 provider：{pool}"
+    );
+    let un = pool["unavailable"].as_array().expect("unavailable 必须是数组");
+    assert_eq!(un.len(), 1, "打不通的 provider 必须进 unavailable：{pool}");
+    assert_eq!(un[0]["provider_id"].as_str(), Some(dead_id.as_str()));
+    assert_eq!(un[0]["provider_name"], "打不通");
+    let reason = un[0]["error"].as_str().expect("中文原因");
+    assert!(
+        reason.chars().any(|c| c as u32 > 0x2e80),
+        "原因必须是中文：{reason}"
+    );
+
+    // 改回可达地址后必须重新出现在 pool 里（不许只做一次性快照）。
+    let reachable = spawn_fake_upstream(FAKE_LLAMA_MODELS).await;
+    let (status, fixed) = prov_send(
+        &s,
+        "PUT",
+        &format!("/api/admin/providers/{dead_id}"),
+        Some(serde_json::json!({ "base_url": reachable })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{fixed}");
+    let (_, pool) = prov_send(&s, "GET", "/api/admin/models", None).await;
+    assert_eq!(
+        pool["pool"].as_array().map(Vec::len),
+        Some(1),
+        "改回可达地址后必须回到 pool：{pool}"
+    );
+    assert!(pool["unavailable"].as_array().expect("数组").is_empty());
+}
+
+/// 遗留的 `GET /api/admin/config` 也**不许**回传明文密钥。
+/// 它和 `/api/admin/providers*` 是同一个 admin 凭据下的两条路，只要有一条漏，
+/// 前面 providers 路由做的「只给 has_api_key」就被旁路了。
+#[tokio::test]
+async fn the_legacy_admin_config_never_echoes_the_api_key() {
+    let (_db, s) = provider_state("legacy-config-no-key");
+    let created = create_provider(&s, base_provider_body("带密钥的端点", "http://127.0.0.1:18080/v1")).await;
+    let id = provider_id(&created);
+    assert_eq!(created["has_api_key"], true, "建的时候确实存了密钥：{created}");
+
+    // 让它成为默认 provider，legacy config 才有东西可回。
+    let (status, _) = prov_send(&s, "PUT", &format!("/api/admin/providers/{id}/default"), None).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, body) = prov_send(&s, "GET", "/api/admin/config", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.get("api_key").is_none(),
+        "legacy config 响应里不该有 api_key 这个键：{body}"
+    );
+    let raw = body.to_string();
+    assert!(
+        !raw.contains("sk-secret-value-123"),
+        "密钥明文泄漏：{raw}"
+    );
+    assert_eq!(body["has_api_key"], true, "只该用 has_api_key 说明已设置：{body}");
+
+    // 请求体仍然接受 api_key（留空 = 沿用旧值），否则前端无法在不误清密钥的前提下保存。
+    let (status, kept) = prov_send(
+        &s,
+        "PUT",
+        "/api/admin/config",
+        Some(serde_json::json!({
+            "protocol": "openai",
+            "base_url": "http://127.0.0.1:18080/v1",
+            "api_key": "",
+            "model": "qwen3.5-kept",
+            "max_context_tokens": 32768,
+            "compaction_threshold_tokens": 8000,
+            "max_output_tokens": 4096,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{kept}");
+    assert!(!kept.to_string().contains("sk-secret-value-123"), "{kept}");
+    let (_, after) = prov_send(&s, "GET", "/api/admin/config", None).await;
+    assert_eq!(after["model"], "qwen3.5-kept", "空 api_key 不该清掉旧密钥：{after}");
+    assert_eq!(after["has_api_key"], true, "空 api_key 不该清掉旧密钥：{after}");
+}
+
+/// 停用默认 provider 必须**真的**生效：`llm::build` 不读 `enabled` 是上一轮的漏洞，
+/// 表现为「模型池空了 / 健康检查说就绪 / 聊天照常能用」三者自相矛盾。
+#[tokio::test]
+async fn disabling_the_default_provider_makes_the_runtime_honest() {
+    let (_db, s) = provider_state("disable-default");
+    let upstream = spawn_fake_upstream(FAKE_LLAMA_MODELS).await;
+    let created = create_provider(&s, base_provider_body("唯一端点", &upstream)).await;
+    let id = provider_id(&created);
+    let (status, _) = prov_send(&s, "PUT", &format!("/api/admin/providers/{id}/default"), None).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // 启用时：模型池里能看到它。
+    let (_, pool) = prov_send(&s, "GET", "/api/admin/models", None).await;
+    assert_eq!(pool["pool"].as_array().map(Vec::len), Some(1), "{pool}");
+
+    // 关掉它。
+    let (status, off) = prov_send(
+        &s,
+        "PUT",
+        &format!("/api/admin/providers/{id}"),
+        Some(serde_json::json!({ "enabled": false })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{off}");
+    assert_eq!(off["enabled"], false, "enabled 字段必须真的写下去：{off}");
+
+    // 模型池必须把它剔除，而且要和「探测失败」分开——停用是管理员主动的选择，
+    // 混进 unavailable 会让界面显示成「连不上」，那是误导。
+    let (_, pool) = prov_send(&s, "GET", "/api/admin/models", None).await;
+    assert!(
+        pool["pool"].as_array().expect("数组").is_empty(),
+        "停用的 provider 不该留在 pool：{pool}"
+    );
+    let un = pool["unavailable"].as_array().expect("unavailable 必须是数组");
+    assert!(
+        un.iter().all(|p| p["provider_id"] != id.as_str()),
+        "停用不是探测失败，不该混进 unavailable：{pool}"
+    );
+    let dis = pool["disabled"].as_array().expect("disabled 必须是数组");
+    assert_eq!(dis.len(), 1, "停用的 provider 必须单独列出来：{pool}");
+    assert_eq!(dis[0]["provider_id"].as_str(), Some(id.as_str()));
+    assert_eq!(dis[0]["provider_name"], "唯一端点");
+    let why = dis[0]["reason"].as_str().expect("停用要给原因");
+    assert!(why.chars().any(|c| c as u32 > 0x2e80), "原因必须是中文：{why}");
+
+    // 运行时必须同步：默认 provider 停用后不该还留着可用的 provider，
+    // 否则界面三处（健康横幅 / 模型池 / 聊天）会自相矛盾。
+    assert!(
+        s.llm().is_err(),
+        "默认 provider 停用后运行时不该还有可用 provider"
+    );
+    let reason = s.llm().expect_err("停用后必须给出原因");
+    let text = format!("{reason:?}");
+    assert!(
+        text.chars().any(|c| c as u32 > 0x2e80),
+        "停用原因必须是中文：{text}"
+    );
+
+    // 再打开必须能恢复 —— 不许只做一次性清空。
+    let (status, on) = prov_send(
+        &s,
+        "PUT",
+        &format!("/api/admin/providers/{id}"),
+        Some(serde_json::json!({ "enabled": true })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{on}");
+    assert!(s.llm().is_ok(), "重新启用后运行时必须恢复：{:?}", s.llm().err());
+    let (_, pool) = prov_send(&s, "GET", "/api/admin/models", None).await;
+    assert_eq!(pool["pool"].as_array().map(Vec::len), Some(1), "重新启用后要回到 pool：{pool}");
+    assert!(
+        pool["disabled"].as_array().expect("数组").is_empty(),
+        "重新启用后不该还留在 disabled：{pool}"
     );
 }

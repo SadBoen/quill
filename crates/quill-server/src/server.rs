@@ -1,8 +1,8 @@
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use crate::auth::EnvTokenResolver;
+use crate::auth::{CompositeTokenResolver, EnvTokenResolver};
 use crate::config::Config;
 use crate::routes::build_router;
 use crate::state::AppState;
@@ -10,36 +10,94 @@ use crate::state::AppState;
 pub const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub fn build_state(config: Config) -> (AppState, Vec<crate::config::Warning>) {
-    let (resolver, mut warnings) = EnvTokenResolver::from_env();
+    let (env_resolver, mut warnings) = EnvTokenResolver::from_env();
+    let (resolver, session_resolver) = CompositeTokenResolver::new(env_resolver);
     let mut all = config.warnings.clone();
     all.append(&mut warnings);
+    let subjects = resolver.env().subjects();
 
     let db_path = config.db_path.display().to_string();
     let max_conn = config.db_max_connections;
     let (db, problem) = match crate::db::DbBridge::open(&db_path, max_conn) {
         Ok(bridge) => {
-            match bridge.missing_tables() {
-                Ok(missing) if missing.is_empty() => {}
-                Ok(missing) => all.push(crate::config::Warning {
+            match bridge.migrate_embedded() {
+                Ok(report) if report.changed() => all.push(crate::config::Warning {
                     source: "QUILL_DB_PATH".to_string(),
                     message: format!(
-                        "数据库 {db_path} 缺少表 {:?}：schema 未迁移，\
-                         专家与派工路由会返回 503。\
-                         下一步：按 crates/quill-store/migrations/0001_init.sql 执行迁移\
-                         （quill-upgrade 目前仍是骨架，尚无 CLI 入口），\
-                         迁移后用 `quill doctor --section=db` 复核。",
-                        missing
+                        "已自动应用迁移 {:?}（数据库 {db_path}）。",
+                        report.applied
                     ),
                 }),
+                Ok(_) => match bridge.missing_tables() {
+                    Ok(missing) if missing.is_empty() => {}
+                    Ok(missing) => all.push(crate::config::Warning {
+                        source: "QUILL_DB_PATH".to_string(),
+                        message: format!(
+                            "数据库 {db_path} 缺少表 {missing:?}，但迁移台账显示已是最新。\
+                             这说明该文件不是 quill 的库（或被人手改过结构）。\
+                             下一步：改用 `QUILL_DB_PATH` 指向一个空路径，让 quill 建新库。"
+                        ),
+                    }),
+                    Err(e) => all.push(crate::config::Warning {
+                        source: "QUILL_DB_PATH".to_string(),
+                        message: format!("无法探测数据库 {db_path} 的表结构：{e}。"),
+                    }),
+                },
                 Err(e) => all.push(crate::config::Warning {
                     source: "QUILL_DB_PATH".to_string(),
                     message: format!(
-                        "无法探测数据库 {db_path} 的表结构：{e}。\
-                         下一步：执行 `quill doctor --section=db` 查看完整诊断。"
+                        "自动迁移失败，专家与派工路由会返回 503。\n{e}"
                     ),
                 }),
             }
-            (Some(Arc::new(bridge)), None)
+
+            if !subjects.is_empty() {
+                match bridge.ensure_token_users(subjects.clone()) {
+                    Ok(created) if !created.is_empty() => {
+                        let names: Vec<String> = subjects
+                            .iter()
+                            .filter(|(id, _, _)| created.contains(id))
+                            .map(|(_, login, _)| login.clone())
+                            .collect();
+                        println!(
+                            "  已为令牌用户自动建档：{}（这些账号只能靠令牌登录，没有密码）",
+                            names.join("、")
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(e) => all.push(crate::config::Warning {
+                        source: "QUILL_TOKENS".to_string(),
+                        message: format!(
+                            "令牌用户建档失败：{e}\n\
+                             这些令牌即使能通过鉴权，也写不了任何带外键的数据（会话、消息、团队、扩展都会报外键错误）。\n\
+                             下一步：修好上面的写库错误后重启服务。"
+                        ),
+                    }),
+                }
+            }
+
+            // headless 部署的密码账号入口：浏览器首管引导只对「全新实例」可用，
+            // 容器/CI/远端机器没人点得了。这里补一条配置驱动的建号通道，
+            // **不是注册的替代品** —— `/api/auth/register` 依然不存在。
+            match bridge.ensure_password_users(std::env::var("QUILL_PASSWORD_USERS").ok().as_deref())
+            {
+                Ok(()) => {}
+                Err(problems) => {
+                    for (source, message) in problems {
+                        all.push(crate::config::Warning {
+                            source: source.clone(),
+                            message,
+                        });
+                    }
+                }
+            }
+
+            let bridge = Arc::new(bridge);
+            // 库建好了，把同一个 Arc 交给会话令牌解析器，之后登录签发的令牌
+            // 才会被认出来。必须是同一个 Arc —— 它是唯一持有 worker 池的那个。
+            session_resolver.attach(Arc::clone(&bridge));
+
+            (Some(bridge), None)
         }
         Err(e) => {
             let reason = e.to_string();
@@ -55,15 +113,137 @@ pub fn build_state(config: Config) -> (AppState, Vec<crate::config::Warning>) {
         }
     };
 
-    (
-        AppState {
-            config,
-            tokens: Arc::new(resolver),
-            db,
-            db_problem: problem,
-        },
-        all,
-    )
+    let (env_llm_config, mut llm_warnings) = crate::llm::LlmConfig::from_env();
+    all.append(&mut llm_warnings);
+    // 先按 env 拼一个 provider / config 占位；下一步若有数据库，会用表里的
+    // 内容再次覆盖 — 让 admin 表成为唯一真相来源。
+    let initial_provider = if env_llm_config.enabled {
+        match crate::llm::build(&env_llm_config) {
+            Ok(p) => Some(p),
+            Err(e) => {
+                all.push(crate::config::Warning {
+                    source: "QUILL_LLM_BASE_URL".to_string(),
+                    message: format!("模型服务构造失败，对话相关接口会返回 503：{e}"),
+                });
+                None
+            }
+        }
+    } else {
+        all.push(crate::config::Warning {
+            source: "QUILL_LLM_BASE_URL".to_string(),
+            message: "未配置模型服务，对话相关接口会返回 503。\
+                      下一步：启动 llama-server，或设置 QUILL_LLM_BASE_URL / QUILL_LLM_MODEL；\
+                      也可以由 admin 通过 PUT /api/admin/config 在线写入。"
+                .to_string(),
+        });
+        None
+    };
+
+    let llm_slot = Arc::new(RwLock::new(initial_provider));
+    let llm_config_slot = Arc::new(RwLock::new(env_llm_config.clone()));
+    let provider_slot = Arc::new(RwLock::new(Default::default()));
+
+    let state = AppState {
+        config,
+        tokens: Arc::new(resolver),
+        db,
+        db_problem: problem,
+        llm: llm_slot,
+        llm_config: llm_config_slot,
+        providers: provider_slot,
+        login_limiter: Arc::new(Default::default()),
+        pbkdf2: quill_control::Pbkdf2Params::production(),
+    };
+
+    // 回填：`llm_providers` 表为空时种一条 kind=custom 的默认 provider，
+    // 来源优先级 = admin_config 行 → 环境变量。表里已有行则以表为准，
+    // 重新 build provider + 覆盖 llm_config。
+    if state.db.is_some() {
+        match crate::llm_providers::list(&state) {
+            Ok(rows) if !rows.is_empty() => {
+                let cache = crate::llm_providers::ProviderCache { providers: rows };
+                state.set_provider_cache(cache.clone());
+                state.apply_default_provider(&cache);
+            }
+            Ok(_) => seed_first_provider(&state, &env_llm_config, &mut all),
+            Err(e) => all.push(crate::config::Warning {
+                source: "QUILL_ADMIN_CONFIG".to_string(),
+                message: format!(
+                    "读取 llm_providers 时出错（{e}）。下一步：用 quill doctor --section=db 看诊断，\
+                     或手动 POST /api/admin/providers 重建。"
+                ),
+            }),
+        }
+    } else {
+        // 没数据库就不写表，保留 env 行为不变 — 启动告警里会说。
+        all.push(crate::config::Warning {
+            source: "QUILL_ADMIN_CONFIG".to_string(),
+            message: "数据库不可用：模型供应商表未初始化，模型配置维持环境变量路径，\
+                      等修好存储后由 admin 通过 POST /api/admin/providers 落地。"
+                .to_string(),
+        });
+    }
+
+    (state, all)
+}
+
+/// 首启播种：优先用 0002 的 `admin_config` 行（老库升级过来时它才是真相），
+/// 没有就用环境变量。构造不出 provider 就只告警并退回 env —— 宁可没有
+/// provider 也不能让服务起不来。
+fn seed_first_provider(
+    state: &AppState,
+    env_llm_config: &crate::llm::LlmConfig,
+    warnings: &mut Vec<crate::config::Warning>,
+) {
+    let legacy = crate::api_admin::load_admin_config(state)
+        .ok()
+        .map(|c| c.to_llm_config());
+    let base = legacy.clone().unwrap_or_else(|| env_llm_config.clone());
+
+    if let Err(e) = crate::api_admin::seed_admin_config_from_env(state, &base) {
+        warnings.push(crate::config::Warning {
+            source: "QUILL_ADMIN_CONFIG".to_string(),
+            message: format!(
+                "首次启动时回填 admin_config 失败：{e}。\
+                 下一步：执行 PUT /api/admin/config 写入一次，\
+                 或检查数据库可写权限（quill doctor --section=db）。"
+            ),
+        });
+    }
+
+    match crate::llm::build(&base) {
+        Ok(_) => {}
+        Err(detail) => {
+            eprintln!(
+                "⚠ 模型服务构造失败（{detail}）：不播种模型供应商，模型配置退回环境变量。\
+                 下一步：修正 QUILL_LLM_BASE_URL 后重启，或由 admin 通过 \
+                 POST /api/admin/providers 在线写入。"
+            );
+            warnings.push(crate::config::Warning {
+                source: "QUILL_LLM_BASE_URL".to_string(),
+                message: format!(
+                    "模型服务构造失败（{detail}），未播种模型供应商，对话相关接口沿用环境变量路径。"
+                ),
+            });
+            return;
+        }
+    }
+
+    match crate::llm_providers::seed_default_from_llm_config(state, &base, "默认模型服务") {
+        Ok(_) => {
+            if let Ok(cache) = state.reload_providers() {
+                state.apply_default_provider(&cache);
+            }
+        }
+        Err(e) => warnings.push(crate::config::Warning {
+            source: "QUILL_ADMIN_CONFIG".to_string(),
+            message: format!(
+                "首次启动时播种模型供应商失败：{e}。\
+                 下一步：执行 POST /api/admin/providers 写入一条，\
+                 或检查数据库可写权限（quill doctor --section=db）。"
+            ),
+        }),
+    }
 }
 
 pub async fn bind(addr: SocketAddr) -> Result<tokio::net::TcpListener, String> {
@@ -109,7 +289,14 @@ pub async fn serve(state: AppState, addr: SocketAddr) -> Result<(), String> {
     let app = build_router(state);
     let timeout = shutdown_timeout();
 
-    axum::serve(listener, app)
+    axum::serve(
+        listener,
+        // `into_make_service_with_connect_info` 让处理器能拿到真实对端地址，
+        // 登录限流按「用户名 + 来源 IP」计额就靠它。不注入的话 `ConnectInfo`
+        // 提取器会直接 500 —— 这是它故意的：宁可报错也别默默当成「未知来源」
+        // 让人拿到无限额度。
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
         .with_graceful_shutdown(async move {
             shutdown_signal().await;
             println!("收到关闭信号：停止接受新连接，等待在途请求完成（上限 {timeout:?}）…");

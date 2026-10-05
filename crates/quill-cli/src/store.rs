@@ -1,9 +1,7 @@
 use crate::Outcome;
-use quill_store::{configure_pool, run_migration};
+use quill_store::configure_pool;
 use sqlx::SqlitePool;
 use std::path::{Path, PathBuf};
-
-const MIGRATION: &str = include_str!("../../quill-store/migrations/0001_init.sql");
 
 pub async fn open_db(db_path: &str) -> Result<SqlitePool, Outcome> {
     let p = Path::new(db_path);
@@ -28,22 +26,13 @@ pub async fn open_db(db_path: &str) -> Result<SqlitePool, Outcome> {
         }
     };
 
-    let has_schema: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='schema_version'",
-    )
-    .fetch_one(&pool)
-    .await
-    .map_err(|e| Outcome::undet(format!("探测 schema 状态失败：{e}")))?;
-
-    if has_schema == 0 {
-        let _ = run_migration(&pool, MIGRATION).await.map_err(|e| {
-            Outcome::undet(format!(
-                "schema 迁移失败：{e}\n\
-                 下一步：这是**库本身**的问题，不是命令用法问题。\
-                 不要删库重来——先 `cp {db_path} {db_path}.bak` 再排查。"
-            ))
-        })?;
-    }
+    quill_store::migrate(&pool).await.map_err(|e| {
+        Outcome::undet(format!(
+            "schema 迁移失败：{e}\n\
+             下一步：这是**库本身**的问题，不是命令用法问题。\
+             不要删库重来——先 `cp {db_path} {db_path}.bak` 再排查。"
+        ))
+    })?;
 
     Ok(pool)
 }
@@ -53,18 +42,15 @@ pub async fn resolve_user(
     name: &str,
     create: bool,
 ) -> Result<(quill_adapters::UserId, bool), Outcome> {
-    use sha2::{Digest, Sha256};
-    let norm = name.trim().to_lowercase();
-    if norm.is_empty() {
+    if name.trim().is_empty() {
         return Err(Outcome::fail(String::from(
             "用户名不能为空。用 `--as <用户名>` 指定。",
         )));
     }
 
-    let digest = Sha256::digest(format!("quill-cli-user:{norm}").as_bytes());
-    let hex: String = digest[..16].iter().map(|b| format!("{b:02x}")).collect();
-    let uid = quill_adapters::UserId::parse(&hex)
-        .map_err(|e| Outcome::undet(format!("内部：派生的用户 ID 非法（{e}）。")))?;
+    let uid = quill_control::derive_user_id(name)
+        .map_err(|e| Outcome::fail(e.to_string()))?;
+    let norm = name.trim().to_lowercase();
 
     let uid_bytes = uid.as_bytes().to_vec();
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM users WHERE id = ?")

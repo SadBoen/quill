@@ -183,6 +183,151 @@ impl DbBridge {
         })
     }
 
+    pub fn migrate_embedded(&self) -> Result<quill_store::MigrationReport, AgentError> {
+        self.call(|pool, _rt| {
+            Box::pin(async move {
+                quill_store::migrate(&pool)
+                    .await
+                    .map_err(|e| AgentError::Storage {
+                        detail: format!("应用内嵌迁移失败：{e}"),
+                    })
+            })
+        })
+    }
+
+    pub fn ensure_token_users(
+        &self,
+        subjects: Vec<(quill_adapters::UserId, String, bool)>,
+    ) -> Result<Vec<quill_adapters::UserId>, AgentError> {
+        self.call(move |pool, _rt| {
+            Box::pin(async move {
+                let mut created = Vec::new();
+                for (id, login, is_admin) in subjects {
+                    match quill_control::ensure_token_user(&pool, id, &login, is_admin).await {
+                        Ok(quill_control::Provision::Created) => created.push(id),
+                        Ok(quill_control::Provision::AlreadyPresent) => {}
+                        Err(e) => {
+                            return Err(AgentError::Storage {
+                                detail: format!("令牌用户 {login} 引导失败：{e}"),
+                            })
+                        }
+                    }
+                }
+                Ok(created)
+            })
+        })
+    }
+
+    /// 按 `QUILL_PASSWORD_USERS` 建口令账号，供**没有浏览器**的场景登录
+    /// （容器、CI、远端机器）。首管引导 `POST /api/setup/initial-admin` 只在
+    /// `users` 表为空时可用，容器里没人点得了，所以需要这条配置驱动的入口。
+    ///
+    /// 它**不是注册的替代品**：`/api/auth/register` 依然不存在，注册通道照常关闭。
+    ///
+    /// 格式 `用户名:口令`，逗号分隔。口令本身不能含 `,` 与 `:` —— 这两个字符是分隔符，
+    /// 想用就从别处生成然后换个分隔方式（或走首管引导）。
+    pub fn ensure_password_users(
+        &self,
+        raw: Option<&str>,
+    ) -> Result<(), Vec<(String, String)>> {
+        let Some(raw) = raw else {
+            return Ok(());
+        };
+        // 与 QUILL_TOKENS 的 admin 判定保持一致：同样的用户名，谁在环境变量里
+        // 带 :admin 谁就是 owner。两份名单不必同步，登录走的是同一行 users。
+        let admins: std::collections::BTreeSet<String> = crate::auth::EnvTokenResolver::from_env()
+            .0
+            .subjects()
+            .into_iter()
+            .filter(|(_, _, is_admin)| *is_admin)
+            .map(|(_, login, _)| login)
+            .collect();
+
+        let mut entries = Vec::new();
+        for item in raw.split(',') {
+            let item = item.trim();
+            if item.is_empty() {
+                continue;
+            }
+            let Some((username, password)) = item.split_once(':') else {
+                return Err(vec![(
+                    "QUILL_PASSWORD_USERS".to_string(),
+                    format!(
+                        "条目 {item:?} 格式非法（应为 `用户名:口令`）。\
+                         下一步：改成 `alice:你的口令`，多项之间用逗号分隔。"
+                    ),
+                )]);
+            };
+            let username = username.trim();
+            let password = password.trim();
+            entries.push((username.to_string(), password.to_string()));
+        }
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        let admins_clone = admins.clone();
+        // 同样用「结果槽位」把 Vec<(source, message)> 原样带出来：
+        // DbBridge 的错误通道是 AgentError，套不进去，而且不该把多条
+        // 警告压成一条错误。
+        type PasswordSlot = std::sync::Arc<std::sync::Mutex<Option<Result<(), Vec<(String, String)>>>>>;
+        let slot: PasswordSlot = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let writer = std::sync::Arc::clone(&slot);
+        self.call(move |pool, _rt| {
+            Box::pin(async move {
+                let mut problems = Vec::new();
+                for (username, password) in entries {
+                    let norm = quill_control::normalize_username(&username);
+                    let is_admin = admins_clone.contains(&norm);
+                    match quill_control::ensure_password_user(
+                        &pool,
+                        &username,
+                        &password,
+                        is_admin,
+                        quill_control::Pbkdf2Params::production(),
+                    )
+                    .await
+                    {
+                        Ok(prov) => println!(
+                            "  口令账号「{}」{}（{}）",
+                            norm,
+                            match prov {
+                                quill_control::PasswordProvision::Created => "已创建",
+                                quill_control::PasswordProvision::Upgraded => {
+                                    "已由仅令牌账号升级为可口令登录"
+                                }
+                                quill_control::PasswordProvision::Rotated => "口令已按配置更新",
+                            },
+                            if is_admin { "admin" } else { "member" }
+                        ),
+                        Err(e) => problems.push((
+                            "QUILL_PASSWORD_USERS".to_string(),
+                            format!(
+                                "口令账号 {username:?} 建档失败：{e}\n\
+                                 这一条不会生效，其余条目不受影响。\
+                                 下一步：检查用户名（3~32 位字母数字下划线）与口令（12~256 个字符）。"
+                            ),
+                        )),
+                    }
+                }
+                *writer.lock().expect("结果槽位不该被毒化") = Some(if problems.is_empty() {
+                    Ok(())
+                } else {
+                    Err(problems)
+                });
+                Ok(())
+            })
+        })
+        .map_err(|e| {
+            vec![(
+                "QUILL_PASSWORD_USERS".to_string(),
+                format!("写库失败，所有口令账号都未生效：{e}"),
+            )]
+        })?;
+        let out = slot.lock().expect("结果槽位不该被毒化").take();
+        out.unwrap_or(Ok(()))
+    }
+
     pub fn missing_tables(&self) -> Result<Vec<String>, AgentError> {
         self.call(|pool, _rt| {
             Box::pin(async move {

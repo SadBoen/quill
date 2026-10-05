@@ -4,6 +4,9 @@ use crate::{ExpertId, TeamId};
 
 pub const MAX_TEAM_MEMBERS: usize = 8;
 
+/// 主持人不算成员，所以「至少两人」指的是除主持人之外的成员数。
+pub const MIN_TEAM_MEMBERS: usize = 2;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TeamError {
     IdEmpty,
@@ -15,6 +18,11 @@ pub enum TeamError {
     DuplicateMember(ExpertId),
 
     TooManyMembers { got: usize, max: usize },
+
+    TooFewMembers { got: usize, min: usize },
+
+    /// 团队只能由普通专家组成，不搞嵌套团队。
+    MemberIsTeam { member: ExpertId, team: TeamId },
 
     UnknownExpert(ExpertId),
 }
@@ -28,6 +36,12 @@ impl std::fmt::Display for TeamError {
             Self::DuplicateMember(e) => write!(f, "专家 {e} 已在该团队中"),
             Self::TooManyMembers { got, max } => {
                 write!(f, "团队成员数 {got} 超过上限 {max}")
+            }
+            Self::TooFewMembers { got, min } => {
+                write!(f, "团队成员数 {got} 少于下限 {min}")
+            }
+            Self::MemberIsTeam { member, team } => {
+                write!(f, "{member} 是一个团队，不能作为 {team} 的成员（不支持嵌套团队）")
             }
             Self::UnknownExpert(e) => write!(f, "专家 {e} 不在名册中"),
         }
@@ -79,6 +93,12 @@ impl Team {
         expert: ExpertId,
         roster: &BTreeSet<ExpertId>,
     ) -> Result<AddOutcome, TeamError> {
+        if expert.as_str() == self.id.as_str() {
+            return Err(TeamError::MemberIsTeam {
+                member: expert,
+                team: self.id.clone(),
+            });
+        }
         if !roster.contains(&expert) {
             return Err(TeamError::UnknownExpert(expert));
         }
@@ -93,6 +113,20 @@ impl Team {
         }
         self.members.insert(expert);
         Ok(AddOutcome::Added)
+    }
+
+    /// 成员数是否满足上下限。
+    ///
+    /// 上下限都不在 `add_member` 里判：0 人团队在「往里加人」的过程中是合法的
+    /// 中间态（下限必须在人加完之后再查），上限则已经在 add_member 里守住。
+    pub fn validate(&self) -> Result<(), TeamError> {
+        if self.members.len() < MIN_TEAM_MEMBERS {
+            return Err(TeamError::TooFewMembers {
+                got: self.members.len(),
+                min: MIN_TEAM_MEMBERS,
+            });
+        }
+        Ok(())
     }
 
     pub fn remove_member(&mut self, expert: &ExpertId) -> bool {
@@ -327,5 +361,71 @@ mod tests {
             msg2.contains('9') && msg2.contains('8'),
             "错误须含实际值与上限：{msg2}"
         );
+    }
+
+    /// 下限只由 validate() 判：0 人团队在往里加人的过程中是合法中间态。
+    #[test]
+    fn validate_rejects_fewer_than_two_members() {
+        let mut t = team_of("growth-squad", "增长小队", "cost-analyst").expect("应合法");
+        let r = roster3();
+        assert_eq!(
+            t.validate().unwrap_err(),
+            TeamError::TooFewMembers { got: 0, min: 2 },
+            "空团队不是可交付的团队"
+        );
+
+        t.add_member(ExpertId::parse("cost-analyst").expect("应合法"), &r)
+            .expect("应成功");
+        assert_eq!(
+            t.validate().unwrap_err(),
+            TeamError::TooFewMembers { got: 1, min: 2 },
+            "只有主持人 + 1 个成员仍然不成立（主持人不计入成员数）"
+        );
+
+        t.add_member(ExpertId::parse("growth-analyst").expect("应合法"), &r)
+            .expect("应成功");
+        assert_eq!(t.validate(), Ok(()), "两名成员必须放行");
+    }
+
+    /// 成员不能是团队自己：quill 不支持嵌套团队。判在 add_member 上而不是
+    /// validate 上，因为这一条要拦的是「加进来」这个动作。
+    #[test]
+    fn a_team_cannot_become_a_member_of_itself() {
+        let tid = TeamId::parse("growth-squad").expect("应合法");
+        let r = roster(&["growth-squad", "cost-analyst"]);
+        let mut t = Team::new(tid.clone(), "增长小队", ExpertId::parse("lead").expect("应合法"))
+            .expect("应合法");
+        assert_eq!(
+            t.add_member(ExpertId::parse("growth-squad").expect("应合法"), &r)
+                .unwrap_err(),
+            TeamError::MemberIsTeam {
+                member: ExpertId::parse("growth-squad").expect("应合法"),
+                team: tid,
+            },
+            "把自己当成员必须判红"
+        );
+        assert_eq!(t.member_count(), 0, "被拒的加入不得留下痕迹");
+    }
+
+    /// 名册里没有的专家和「团队自己」要能区分开：前者是名册问题，后者是规则问题，
+    /// 错误文案不同，修复动作也不同。
+    #[test]
+    fn nested_team_is_not_mistaken_for_an_unknown_expert() {
+        let r = roster3();
+        let mut t = team_of("growth-squad", "增长小队", "cost-analyst").expect("应合法");
+        let err = t
+            .add_member(ExpertId::parse("growth-squad").expect("应合法"), &r)
+            .unwrap_err();
+        assert!(
+            !matches!(err, TeamError::UnknownExpert(_)),
+            "团队自己必须报「不能嵌套」，而不是「不在名册」：{err}"
+        );
+        assert!(err.to_string().contains("growth-squad"), "{err}");
+    }
+
+    #[test]
+    fn min_and_max_are_two_and_eight() {
+        assert_eq!(MIN_TEAM_MEMBERS, 2);
+        assert_eq!(MAX_TEAM_MEMBERS, 8);
     }
 }

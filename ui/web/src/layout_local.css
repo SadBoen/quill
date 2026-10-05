@@ -1,0 +1,32 @@
+/*
+ * 本地布局覆盖：放在 index.css 之后加载，与上游设计一一对应说明。
+ * ui/web/src/index.css 必须与 vendor/openoctopus-frontend/src/index.css 逐字节一致，
+ * 所以本地修改不进那个文件，全在这里。
+ *
+ * .stage -- 上游 .stage { min-height: 100vh; padding: 20px } 不设 max-width，
+ *   视口拉到 1600+ 时整个 app 被拉满到边，对话页感觉"僵硬拉伸"。
+ *   封顶 1440 居中，超过留白；不影响 <820px 的折叠布局。
+ */
+
+.stage {
+  max-width: 1440px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/*
+ * .form-error-next -- 服务端错误信封里的 next_step（"下一步：…"）单独占一行。
+ *   index.css 的 .form-error 是单行 padding 盒，把两段文字塞进同一行会让
+ *   下一步（常带可复制命令）被读漏。段落默认 margin 要清掉，否则盒子被撑开。
+ */
+.form-error p {
+  margin: 0;
+}
+
+.form-error p + p {
+  margin-top: 6px;
+}
+
+.form-error-next {
+  opacity: 0.85;
+}

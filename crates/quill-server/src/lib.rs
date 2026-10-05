@@ -1,5 +1,11 @@
+pub mod api_admin;
+pub mod api_auth;
+pub mod api_chat;
 pub mod api_dispatch;
 pub mod api_experts;
+pub mod api_providers;
+pub mod api_teams;
+pub mod api_wiki;
 pub mod auth;
 pub mod body;
 pub mod config;
@@ -7,10 +13,16 @@ pub mod db;
 pub mod dispatch_ledger;
 pub mod error;
 pub mod experts_repo;
+pub mod llm;
+pub mod llm_providers;
 pub mod middleware;
+pub mod ratelimit;
 pub mod routes;
 pub mod server;
 pub mod state;
+pub mod teams_repo;
+pub mod tools;
+pub mod ui;
 
 pub use config::Config;
 pub use db::DbBridge;

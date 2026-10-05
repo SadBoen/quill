@@ -225,11 +225,7 @@ pub(crate) async fn find_credentials(
     let role_s: String = row.try_get("role").map_err(invariant("role"))?;
     Ok(Some(UserCredentials {
         id: UserId::from_bytes(bytes16(&row, "id")?),
-        digest: PasswordDigest {
-            algo_tag: algo,
-            salt: salt16(&row)?,
-            hash: bytes32(&row, "password_hash")?,
-        },
+        digest: digest_from_row(&row, &algo)?,
         status: UserStatus::parse(&status_s)?,
         role: UserRole::parse(&role_s)?,
         login_fail_count: row
@@ -239,6 +235,38 @@ pub(crate) async fn find_credentials(
             .try_get("locked_until")
             .map_err(invariant("locked_until"))?,
     }))
+}
+
+/// 从行里取出口令摘要。
+///
+/// **必须先看 `password_algo` 再看字节长度。** `token-only` 账号（只靠
+/// Bearer 令牌进来的那些，`QUILL_TOKENS` 引导时建的）存的是哨兵字符串
+/// `token-only` / `token-only-no-password`，长度分别是 10 和 26 字节 ——
+/// 它们本来就不是摘要，压根不该按 16/32 字节去校验。
+///
+/// 之前这里无条件要求 16 字节 salt，于是**任何 token-only 账号一用口令登录
+/// 就撞不变量**：不是 401「凭据无效」，而是 500「内部不变量被破坏」。
+/// 那等于把一个正常的登录失败报成服务端故障，还顺手把它计进限流额度里
+/// 当成「一次失败尝试」——双重错误。
+fn digest_from_row(
+    row: &SqliteRow,
+    algo: &str,
+) -> Result<PasswordDigest, ControlError> {
+    if algo == crate::bootstrap::TOKEN_ONLY_ALGO {
+        // 零值摘要。`verify_stored` 会先 `parse_algo("token-only")` 失败，
+        // 直接返回 false（见 password.rs），所以这两个字节数组永远不会被
+        // 拿去参与比较——它们只是为了让结构体有个合法值。
+        return Ok(PasswordDigest {
+            algo_tag: algo.to_string(),
+            salt: [0u8; 16],
+            hash: [0u8; 32],
+        });
+    }
+    Ok(PasswordDigest {
+        algo_tag: algo.to_string(),
+        salt: salt16(row)?,
+        hash: bytes32(row, "password_hash")?,
+    })
 }
 
 fn salt16(row: &SqliteRow) -> Result<[u8; 16], ControlError> {

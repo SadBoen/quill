@@ -9,7 +9,8 @@ pub use dispatch::{
 };
 pub use error::{chain_check_error, AgentError, MemberRejectKind, DOCTOR_CMD};
 pub use expert::{
-    Expert, ExpertRegistry, ExpertRepository, NewExpert, Visibility, MAX_DISPLAY_NAME, SYSTEM_OWNER,
+    Expert, ExpertRegistry, ExpertRepository, NewExpert, Visibility, MAX_DISPLAY_NAME,
+    MAX_INSTRUCTIONS, MAX_MODEL, MAX_SOURCE_TEMPLATE, SYSTEM_OWNER,
 };
 
 #[cfg(test)]

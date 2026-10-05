@@ -11,6 +11,18 @@ use crate::error::ApiError;
 use crate::experts_repo::SqlxExpertRepository;
 use crate::state::AppState;
 
+/// 工具层用：按同一套可见性规则列出专家。
+///
+/// 与 `list` 处理器**必须走同一条路径**（`registry` + `list_visible`），
+/// 否则工具就成了绕过专家可见性的后门 —— 模型能列出用户界面上看不到的专家。
+pub fn list_for_tools(
+    state: &crate::state::AppState,
+    uid: quill_adapters::UserId,
+) -> Result<Vec<Expert>, String> {
+    let reg = registry(state).map_err(|e| e.to_string())?;
+    reg.list_visible(&uid).map_err(|e| e.to_string())
+}
+
 pub async fn list(State(state): State<AppState>, user: AuthUser) -> Result<Json<Value>, ApiError> {
     let registry = registry(&state)?;
     let experts = map_agent_error("列出专家", registry.list_visible(&user.0.user_id))?;
@@ -26,13 +38,24 @@ pub async fn create(
 ) -> Result<(axum::http::StatusCode, Json<Value>), ApiError> {
     only_keys(
         &body,
-        &["id", "display_name", "description"],
+        &[
+            "id",
+            "display_name",
+            "description",
+            "instructions",
+            "model",
+            "source_template",
+        ],
         "POST /api/experts",
     )?;
     let new = NewExpert {
         id: expert_id(&body, "id")?,
         display_name: need_str(&body, "display_name")?,
         description: need_str(&body, "description")?,
+        instructions: opt_str(&body, "instructions")?.unwrap_or_default(),
+        model: opt_str(&body, "model")?,
+        // 不做存在性校验：模板库是前端静态 vendor 进来的，后端没有模板表可查。
+        source_template: opt_str(&body, "source_template")?,
     };
     let registry = registry(&state)?;
 
@@ -59,7 +82,14 @@ pub async fn patch(
 ) -> Result<Json<Value>, ApiError> {
     only_keys(
         &body,
-        &["display_name", "description", "default_enabled"],
+        &[
+            "display_name",
+            "description",
+            "instructions",
+            "model",
+            "source_template",
+            "default_enabled",
+        ],
         "PATCH /api/experts/{slug}",
     )?;
     let id = parse_slug(&slug)?;
@@ -78,6 +108,53 @@ pub async fn patch(
         )?;
         touched = true;
     }
+    if let Some(text) = opt_str(&body, "instructions")? {
+        map_agent_error(
+            "改专家人格正文",
+            registry.set_instructions(&owner, &id, text).map(|_| ()),
+        )?;
+        touched = true;
+    }
+    // `model` 必须是「键是否存在」而不是「值是否为 null」来决定改不改：
+    // 显式 null = 清除偏好模型回落到实例默认模型，缺省 = 沿用现值。
+    if let Some(raw) = body.get("model") {
+        let next = match raw {
+            Value::Null => None,
+            Value::String(s) => Some(s.clone()),
+            other => {
+                return Err(ApiError::bad_request(format!(
+                    "字段 model 必须是字符串或 null，实际收到 {}。\
+                     下一步：传模型名表示该专家固定用它，传 null 表示跟随实例默认模型。",
+                    type_name(other)
+                )))
+            }
+        };
+        map_agent_error(
+            "改专家偏好模型",
+            registry.set_model(&owner, &id, next).map(|_| ()),
+        )?;
+        touched = true;
+    }
+    // source_template 同样是「键是否存在」：省略 = 不改，显式 null = 清除来源模板。
+    if let Some(raw) = body.get("source_template") {
+        let next = match raw {
+            Value::Null => None,
+            Value::String(s) => Some(s.clone()),
+            other => {
+                return Err(ApiError::bad_request(format!(
+                    "字段 source_template 必须是字符串或 null，实际收到 {}。\
+                     下一步：传模板 id（如 ai-coding-coach）表示这个专家派生自该模板，\
+                     传 null 表示它不来自任何模板。",
+                    type_name(other)
+                )))
+            }
+        };
+        map_agent_error(
+            "改专家来源模板",
+            registry.set_source_template(&owner, &id, next).map(|_| ()),
+        )?;
+        touched = true;
+    }
     if let Some(on) = opt_bool(&body, "default_enabled")? {
         map_agent_error(
             "改默认启用开关",
@@ -88,7 +165,8 @@ pub async fn patch(
     if !touched {
         return Err(ApiError::bad_request(
             "请求体里没有任何可改字段。\
-             可改字段：display_name（字符串）、description（字符串）、default_enabled（布尔）。"
+             可改字段：display_name（字符串）、description（字符串）、instructions（字符串）、\
+             model（字符串或 null）、source_template（字符串或 null）、default_enabled（布尔）。"
                 .to_string(),
         ));
     }
@@ -126,6 +204,11 @@ fn expert_json(e: &Expert) -> Value {
         "owner": e.owner().to_compact_hex(),
         "display_name": e.display_name(),
         "description": e.description(),
+        "instructions": e.instructions(),
+        // 显式 null 而不是省略键：前端靠 `"model" in expert` 判断字段是否被支持，
+        // 省略键会被误当成「后端还没做这个字段」。
+        "model": e.model(),
+        "source_template": e.source_template(),
         "visibility": e.visibility().as_wire(),
         "default_enabled": e.default_enabled(),
         "is_builtin": e.is_builtin(),
@@ -236,6 +319,21 @@ pub fn agent_error_to_api(op: &str, e: AgentError) -> ApiError {
         AgentError::ExpertDisplayNameInvalid { raw, reason } => ApiError::bad_request(format!(
             "显示名 {raw:?} 不合法：{reason}（长度上限 64 个**字符**，中文按字符计）。"
         )),
+        AgentError::ExpertInstructionsInvalid { reason, .. } => ApiError::bad_request(format!(
+            "人格正文不合法：{reason}。\
+             下一步：把 instructions 压到 20000 个字符以内（删掉重复的例句、示例输出），\
+             或把长文沉淀成技能文件、在 instructions 里只留指向它的说明。"
+        )),
+        AgentError::ExpertModelInvalid { reason, .. } => ApiError::bad_request(format!(
+            "偏好模型不合法：{reason}。\
+             下一步：要么填模型服务 /v1/models 里列出的真实模型名，要么传 null / 省略 model \
+             让它跟随实例默认模型。"
+        )),
+        AgentError::ExpertSourceTemplateInvalid { raw, reason } => ApiError::bad_request(format!(
+            "来源模板不合法：{reason}。你填的是「{raw}」。\
+             下一步：传模板库里的模板 id（小写字母、数字与连字符组成，最长 64 个字符，\
+             例如 ai-coding-coach），或传 null / 省略 source_template 表示这个专家不来自模板。"
+        )),
         AgentError::DispatchRequestInvalid { reason } => ApiError::bad_request(reason),
         AgentError::Storage { .. } => ApiError::internal(
             "存储层操作失败，真实原因已写入服务端日志（响应体不含内部细节）。\
@@ -282,8 +380,7 @@ mod tests {
     }
 
     #[test]
-    fn not_found_is_404_and_builtin_is_403() {
-        let nf = agent_error_to_api(
+    fn not_found_is_404_and_builtin_is_403() {        let nf = agent_error_to_api(
             "读取专家",
             AgentError::ExpertNotFound {
                 id: ExpertId::parse("ghost").expect("合法"),
@@ -297,5 +394,82 @@ mod tests {
             },
         );
         assert_eq!(builtin.status(), axum::http::StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn persona_validation_errors_are_400_with_a_chinese_fix_direction() {
+        for (e, want) in [
+            (
+                AgentError::ExpertInstructionsInvalid {
+                    raw: "人".repeat(20_001),
+                    reason: "超过 20000 个字符",
+                },
+                "instructions",
+            ),
+            (
+                AgentError::ExpertModelInvalid {
+                    raw: "  ".into(),
+                    reason: "trim 后为空串",
+                },
+                "model",
+            ),
+            (
+                AgentError::ExpertSourceTemplateInvalid {
+                    raw: "AI Coding".into(),
+                    reason: "含非法字符",
+                },
+                "source_template",
+            ),
+        ] {
+            let err = agent_error_to_api("改专家人格", e);
+            assert_eq!(err.status(), axum::http::StatusCode::BAD_REQUEST);
+            let body = format!("{}{}", err.detail(), err.next_step());
+            assert!(
+                body.contains("下一步："),
+                "人格类错误必须带修复方向：{body}"
+            );
+            assert!(body.contains(want), "应点名出错的字段 {want}：{body}");
+        }
+    }
+
+    #[test]
+    fn expert_json_always_emits_model_key_even_when_it_is_null() {
+        let e = Expert::user_authored_with_persona(
+            quill_adapters::UserId::from_bytes([1u8; 16]),
+            ExpertId::parse("cost-analyst").expect("合法"),
+            "成本分析师",
+            "算清成本",
+            "先问口径",
+            None,
+        )
+        .expect("应可构造");
+        let v = expert_json(&e);
+        let obj = v.as_object().expect("必须是对象");
+        assert!(obj.contains_key("model"), "model 为 None 时也必须出现该键");
+        assert!(v["model"].is_null(), "None 必须序列化成 JSON null");
+        assert_eq!(v["instructions"], serde_json::json!("先问口径"));
+        assert!(
+            obj.contains_key("source_template"),
+            "source_template 为 None 时也必须出现该键（否则前端会以为后端没做这字段）"
+        );
+        assert!(v["source_template"].is_null());
+    }
+
+    #[test]
+    fn expert_json_carries_the_source_template_through() {
+        let e = Expert::user_authored_with_source(
+            quill_adapters::UserId::from_bytes([1u8; 16]),
+            ExpertId::parse("prog-1").expect("合法"),
+            "程序员1号",
+            "从模板派生",
+            "",
+            None,
+            Some("ai-coding-coach".to_string()),
+        )
+        .expect("应可构造");
+        assert_eq!(
+            expert_json(&e)["source_template"],
+            serde_json::json!("ai-coding-coach")
+        );
     }
 }

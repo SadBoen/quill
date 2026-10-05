@@ -63,10 +63,28 @@ impl Drop for TestDb {
 }
 
 pub fn migration_sql() -> String {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../quill-store/migrations/0001_init.sql");
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("读取迁移文件 {} 失败：{e}", path.display()))
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../quill-store/migrations");
+    // 0001 → 0002 → … 顺序由文件名天然保证；只读这些，不读别的。
+    // 少读一个会让新列在测试库里不存在，而测试会假绿。
+    let mut buf = String::new();
+    for name in [
+        "0001_init.sql",
+        "0002_admin_config.sql",
+        "0003_llm_providers.sql",
+        "0004_expert_persona.sql",
+        "0005_expert_source_template.sql",
+        "0006_teams.sql",
+        "0007_mcp_transport_alignment.sql",
+    ] {
+        let path = dir.join(name);
+        buf.push_str(
+            &std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("读取迁移文件 {} 失败：{e}", path.display())),
+        );
+        buf.push('\n');
+    }
+    buf
 }
 
 pub fn scalar_i64(db: &Arc<DbBridge>, sql: &str) -> i64 {

@@ -1,0 +1,32 @@
+[package]
+name = "quill-provider"
+version = "0.1.0"
+edition = "2021"
+description = "LLM 供应商抽象（OpenAI 兼容 / 本地 llama.cpp）"
+license = "Apache-2.0"
+
+[lib]
+name = "quill_provider"
+path = "src/lib.rs"
+
+[dependencies]
+async-stream = "0.3"
+futures-core = "0.3"
+futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false, features = [
+  "json",
+  "rustls-tls",
+  "stream",
+  "charset",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+futures-util = "0.3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+wiremock = "0.6"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "deny"

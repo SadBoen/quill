@@ -8,6 +8,18 @@ pub const SYSTEM_OWNER: UserId = UserId::from_bytes([0u8; 16]);
 
 pub const MAX_DISPLAY_NAME: usize = 64;
 
+/// 人格正文上限。理由：人格正文会整条进入每一次模型请求的 system 消息，
+/// 超过这个量就该拆成技能/知识而不是继续堆提示词。上限与 0004 的 CHECK 同口径。
+pub const MAX_INSTRUCTIONS: usize = 20_000;
+
+/// 偏好模型名上限，与 0004 的 CHECK 同口径。
+pub const MAX_MODEL: usize = 128;
+
+/// 来源模板 id 上限，与 0005 的 CHECK 同口径。取值规则是 `^[a-z0-9-]{1,64}$`：
+/// 与专家 id 同一套字符集（模板 id 就是前端静态库里的那一批 id），
+/// 但刻意不比 ExpertId::parse 更严 —— 契约冻结的就是这个正则。
+pub const MAX_SOURCE_TEMPLATE: usize = 64;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Visibility {
     DefaultVisible,
@@ -61,6 +73,10 @@ pub struct Expert {
     owner: UserId,
     display_name: String,
     description: String,
+    instructions: String,
+    model: Option<String>,
+    /// 派生来源的模板 id。`None` = 手建 / 内置专家，不来自任何模板。
+    source_template: Option<String>,
     visibility: Visibility,
     default_enabled: bool,
     builtin: bool,
@@ -74,9 +90,48 @@ impl Expert {
         display_name: impl Into<String>,
         description: impl Into<String>,
     ) -> Result<Self, AgentError> {
+        Self::user_authored_with_persona(owner, id, display_name, description, "", None)
+    }
+
+    /// 带人格的构造入口。`user_authored` 保留四位参数是为了不动既有调用点
+    /// （quill-cli 的 `quill experts add` 走的仍是零人格版本）。
+    pub fn user_authored_with_persona(
+        owner: UserId,
+        id: ExpertId,
+        display_name: impl Into<String>,
+        description: impl Into<String>,
+        instructions: impl Into<String>,
+        model: Option<String>,
+    ) -> Result<Self, AgentError> {
+        Self::user_authored_with_source(
+            owner,
+            id,
+            display_name,
+            description,
+            instructions,
+            model,
+            None,
+        )
+    }
+
+    /// 带来源模板的构造入口。`source_template` 记录「这个专家是从哪个模板生成的」；
+    /// 同一个模板可以传进来生成任意多个专家（1:N）。
+    pub fn user_authored_with_source(
+        owner: UserId,
+        id: ExpertId,
+        display_name: impl Into<String>,
+        description: impl Into<String>,
+        instructions: impl Into<String>,
+        model: Option<String>,
+        source_template: Option<String>,
+    ) -> Result<Self, AgentError> {
         let display_name = display_name.into();
         let description = description.into();
+        let instructions = instructions.into();
         check_display_name(&display_name)?;
+        check_instructions(&instructions)?;
+        let model = check_model(model)?;
+        let source_template = check_source_template(source_template)?;
         if owner == SYSTEM_OWNER {
             return Err(AgentError::ExpertBuiltinProtected { id });
         }
@@ -85,6 +140,9 @@ impl Expert {
             owner,
             display_name,
             description,
+            instructions,
+            model,
+            source_template,
             visibility: Visibility::UserAuthored,
             default_enabled: true,
             builtin: false,
@@ -97,14 +155,42 @@ impl Expert {
         display_name: impl Into<String>,
         description: impl Into<String>,
     ) -> Result<Self, AgentError> {
+        Self::builtin_with_persona(id, display_name, description, "", None)
+    }
+
+    pub fn builtin_with_persona(
+        id: ExpertId,
+        display_name: impl Into<String>,
+        description: impl Into<String>,
+        instructions: impl Into<String>,
+        model: Option<String>,
+    ) -> Result<Self, AgentError> {
+        Self::builtin_with_source(id, display_name, description, instructions, model, None)
+    }
+
+    pub fn builtin_with_source(
+        id: ExpertId,
+        display_name: impl Into<String>,
+        description: impl Into<String>,
+        instructions: impl Into<String>,
+        model: Option<String>,
+        source_template: Option<String>,
+    ) -> Result<Self, AgentError> {
         let display_name = display_name.into();
         let description = description.into();
+        let instructions = instructions.into();
         check_display_name(&display_name)?;
+        check_instructions(&instructions)?;
+        let model = check_model(model)?;
+        let source_template = check_source_template(source_template)?;
         Ok(Self {
             id,
             owner: SYSTEM_OWNER,
             display_name,
             description,
+            instructions,
+            model,
+            source_template,
             visibility: Visibility::BuiltinSystem,
             default_enabled: true,
             builtin: true,
@@ -126,6 +212,21 @@ impl Expert {
 
     pub fn description(&self) -> &str {
         &self.description
+    }
+
+    /// 人格正文（goose custom agent 的 markdown 正文）。空串 = 没有额外人格。
+    pub fn instructions(&self) -> &str {
+        &self.instructions
+    }
+
+    /// 偏好模型。`None` = 跟随实例默认模型（与 0004 里 model IS NULL 同义）。
+    pub fn model(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
+
+    /// 派生来源的模板 id。`None` = 不来自任何模板（手建 / 内置专家）。
+    pub fn source_template(&self) -> Option<&str> {
+        self.source_template.as_deref()
     }
 
     pub fn visibility(&self) -> Visibility {
@@ -179,6 +280,40 @@ impl Expert {
     ) -> Result<(), AgentError> {
         self.assert_modifiable(actor)?;
         self.description = description.into();
+        Ok(())
+    }
+
+    pub fn set_instructions(
+        &mut self,
+        actor: &UserId,
+        instructions: impl Into<String>,
+    ) -> Result<(), AgentError> {
+        self.assert_modifiable(actor)?;
+        let instructions = instructions.into();
+        check_instructions(&instructions)?;
+        self.instructions = instructions;
+        Ok(())
+    }
+
+    /// `None` 明确表示清除偏好模型（回到实例默认模型）。
+    pub fn set_model(
+        &mut self,
+        actor: &UserId,
+        model: Option<String>,
+    ) -> Result<(), AgentError> {
+        self.assert_modifiable(actor)?;
+        self.model = check_model(model)?;
+        Ok(())
+    }
+
+    /// `None` 明确表示清除来源模板（这个专家不再声称自己派生自任何模板）。
+    pub fn set_source_template(
+        &mut self,
+        actor: &UserId,
+        source_template: Option<String>,
+    ) -> Result<(), AgentError> {
+        self.assert_modifiable(actor)?;
+        self.source_template = check_source_template(source_template)?;
         Ok(())
     }
 
@@ -257,6 +392,69 @@ fn check_display_name(raw: &str) -> Result<(), AgentError> {
     Ok(())
 }
 
+fn check_instructions(raw: &str) -> Result<(), AgentError> {
+    let chars = raw.chars().count();
+    if chars > MAX_INSTRUCTIONS {
+        return Err(AgentError::ExpertInstructionsInvalid {
+            raw: raw.to_string(),
+            reason: "超过 20000 个字符",
+        });
+    }
+    Ok(())
+}
+
+/// `None` 与 `Some(非空)` 都合法；`Some(全空白)` 判红——那等于把模型切成空串，
+/// 运行时只会得到一个打不通的请求，而不是回落到默认模型。
+fn check_model(model: Option<String>) -> Result<Option<String>, AgentError> {
+    let Some(m) = model else {
+        return Ok(None);
+    };
+    let trimmed = m.trim();
+    if trimmed.is_empty() {
+        return Err(AgentError::ExpertModelInvalid {
+            raw: m,
+            reason: "trim 后为空串；要跟随实例默认模型请传 null 或省略该字段",
+        });
+    }
+    if trimmed.chars().count() > MAX_MODEL {
+        return Err(AgentError::ExpertModelInvalid {
+            raw: m,
+            reason: "超过 128 个字符",
+        });
+    }
+    Ok(Some(trimmed.to_string()))
+}
+
+/// `None` 与 `Some(合法模板 id)` 都合法。取值规则 `^[a-z0-9-]{1,64}$`，与 0005 的
+/// CHECK 同口径；不 trim、不放行空白，因为模板 id 是静态库里的标识，不是用户
+/// 随手写的名字。**刻意不做存在性校验**：模板库由前端静态 vendor 进来，后端
+/// 没有模板表可查，硬要查就得先造一张并不该由后端拥有的表。
+fn check_source_template(src: Option<String>) -> Result<Option<String>, AgentError> {
+    let Some(s) = src else {
+        return Ok(None);
+    };
+    if s.is_empty() {
+        return Err(AgentError::ExpertSourceTemplateInvalid {
+            raw: s,
+            reason: "为空串；不来自模板请传 null 或省略该字段",
+        });
+    }
+    let len = s.chars().count();
+    if len > MAX_SOURCE_TEMPLATE {
+        return Err(AgentError::ExpertSourceTemplateInvalid {
+            raw: s,
+            reason: "超过 64 个字符",
+        });
+    }
+    if s.chars().any(|c| !matches!(c, 'a'..='z' | '0'..='9' | '-')) {
+        return Err(AgentError::ExpertSourceTemplateInvalid {
+            raw: s,
+            reason: "含非法字符，只允许小写字母、数字与连字符",
+        });
+    }
+    Ok(Some(s))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewExpert {
     pub id: ExpertId,
@@ -264,6 +462,15 @@ pub struct NewExpert {
     pub display_name: String,
 
     pub description: String,
+
+    /// 人格正文；空串 = 没有额外人格。
+    pub instructions: String,
+
+    /// 偏好模型；`None` = 跟随实例默认模型。
+    pub model: Option<String>,
+
+    /// 派生来源的模板 id；`None` = 不来自任何模板。
+    pub source_template: Option<String>,
 }
 
 pub trait ExpertRepository: Send + Sync + 'static {
@@ -296,7 +503,15 @@ impl<R: ExpertRepository> ExpertRegistry<R> {
                 return Err(AgentError::ExpertExists { id: new.id });
             }
         }
-        let expert = Expert::user_authored(owner, new.id, new.display_name, new.description)?;
+        let expert = Expert::user_authored_with_source(
+            owner,
+            new.id,
+            new.display_name,
+            new.description,
+            new.instructions,
+            new.model,
+            new.source_template,
+        )?;
         expert.check_cross_invariant()?;
         self.repo.put(&expert)?;
         Ok(expert)
@@ -308,7 +523,14 @@ impl<R: ExpertRepository> ExpertRegistry<R> {
                 return Err(AgentError::ExpertExists { id: new.id });
             }
         }
-        let expert = Expert::builtin(new.id, new.display_name, new.description)?;
+        let expert = Expert::builtin_with_source(
+            new.id,
+            new.display_name,
+            new.description,
+            new.instructions,
+            new.model,
+            new.source_template,
+        )?;
         expert.check_cross_invariant()?;
         self.repo.put(&expert)?;
         Ok(expert)
@@ -374,13 +596,48 @@ impl<R: ExpertRepository> ExpertRegistry<R> {
         Ok(e)
     }
 
+    pub fn set_instructions(
+        &self,
+        actor: &UserId,
+        id: &ExpertId,
+        instructions: impl Into<String>,
+    ) -> Result<Expert, AgentError> {
+        let mut e = self.must_get_owned(actor, id)?;
+        e.set_instructions(actor, instructions)?;
+        self.repo.put(&e)?;
+        Ok(e)
+    }
+
+    pub fn set_model(
+        &self,
+        actor: &UserId,
+        id: &ExpertId,
+        model: Option<String>,
+    ) -> Result<Expert, AgentError> {
+        let mut e = self.must_get_owned(actor, id)?;
+        e.set_model(actor, model)?;
+        self.repo.put(&e)?;
+        Ok(e)
+    }
+
+    pub fn set_source_template(
+        &self,
+        actor: &UserId,
+        id: &ExpertId,
+        source_template: Option<String>,
+    ) -> Result<Expert, AgentError> {
+        let mut e = self.must_get_owned(actor, id)?;
+        e.set_source_template(actor, source_template)?;
+        self.repo.put(&e)?;
+        Ok(e)
+    }
+
     pub fn set_default_enabled(
         &self,
         actor: &UserId,
         id: &ExpertId,
         on: bool,
-    ) -> Result<Expert, AgentError> {
-        let mut e = self.must_get_owned(actor, id)?;
+    ) -> Result<Expert, AgentError> {        let mut e = self.must_get_owned(actor, id)?;
         e.set_default_enabled(actor, on)?;
         self.repo.put(&e)?;
         Ok(e)
@@ -501,6 +758,9 @@ mod tests {
             id: e(name),
             display_name: format!("{name} 专家"),
             description: "测试用描述".into(),
+            instructions: "你是测试用专家".into(),
+            model: None,
+            source_template: None,
         }
     }
 
@@ -937,5 +1197,253 @@ mod tests {
         for bad in ["", "public", "Default_Visible", "builtin"] {
             assert_eq!(Visibility::from_wire(bad), None, "{bad:?} 必须解析失败");
         }
+    }
+
+    #[test]
+    fn persona_survives_the_registry_round_trip() {
+        let r = registry();
+        let mut n = new("cost-analyst");
+        n.instructions = "你是一名成本分析师，先问清口径再算数。".into();
+        n.model = Some("qwen3-max".into());
+        r.create_user_expert(u(1), n).expect("应创建成功");
+
+        let back = r
+            .get_visible(&u(1), &e("cost-analyst"))
+            .expect("应可读");
+        assert_eq!(back.instructions(), "你是一名成本分析师，先问清口径再算数。");
+        assert_eq!(back.model(), Some("qwen3-max"));
+    }
+
+    #[test]
+    fn model_is_trimmed_and_none_means_follow_the_instance_default() {
+        let r = registry();
+        let mut n = new("cost-analyst");
+        n.model = Some("  qwen3-max  ".into());
+        let got = r.create_user_expert(u(1), n).expect("应创建成功");
+        assert_eq!(got.model(), Some("qwen3-max"), "模型名必须 trim 后落库");
+
+        let cleared = r
+            .set_model(&u(1), &e("cost-analyst"), None)
+            .expect("清除偏好模型应成功");
+        assert_eq!(
+            cleared.model(),
+            None,
+            "None 必须表示回到实例默认模型，而不是空串"
+        );
+    }
+
+    #[test]
+    fn blank_model_name_is_rejected_because_it_would_become_an_unreachable_request() {
+        let r = registry();
+        r.create_user_expert(u(1), new("cost-analyst"))
+            .expect("应创建");
+        for bad in ["", "   ", "\t\n"] {
+            let err = r
+                .set_model(&u(1), &e("cost-analyst"), Some(bad.to_string()))
+                .expect_err("空模型名必须判红");
+            assert!(
+                matches!(err, AgentError::ExpertModelInvalid { .. }),
+                "模型名 {bad:?} 必须判红：{err:?}"
+            );
+        }
+        let got = r
+            .get_visible(&u(1), &e("cost-analyst"))
+            .expect("应可取");
+        assert_eq!(got.model(), None, "失败的写入不得改掉原值");
+    }
+
+    #[test]
+    fn instructions_length_is_capped_at_twenty_thousand_chars() {
+        let r = registry();
+        let mut ok = new("cost-analyst");
+        ok.instructions = "人".repeat(MAX_INSTRUCTIONS);
+        let got = r.create_user_expert(u(1), ok).expect("上限本身必须放行");
+        assert_eq!(got.instructions().chars().count(), MAX_INSTRUCTIONS);
+
+        let mut bad = new("cost-analyst-2");
+        bad.instructions = "人".repeat(MAX_INSTRUCTIONS + 1);
+        let err = r.create_user_expert(u(1), bad).unwrap_err();
+        assert!(
+            matches!(err, AgentError::ExpertInstructionsInvalid { .. }),
+            "超长人格必须判红：{err:?}"
+        );
+        assert!(err.to_string().contains("20001"), "文案应给出实际字数：{err}");
+    }
+
+    #[test]
+    fn over_long_instructions_is_rejected_on_update_too() {
+        let r = registry();
+        r.create_user_expert(u(1), new("cost-analyst"))
+            .expect("应创建");
+        let err = r
+            .set_instructions(&u(1), &e("cost-analyst"), "人".repeat(MAX_INSTRUCTIONS + 1))
+            .expect_err("更新超长也必须判红");
+        assert!(matches!(err, AgentError::ExpertInstructionsInvalid { .. }));
+        let got = r
+            .get_visible(&u(1), &e("cost-analyst"))
+            .expect("应可取");
+        assert_eq!(
+            got.instructions(),
+            "你是测试用专家",
+            "失败的更新不得把旧人格冲掉"
+        );
+    }
+
+    #[test]
+    fn empty_instructions_are_legal_and_mean_no_extra_persona() {
+        let r = registry();
+        let mut n = new("cost-analyst");
+        n.instructions = String::new();
+        let got = r.create_user_expert(u(1), n).expect("空人格必须合法");
+        assert_eq!(got.instructions(), "");
+        assert!(got.instructions().trim().is_empty());
+    }
+
+    #[test]
+    fn persona_edits_obey_the_same_owner_rules_as_the_name() {
+        let r = registry();
+        r.create_builtin_expert(new("builtin-helper"))
+            .expect("应创建");
+        r.create_user_expert(u(1), new("cost-analyst"))
+            .expect("应创建");
+
+        assert_eq!(
+            r.set_instructions(&u(2), &e("cost-analyst"), "劫持")
+                .unwrap_err(),
+            AgentError::ExpertNotFound {
+                id: e("cost-analyst")
+            }
+        );
+        assert_eq!(
+            r.set_model(&SYSTEM_OWNER, &e("builtin-helper"), Some("m".into()))
+                .unwrap_err(),
+            AgentError::ExpertBuiltinProtected {
+                id: e("builtin-helper")
+            },
+            "内置专家的人格与内置专家本身一样受保护"
+        );
+    }
+
+    #[test]
+    fn the_legacy_four_arg_constructor_still_yields_a_zero_persona_expert() {
+        // quill-cli 的 `quill experts add` 走的是这个四位签名，不能因为
+        // 加人格字段就把它删掉或改签名。
+        let got = Expert::user_authored(u(1), e("cost-analyst"), "成本分析师", "描述")
+            .expect("四位签名仍应可用");
+        assert_eq!(got.instructions(), "");
+        assert_eq!(got.model(), None);
+        assert_eq!(got.source_template(), None);
+    }
+
+    #[test]
+    fn one_template_can_spawn_many_experts_and_each_remembers_its_own() {
+        let r = registry();
+        for (name, shown) in [("prog-1", "程序员1号"), ("prog-2", "程序员2号")] {
+            let mut n = new(name);
+            n.display_name = shown.into();
+            n.source_template = Some("ai-coding-coach".into());
+            r.create_user_expert(u(1), n).expect("派生专家应创建成功");
+        }
+        for name in ["prog-1", "prog-2"] {
+            assert_eq!(
+                r.get_visible(&u(1), &e(name))
+                    .expect("应可读")
+                    .source_template(),
+                Some("ai-coding-coach"),
+                "{name} 必须记住自己派生自 ai-coding-coach"
+            );
+        }
+
+        let cleared = r
+            .set_source_template(&u(1), &e("prog-1"), None)
+            .expect("清除来源模板应成功");
+        assert_eq!(cleared.source_template(), None, "None 必须表示不再来自模板");
+        assert_eq!(
+            r.get_visible(&u(1), &e("prog-2"))
+                .expect("应可读")
+                .source_template(),
+            Some("ai-coding-coach"),
+            "🔴 清 A 不得顺手把同模板的 B 也清了"
+        );
+    }
+
+    #[test]
+    fn source_template_follows_the_frozen_regex_and_nothing_else() {
+        let r = registry();
+        r.create_user_expert(u(1), new("prog-1"))
+            .expect("应创建");
+
+        for ok in ["a", "ai-coding-coach", "tpl-1", &"a".repeat(MAX_SOURCE_TEMPLATE)] {
+            let got = r
+                .set_source_template(&u(1), &e("prog-1"), Some(ok.to_string()))
+                .unwrap_or_else(|e| panic!("合法模板 id {ok:?} 必须放行：{e}"));
+            assert_eq!(got.source_template(), Some(ok), "取值不该被改写");
+        }
+        // 冻结契约就是 `^[a-z0-9-]{1,64}$`，比 ExpertId::parse 松（后者还禁首尾
+        // 连字符与连续 --）。这里钉住这个差距，免得以后有人「顺手收紧」改坏契约。
+        assert_eq!(
+            r.set_source_template(&u(1), &e("prog-1"), Some("-lead".into()))
+                .map(|e| e.source_template().map(str::to_string)),
+            Ok(Some("-lead".into())),
+            "契约正则允许首字符是连字符"
+        );
+
+        let too_long = "a".repeat(MAX_SOURCE_TEMPLATE + 1);
+        for bad in [
+            "",
+            "  ai-coding-coach",
+            "ai-coding-coach ",
+            "AI-Coding",
+            "ai_coding",
+            "ai coding",
+            "编程教练",
+            too_long.as_str(),
+        ] {
+            let err = r
+                .set_source_template(&u(1), &e("prog-1"), Some(bad.to_string()))
+                .expect_err(&format!("不合法的模板 id {bad:?} 必须判红"));
+            assert!(
+                matches!(err, AgentError::ExpertSourceTemplateInvalid { .. }),
+                "模板 id {bad:?} 必须判红：{err:?}"
+            );
+            assert!(err.to_string().contains("下一步"), "文案要带修复方向：{err}");
+        }
+        assert_eq!(
+            r.get_visible(&u(1), &e("prog-1"))
+                .expect("应可取")
+                .source_template(),
+            Some("-lead"),
+            "失败的写入不得改掉上一次成功写入的值"
+        );
+    }
+
+    #[test]
+    fn source_template_is_also_checked_on_create_and_obeys_the_owner_rules() {
+        let r = registry();
+        let mut n = new("prog-1");
+        n.source_template = Some("ai_coding".into());
+        let err = r.create_user_expert(u(1), n).unwrap_err();
+        assert!(
+            matches!(err, AgentError::ExpertSourceTemplateInvalid { .. }),
+            "创建时也必须校验：{err:?}"
+        );
+
+        r.create_user_expert(u(1), new("prog-2")).expect("应创建");
+        assert_eq!(
+            r.set_source_template(&u(2), &e("prog-2"), Some("tpl-1".into()))
+                .unwrap_err(),
+            AgentError::ExpertNotFound {
+                id: e("prog-2")
+            }
+        );
+        r.create_builtin_expert(new("builtin-helper")).expect("应创建");
+        assert_eq!(
+            r.set_source_template(&SYSTEM_OWNER, &e("builtin-helper"), Some("tpl-1".into()))
+                .unwrap_err(),
+            AgentError::ExpertBuiltinProtected {
+                id: e("builtin-helper")
+            },
+            "内置专家受保护，改不了来源模板"
+        );
     }
 }

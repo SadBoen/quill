@@ -21,6 +21,9 @@ fn new_expert(name: &str) -> NewExpert {
         id: e(name),
         display_name: format!("{name} 专家"),
         description: "测试用描述".to_string(),
+        instructions: "你是测试用专家".to_string(),
+        model: None,
+        source_template: None,
     }
 }
 
@@ -267,5 +270,75 @@ fn list_owned_includes_soft_deleted_rows_while_roster_does_not() {
         roster.into_iter().collect::<Vec<ExpertId>>(),
         visible,
         "名册与列表口径必须逐条一致"
+    );
+}
+
+/// 人格两列必须真的落库：非空 instructions、model 的 NULL 语义、以及 PATCH
+/// 之后能读回新值（upsert 漏写这两列的话，接口返回 200 但下次读还是旧值）。
+#[test]
+fn persona_columns_persist_across_bridge_restart_including_null_model() {
+    let t = TestDb::new("expert-persona-persist");
+    {
+        let r = registry(&t.bridge());
+        let a = u(1);
+        let mut n = new_expert("cost-analyst");
+        n.instructions = "你是一名严谨的成本分析师。".into();
+        n.model = Some("qwen3-max".into());
+        r.create_user_expert(a, n).expect("创建应成功");
+
+        let mut blank = new_expert("quiet-expert");
+        blank.instructions = String::new();
+        blank.model = None;
+        r.create_user_expert(a, blank).expect("空人格必须能建");
+    }
+
+    let fresh =
+        Arc::new(quill_server::DbBridge::open(&t.path(), 2).expect("重新打开同一库文件应成功"));
+    let r = registry(&fresh);
+
+    let got = r
+        .get_visible(&u(1), &e("cost-analyst"))
+        .expect("重启后应仍可读");
+    assert_eq!(got.instructions(), "你是一名严谨的成本分析师。");
+    assert_eq!(got.model(), Some("qwen3-max"));
+
+    let quiet = r
+        .get_visible(&u(1), &e("quiet-expert"))
+        .expect("重启后应仍可读");
+    assert_eq!(quiet.instructions(), "", "空人格必须原样保留成空串");
+    assert_eq!(
+        quiet.model(),
+        None,
+        "🔴 model 的 NULL（= 跟随实例默认模型）不能被读成空串"
+    );
+
+    r.set_instructions(&u(1), &e("quiet-expert"), "改过的人格")
+        .expect("改人格应成功");
+    r.set_model(&u(1), &e("cost-analyst"), None)
+        .expect("清除偏好模型应成功");
+
+    let updated = r
+        .get_visible(&u(1), &e("quiet-expert"))
+        .expect("应可读");
+    assert_eq!(
+        updated.instructions(),
+        "改过的人格",
+        "🔴 PATCH 的人格必须真的写进库（PUT_SQL 的 DO UPDATE 段漏了 instructions）"
+    );
+    let cleared = r
+        .get_visible(&u(1), &e("cost-analyst"))
+        .expect("应可读");
+    assert_eq!(
+        cleared.model(),
+        None,
+        "🔴 显式清除 model 必须落成 NULL，而不是空串"
+    );
+    assert_eq!(
+        scalar_i64(
+            &fresh,
+            "SELECT COUNT(*) AS c FROM experts WHERE id = 'cost-analyst' AND model IS NULL"
+        ),
+        1,
+        "库里必须真的是 NULL"
     );
 }

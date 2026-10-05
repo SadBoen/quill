@@ -20,9 +20,17 @@ quill-domain = { path = "../quill-domain" }
 quill-store = { path = "../quill-store" }
 quill-control = { path = "../quill-control" }
 quill-agent = { path = "../quill-agent" }
+quill-wiki = { path = "../quill-wiki" }
+quill-provider = { path = "../quill-provider" }
 
 axum = { version = "0.8", features = ["http1", "json", "tokio"] }
 
+getrandom = "0.4"
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+    "charset",
+] }
 sqlx = { version = "0.8", default-features = false, features = [
     "runtime-tokio",
     "sqlite",

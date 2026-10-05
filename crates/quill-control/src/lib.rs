@@ -1,5 +1,7 @@
+pub mod bootstrap;
 pub mod clock;
 pub mod error;
+pub mod identity;
 pub mod password;
 pub mod repo;
 pub mod secret;
@@ -7,7 +9,11 @@ pub mod service;
 pub mod user;
 
 pub use clock::{Clock, ManualClock, SystemClock};
+pub use bootstrap::{
+    ensure_password_user, ensure_token_user, PasswordProvision, Provision, TOKEN_ONLY_ALGO,
+};
 pub use error::ControlError;
+pub use identity::{derive_user_id, parse_token_subject, TokenSubject};
 pub use password::{
     constant_time_eq, hmac_sha256, pbkdf2_sha256, validate_password, PasswordDigest,
     PasswordHasher, Pbkdf2Params, DK_BYTES, MAX_PASSWORD_LEN, MIN_PASSWORD_LEN, PBKDF2_ALGO_PREFIX,

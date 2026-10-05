@@ -1,0 +1,450 @@
+/*
+ * 对话页三栏排版（主区 + 第二侧栏）。版式对齐 Octop dashboard 的 Chat 页：
+ *   index.module.less / chatSidebar.partial.less / chatWelcome.partial.less /
+ *   chatInputCore.partial.less。
+ *
+ * 约束：
+ *   - 不改 index.css（必须与 vendor/openoctopus-frontend 逐字节一致）。
+ *   - 全部用现有那套 CSS 变量，深色主题自动跟随。
+ *   - 左导航栏宽度 264px（Octop 约 275px），第二侧栏 304px（Octop 约 310px）。
+ */
+
+/* .workspace 是 57px + 1fr 两行网格；对话页自己管标题栏，整页占满。 */
+.workspace > .chat-shell { grid-row: 1 / -1; }
+
+/* 三栏时给左导航栏多留一点宽度；不支持 :has() 的浏览器回落到上游的 238px。 */
+.app-shell:has(> .workspace > .chat-shell) { grid-template-columns: 264px minmax(0, 1fr); }
+
+.chat-shell { display: flex; height: 100%; min-height: 0; overflow: hidden; width: 100%; }
+
+/* ---------- 第二侧栏 ---------- */
+.chat-second-sidebar {
+  background: var(--panel-soft);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex: 0 0 304px;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  width: 304px;
+}
+
+.chat-sidebar-head {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+  justify-content: space-between;
+  padding: 14px 14px 10px;
+}
+
+.chat-sidebar-head-title { font-size: 12px; font-weight: 750; letter-spacing: -.01em; }
+
+.chat-sidebar-close {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  color: var(--faint);
+  cursor: pointer;
+  display: none;
+  font-size: 12px;
+  height: 26px;
+  justify-content: center;
+  width: 26px;
+}
+
+.chat-sidebar-close:hover { background: var(--accent-soft); color: var(--ink); }
+
+.chat-sidebar-scroll { flex: 1; min-height: 0; overflow: auto; padding: 0 8px 14px; }
+
+.chat-sidebar-group { margin-bottom: 16px; }
+
+.chat-sidebar-group-title {
+  color: var(--faint);
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: .08em;
+  margin: 0;
+  padding: 6px 6px;
+  text-transform: uppercase;
+}
+
+.chat-sidebar-empty { color: var(--faint); font-size: 10px; line-height: 1.5; margin: 4px 6px; }
+
+.chat-sidebar-add {
+  align-items: center;
+  background: var(--panel);
+  border: 1px dashed var(--line-strong);
+  border-radius: 10px;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  font-size: 10px;
+  gap: 6px;
+  justify-content: center;
+  margin: 8px 4px 0;
+  min-height: 32px;
+  width: calc(100% - 8px);
+}
+
+.chat-sidebar-add:hover { background: var(--accent-soft); color: var(--accent-strong); }
+
+/* -- 角色列表 -- */
+.chat-expert-list, .chat-sidebar-sessions { display: grid; gap: 2px; list-style: none; margin: 0; padding: 0; }
+
+.chat-expert-item {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 10px;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  gap: 9px;
+  min-height: 36px;
+  padding: 4px 8px;
+  text-align: left;
+  width: 100%;
+}
+
+.chat-expert-item:hover { background: var(--panel); color: var(--ink); }
+.chat-expert-item.is-active { background: var(--accent-soft); color: var(--accent-strong); font-weight: 700; }
+
+.chat-expert-avatar {
+  align-items: center;
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  display: flex;
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 800;
+  height: 24px;
+  justify-content: center;
+  width: 24px;
+}
+
+/* 角色配色由 id 稳定哈希到现有变量，不引入头像图片。 */
+.chat-expert-avatar[data-tone="accent"] { background: var(--accent-soft); color: var(--accent-strong); border-color: color-mix(in srgb, var(--accent), transparent 60%); }
+.chat-expert-avatar[data-tone="success"] { background: color-mix(in srgb, var(--success), transparent 86%); color: var(--success); border-color: color-mix(in srgb, var(--success), transparent 60%); }
+.chat-expert-avatar[data-tone="warning"] { background: color-mix(in srgb, var(--warning), transparent 86%); color: var(--warning); border-color: color-mix(in srgb, var(--warning), transparent 60%); }
+.chat-expert-avatar[data-tone="danger"] { background: color-mix(in srgb, var(--danger), transparent 88%); color: var(--danger); border-color: color-mix(in srgb, var(--danger), transparent 60%); }
+.chat-expert-avatar[data-tone="ink"] { background: var(--panel); color: var(--ink); }
+.chat-expert-avatar[data-tone="muted"] { background: var(--panel); color: var(--muted); }
+
+.chat-expert-name { flex: 1; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-expert-count { color: var(--faint); flex: 0 0 auto; font-size: 9px; font-variant-numeric: tabular-nums; }
+
+/* -- 会话列表 -- */
+.chat-session-item {
+  align-items: center;
+  border-radius: 10px;
+  display: flex;
+  gap: 4px;
+  padding-right: 4px;
+}
+
+.chat-session-item:hover { background: var(--panel); }
+.chat-session-item:hover .chat-session-action { opacity: 1; }
+.chat-session-item.is-active { background: var(--accent-soft); }
+.chat-session-item.is-active .chat-session-name { color: var(--accent-strong); font-weight: 700; }
+
+.chat-session-open {
+  background: transparent;
+  border: 0;
+  color: var(--ink);
+  cursor: pointer;
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+  padding: 7px 8px;
+  text-align: left;
+}
+
+.chat-session-name { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-session-sub { color: var(--faint); font-size: 9px; }
+
+/* Octop 的 .sessionActionBtn：默认 opacity: 0，hover 才出现。 */
+.chat-session-action {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  color: var(--faint);
+  cursor: pointer;
+  display: flex;
+  flex: 0 0 auto;
+  font-size: 10px;
+  height: 22px;
+  justify-content: center;
+  opacity: 0;
+  width: 22px;
+}
+
+.chat-session-action:hover { background: color-mix(in srgb, var(--danger), transparent 88%); color: var(--danger); }
+.chat-session-action:focus-visible { opacity: 1; }
+
+/* 删除确认浮层：专家页那份默认向上展开，但这里外面套着 .chat-sidebar-scroll
+   （overflow: auto），向上展开会被裁掉。侧栏内改成向下展开并右对齐。 */
+.chat-sidebar-sessions .experts-popconfirm-wrap { z-index: 5; }
+.chat-sidebar-sessions .experts-popconfirm {
+  bottom: auto;
+  left: auto;
+  right: 0;
+  top: calc(100% + 6px);
+  width: 226px;
+  z-index: 6;
+}
+
+/* 顶栏那个删除按钮同理：顶栏贴着视口上沿，向上展开会跑出屏幕。 */
+.chat-titlebar .experts-popconfirm { bottom: auto; top: calc(100% + 6px); left: auto; right: 0; }
+
+.chat-sidebar-scrim { display: none; }
+
+/* ---------- 主区 ---------- */
+.chat-main { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; }
+
+.chat-titlebar {
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  flex: 0 0 57px;
+  gap: 10px;
+  height: 57px;
+  min-height: 57px;
+  padding: 0 18px;
+}
+
+.chat-titlebar-toggle {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  color: var(--muted);
+  cursor: pointer;
+  display: none;
+  font-size: 14px;
+  height: 30px;
+  justify-content: center;
+  width: 30px;
+}
+
+.chat-titlebar-toggle:hover { background: var(--accent-soft); color: var(--ink); }
+
+.chat-titlebar-copy { align-items: center; display: flex; flex: 1; gap: 7px; min-width: 0; }
+
+.chat-titlebar-expert {
+  color: var(--accent-strong);
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 750;
+  max-width: 34%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-titlebar-sep { color: var(--faint); font-size: 11px; }
+
+.chat-titlebar-title {
+  font-size: 12px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-titlebar .chat-session-controls { align-items: center; display: flex; gap: 8px; }
+
+.chat-main .chat-scroll { flex: 1; min-height: 0; overflow: auto; }
+.chat-main .chat-content { margin: 0 auto; max-width: 960px; padding: 32px 24px 24px; width: 100%; }
+
+/* ---------- 欢迎屏 / 空态 ---------- */
+.chat-welcome {
+  align-items: center;
+  display: flex;
+  flex: 1;
+  justify-content: center;
+  margin: 0 auto;
+  max-width: 960px;
+  min-height: min(46vh, 340px);
+  padding: 18px 4px 30px;
+  width: 100%;
+}
+
+.chat-welcome-inner { align-items: center; display: flex; flex-direction: column; gap: 10px; max-width: 640px; text-align: center; }
+
+.chat-mascot { height: 92px; margin-bottom: 2px; width: 92px; }
+
+.chat-welcome-title { font-size: clamp(20px, 2.4vw, 26px); letter-spacing: -.03em; line-height: 1.35; margin: 0; }
+
+.chat-welcome-sub { color: var(--muted); font-size: 12px; line-height: 1.6; margin: 0; max-width: 520px; }
+
+.chat-welcome-cta { margin-top: 6px; min-height: 36px; padding: 0 16px; text-decoration: none; }
+
+.chat-quick { margin-top: 14px; width: 100%; }
+.chat-quick-title { color: var(--faint); font-size: 9px; font-weight: 750; letter-spacing: .08em; margin: 0 0 8px; text-transform: uppercase; }
+.chat-quick-source { font-weight: 450; letter-spacing: 0; margin-left: 8px; text-transform: none; }
+.chat-quick-grid { display: grid; gap: 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); text-align: left; }
+
+.chat-quick-card {
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  cursor: pointer;
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+}
+
+.chat-quick-card:hover { border-color: var(--accent); transform: translateY(-1px); }
+.chat-quick-card-title { font-size: 11px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-quick-card-desc { color: var(--faint); font-size: 10px; line-height: 1.45; }
+
+/* ---------- 输入卡片 + 工具坞 ---------- */
+.chat-input-dock { flex: 0 0 auto; padding: 0 24px 14px; }
+
+.chat-input-card {
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: 20px;
+  box-shadow: 0 12px 28px rgba(39, 51, 80, .08);
+  margin: 0 auto;
+  max-width: 920px;
+  padding: 9px 12px 9px 16px;
+  width: 100%;
+}
+
+.chat-input-card:focus-within { border-color: var(--accent); }
+
+.chat-input-card textarea {
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  display: block;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+  max-height: 160px;
+  min-height: 56px;
+  outline: none;
+  padding: 4px 0;
+  resize: none;
+  width: 100%;
+}
+
+.chat-input-dock-row {
+  align-items: center;
+  border-top: 1px solid var(--line);
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  margin-top: 5px;
+  padding-top: 7px;
+}
+
+.chat-input-dock-left { align-items: center; display: flex; flex: 1; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.chat-input-dock-right { align-items: center; display: flex; flex: 0 0 auto; gap: 10px; }
+
+.chat-input-card .composer-expert select { min-height: 26px; }
+.chat-input-card .composer-expert-hint { flex-basis: 100%; }
+
+.chat-dock-btn {
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 10px;
+  min-height: 26px;
+  padding: 0 10px;
+}
+
+.chat-dock-btn:hover, .chat-dock-btn[aria-expanded="true"] { background: var(--accent-soft); color: var(--accent-strong); }
+
+.chat-input-tools-anchor { position: relative; }
+
+.chat-tools-panel {
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  bottom: calc(100% + 8px);
+  box-shadow: var(--shadow);
+  left: 0;
+  max-width: 330px;
+  padding: 11px 12px;
+  position: absolute;
+  z-index: 6;
+}
+
+.chat-tools-title { font-size: 11px; font-weight: 750; margin: 0 0 4px; }
+.chat-tools-hint { color: var(--muted); font-size: 10px; line-height: 1.5; margin: 0 0 8px; }
+.chat-tools-list { display: grid; gap: 6px; list-style: none; margin: 0; padding: 0; }
+.chat-tools-list li { align-items: center; display: flex; flex-wrap: wrap; gap: 6px; }
+
+.chat-tools-name { font-size: 10px; font-weight: 700; }
+
+.chat-tools-route {
+  background: var(--field);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 9px;
+  padding: 1px 5px;
+}
+
+.chat-tools-state {
+  color: var(--warning);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.chat-usage-label {
+  color: var(--faint);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.chat-ai-disclaimer {
+  color: var(--faint);
+  font-size: 9px;
+  line-height: 1.4;
+  margin: 7px auto 0;
+  max-width: 920px;
+  text-align: center;
+}
+
+/* ---------- 窄屏：第二侧栏收起成抽屉 ---------- */
+@media (max-width: 1100px) {
+  .chat-second-sidebar { flex-basis: 258px; width: 258px; }
+  .chat-input-dock { padding: 0 14px 12px; }
+  .chat-main .chat-content { padding: 24px 16px 18px; }
+}
+
+@media (max-width: 767px) {
+  .chat-second-sidebar {
+    bottom: 12px;
+    box-shadow: var(--shadow);
+    flex-basis: auto;
+    left: 12px;
+    position: fixed;
+    top: 12px;
+    transform: translateX(calc(-100% - 16px));
+    transition: transform 180ms ease;
+    width: min(320px, calc(100vw - 24px));
+    z-index: 30;
+  }
+
+  .chat-second-sidebar.is-open { transform: translateX(0); }
+  .chat-sidebar-close, .chat-titlebar-toggle { display: flex; }
+  .chat-sidebar-scrim { background: color-mix(in srgb, var(--page), transparent 20%); border: 0; display: block; inset: 0; opacity: 0; pointer-events: none; position: fixed; transition: opacity 180ms ease; z-index: 29; }
+  .chat-sidebar-scrim.is-open { opacity: 1; pointer-events: auto; }
+  .chat-session-action { height: 30px; opacity: .55; width: 30px; }
+  .chat-input-card { border-radius: 16px; }
+  .chat-quick-grid { grid-template-columns: 1fr; }
+  .chat-titlebar { padding: 0 12px; }
+  .chat-titlebar .chat-session-meta { display: none; }
+}

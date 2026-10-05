@@ -34,6 +34,16 @@ pub struct Config {
 
     pub db_max_connections: u32,
 
+    pub wiki_dir: PathBuf,
+
+    /// 是否信任 `X-Forwarded-For` / `X-Real-IP` 里的来源 IP。
+    ///
+    /// 默认 **false**。这不是保守，是必须的：`X-Forwarded-For` 由客户端
+    /// 自己填写，只有当 quill 确实跑在反向代理**后面**时它才代表真实来源。
+    /// 直接信它，攻击者每次换一个假 IP 就能把登录限流清零 —— 限流形同虚设。
+    /// 置 `QUILL_TRUST_PROXY=1` 之前请先确认前面确实有代理在洗这个头。
+    pub trust_proxy: bool,
+
     pub warnings: Vec<Warning>,
 }
 
@@ -52,6 +62,8 @@ impl Config {
             std::env::var("QUILL_DB_MAX_CONNECTIONS").ok().as_deref(),
             &mut warnings,
         );
+        let wiki_dir = parse_wiki_dir(db_path.parent(), &mut warnings);
+        let trust_proxy = parse_trust_proxy(&mut warnings);
 
         Self {
             addr,
@@ -59,6 +71,8 @@ impl Config {
             enable_selftest,
             db_path,
             db_max_connections,
+            wiki_dir,
+            trust_proxy,
             warnings,
         }
     }
@@ -66,6 +80,52 @@ impl Config {
     pub fn ui_assets_available(&self) -> bool {
         self.web_dir.is_dir()
     }
+}
+
+fn parse_wiki_dir(db_parent: Option<&std::path::Path>, warnings: &mut Vec<Warning>) -> PathBuf {    match std::env::var("QUILL_WIKI_DIR") {
+        Err(_) => db_parent
+            .map(|p| p.join("wiki"))
+            .unwrap_or_else(|| PathBuf::from("data/wiki")),
+        Ok(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                warnings.push(Warning {
+                    source: "QUILL_WIKI_DIR".to_string(),
+                    message: "设为空串，已回退到数据库同级的 wiki/ 目录。".to_string(),
+                });
+                return db_parent
+                    .map(|p| p.join("wiki"))
+                    .unwrap_or_else(|| PathBuf::from("data/wiki"));
+            }
+            PathBuf::from(trimmed)
+        }
+    }
+}
+
+fn parse_trust_proxy(warnings: &mut Vec<Warning>) -> bool {
+    let Ok(raw) = std::env::var("QUILL_TRUST_PROXY") else {
+        return false;
+    };
+    let v = raw.trim();
+    let on = matches!(v, "1" | "true" | "TRUE" | "yes" | "on");
+    if on {
+        warnings.push(Warning {
+            source: "QUILL_TRUST_PROXY".to_string(),
+            message: "已信任 X-Forwarded-For / X-Real-IP 作为登录限流的来源 IP。\
+                      下一步：确认 quill 前面确实有反向代理在覆写这个头；\
+                      若客户端能直连 quill，攻击者伪造该头即可绕过登录限流。"
+                .to_string(),
+        });
+    } else {
+        warnings.push(Warning {
+            source: "QUILL_TRUST_PROXY".to_string(),
+            message: format!(
+                "无法识别的取值 {v:?}，按「不信任代理头」处理（限流改用真实对端地址）。\
+                 可用取值：1 / true / yes / on。"
+            ),
+        });
+    }
+    on
 }
 
 fn parse_addr(warnings: &mut Vec<Warning>) -> SocketAddr {
