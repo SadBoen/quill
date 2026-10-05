@@ -235,26 +235,16 @@ impl ToolRegistry {
             .map_err(|e| format!("加载 SKILL 列表失败：{e}"))?;
 
         for row in rows {
-            if !row.enabled {
-                continue;
-            }
             let body =
                 crate::api_extensions::read_skill_body(&root.join(format!("{}.md", row.name)));
-            if body.trim().is_empty() {
-                eprintln!(
-                    "[tools] 跳过 SKILL {}：库里有行但磁盘上没有正文（文件被删了，或目录没挂上）",
-                    row.name
-                );
-                continue;
-            }
-            if self.specs.iter().any(|s| s.name == row.name) {
-                // `register` 是「同名替换」。一个叫 `list_experts` 的 SKILL 会
-                // 悄悄顶掉内置工具 —— 那个后果比「这个技能不生效」难查得多。
-                eprintln!(
-                    "[tools] 跳过 SKILL {}：与已有工具同名，挂进去会顶掉它",
-                    row.name
-                );
-                continue;
+            match skill_visibility(&self.specs, &row, &body) {
+                SkillVisibility::Visible => {}
+                // 停用是用户的明确选择，不是故障 —— 记日志只会把真正的告警淹掉。
+                SkillVisibility::Disabled => continue,
+                SkillVisibility::NotMounted(why) => {
+                    eprintln!("[tools] 跳过 SKILL {}：{why}", row.name);
+                    continue;
+                }
             }
             let spec = crate::skills_repo::as_tool_spec(&row, &body);
             let handler = skill_handler(&row.name);
@@ -262,6 +252,72 @@ impl ToolRegistry {
         }
         Ok(self)
     }
+}
+
+/// 模型在这次对话里看不看得见这个 SKILL。
+///
+/// 界面上要报的是**这个**，不是「库里有没有这一行」。`GET /api/extensions/skills`
+/// 与 `with_skills` 调的是同一个函数：两边各判一次，迟早会漂，漂了就变成
+/// 「界面显示能用、模型那边根本没有」——那正是本项目最不能出的错。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkillVisibility {
+    /// 已挂进工具表，模型看得见、也能调。
+    Visible,
+    /// 用户自己关掉的。不是故障，界面上照实说「已停用」。
+    Disabled,
+    /// 想挂却没挂上，原因是给用户看的白话。
+    NotMounted(&'static str),
+}
+
+impl SkillVisibility {
+    /// 界面上那个「模型看得见」的布尔值。
+    pub fn model_can_see(&self) -> bool {
+        matches!(self, SkillVisibility::Visible)
+    }
+}
+
+/// 这次对话里，模型到底看不看得见这个 SKILL。
+///
+/// `existing` 是**已经占住**的工具名（内置工具 + 前面已挂上的 SKILL）。
+pub fn skill_visibility(
+    existing: &[ToolSpec],
+    row: &crate::skills_repo::SkillRow,
+    body: &str,
+) -> SkillVisibility {
+    if !row.enabled {
+        return SkillVisibility::Disabled;
+    }
+    match veto(existing, row, body) {
+        None => SkillVisibility::Visible,
+        Some(why) => SkillVisibility::NotMounted(why),
+    }
+}
+
+/// 这个 SKILL 能不能挂进工具表。`Some(原因)` = 不挂。
+///
+/// 提成独立函数是因为这两条否决路径**没法靠真实数据走到**：0001 迁移里
+/// `skills.name` 的 CHECK 是 `NOT GLOB '*[^a-z0-9-]*'`，连下划线都不允许，
+/// 而内置工具叫 `list_experts`。所以「同名顶掉内置」在今天的 schema 下是不可达
+/// 的 —— 但 MCP 工具名常用连字符（`read-file`），那条路一通，这个守卫就有用了。
+/// 放在 `with_skills` 里就地判断的话，就只能写成一条跑不到的分支。
+///
+/// 收的是 `existing: &[ToolSpec]` 而不是 `&ToolRegistry`，是为了让
+/// `api_extensions::list_skills` 在**不构造 registry** 的前提下复用同一条判断 ——
+/// 两处各写一份是这个项目最容易出的错（界面上说一套、`with_skills` 做另一套）。
+fn veto(
+    existing: &[ToolSpec],
+    row: &crate::skills_repo::SkillRow,
+    body: &str,
+) -> Option<&'static str> {
+    if body.trim().is_empty() {
+        return Some("库里有行但磁盘上没有正文（文件被删了，或目录没挂上）");
+    }
+    if existing.iter().any(|s| s.name == row.name) {
+        // `register` 是「同名替换」：顶掉之后模型看到的是 SKILL 的方法，
+        // 内置工具静默消失，这个后果比「这个技能不生效」难查得多。
+        return Some("与已有工具同名，挂进去会顶掉它");
+    }
+    None
 }
 
 /// SKILL 工具的执行体。
@@ -449,5 +505,80 @@ mod tests {
             let err = skill_handler("x")(&args).expect_err("缺 task 必须报错");
             assert!(err.contains("task"), "要说清缺哪个参数：{err}");
         }
+    }
+
+    fn skill_row_named(name: &str) -> crate::skills_repo::SkillRow {
+        crate::skills_repo::SkillRow {
+            name: name.to_string(),
+            version: "0.1.0".into(),
+            source: "local".into(),
+            source_ref: None,
+            description: String::new(),
+            enabled: true,
+            install_path: "/tmp/x".into(),
+            tool_allowlist: vec![],
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    #[test]
+    fn a_skill_with_no_body_on_disk_is_vetoed_rather_than_registered_empty() {
+        // 挂一个 description 为空的工具，模型会调到一个必然没有产出的东西，
+        // 而界面上这个技能还显示「已启用」。
+        let specs = with_one_tool().specs();
+        for body in ["", "   ", "\n\t "] {
+            let why = veto(&specs, &skill_row_named("gone"), body).expect("正文为空必须否决");
+            assert!(why.contains("正文"), "要说清是正文没了：{why}");
+        }
+        assert_eq!(veto(&specs, &skill_row_named("gone"), "有正文"), None);
+    }
+
+    #[test]
+    fn a_skill_may_not_replace_a_tool_that_already_has_that_name() {
+        // `register` 是「同名替换」。真走到这一步，内置工具会静默消失 ——
+        // 模型看到的是 SKILL 的方法，界面上却还显示着原来的工具。
+        let mut r = with_one_tool();
+        let specs = r.specs();
+        let why = veto(&specs, &skill_row_named("echo"), "一套叫 echo 的方法")
+            .expect("同名必须否决");
+        assert!(why.contains("顶掉"), "要说清后果：{why}");
+        r.register(
+            ToolSpec::new("read-file", "模拟一个 MCP 工具"),
+            Arc::new(|_| Ok(String::new())),
+        );
+        assert!(
+            veto(&r.specs(), &skill_row_named("read-file"), "方法").is_some(),
+            "MCP 工具名常用连字符，那条路一通这个守卫就要真的生效"
+        );
+    }
+
+    #[test]
+    fn a_disabled_skill_is_reported_as_disabled_not_as_a_mounting_failure() {
+        // 停用是用户的选择，界面上要说「已停用」。混进「没挂上，原因是正文没了」
+        // 那一类，会让用户去查一个根本不存在的问题。
+        let mut row = skill_row_named("off");
+        row.enabled = false;
+        let specs = with_one_tool().specs();
+        assert_eq!(skill_visibility(&specs, &row, "有正文"), SkillVisibility::Disabled);
+        assert!(!skill_visibility(&specs, &row, "有正文").model_can_see());
+    }
+
+    #[test]
+    fn a_mounted_skill_reports_itself_visible_and_an_unmountable_one_says_why() {
+        let specs = with_one_tool().specs();
+        let ok = skill_visibility(&specs, &skill_row_named("code-review"), "一套方法");
+        assert_eq!(ok, SkillVisibility::Visible);
+        assert!(ok.model_can_see(), "挂了就是看得见，界面上不能显示成没挂");
+
+        let why = match skill_visibility(&specs, &skill_row_named("code-review"), "  ") {
+            SkillVisibility::NotMounted(w) => w,
+            other => panic!("正文为空必须是「没挂上」，实际：{other:?}"),
+        };
+        assert!(why.contains("正文"), "要把原因说给用户听：{why}");
+        assert!(
+            !skill_visibility(&specs, &skill_row_named("code-review"), "  ").model_can_see(),
+            "挂不上就不许显示成模型看得见"
+        );
     }
 }

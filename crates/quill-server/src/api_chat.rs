@@ -464,7 +464,15 @@ pub async fn post_message(
     // 而 `has_answer()` 在「只有 tool_calls」时也返回 true —— 于是内容
     // 凭空消失、HTTP 照样 200，没有任何迹象。现在改为：执行工具 → 把结果
     // 以 role=tool 回灌 → 再问一次，直到模型给出真正的正文。
+    //
+    // 技能目录要在 `state` 被 move 进 Arc 之前取出来。
+    let skill_root = crate::api_extensions::skill_dir(&state.config);
     let registry = crate::tools::ToolRegistry::builtin(Arc::new(state), uid);
+    // SKILL 与内置工具在模型看来没有区别：都是 `tools` 字段里的一条。
+    let registry = registry
+        .with_skills(db.as_ref(), uid, &skill_root)
+        .await
+        .map_err(|e| ApiError::internal(format!("对话无法开始：{e}")))?;
     let tools = registry.specs();
     let request = crate::llm::build_request(&llm_config, msgs.clone());
     let request = if tools.is_empty() {

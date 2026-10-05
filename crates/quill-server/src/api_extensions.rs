@@ -409,6 +409,14 @@ fn write_skill_body(path: &std::path::Path, content: &str) -> Result<(), ApiErro
 }
 
 /// `GET /api/extensions/skills` —— 列出 SKILL。
+///
+/// 每条都带 `model_can_see`：**这次对话里模型到底看不看得见它**。
+/// 「库里有一行」与「模型看得见」是两件事 —— 停用的、正文文件被删的，
+/// 界面上都还列得出来，但工具表里没有它。不报这一项，界面就会显示
+/// 「已启用」而模型压根不知道有这个技能，没有任何迹象指向原因。
+///
+/// 判断走 `tools::skill_visibility` —— 与 `ToolRegistry::with_skills` 同一个函数。
+/// 两处各判一次迟早会漂，漂了就成了「界面说一套、对话做另一套」。
 pub async fn list_skills(
     State(state): State<AppState>,
     user: AuthUser,
@@ -418,7 +426,16 @@ pub async fn list_skills(
         .await
         .map_err(|e| map_err("列出 SKILL", e))?;
     let dir = skill_dir(&state.config);
+    // 内置工具名是「已占住」的名字。SKILL 之间的重名在当前 schema 下不存在
+    // （`UNIQUE(user_id, name)`），所以拿内置这一份就够判定。
+    let builtin_names: Vec<quill_provider::ToolSpec> = crate::tools::ToolRegistry::builtin(
+        std::sync::Arc::new(state.clone()),
+        user.0.user_id,
+    )
+    .specs();
+
     let mut items = Vec::with_capacity(rows.len());
+    let mut taken = builtin_names;
     for r in &rows {
         let mut j = skills_repo::to_json(r);
         let body = read_skill_body(&dir.join(format!("{}.md", r.name)));
@@ -428,6 +445,15 @@ pub async fn list_skills(
             obj.insert("content_chars".into(), json!(body.chars().count()));
             if body.is_empty() {
                 obj.insert("content_missing".into(), json!(true));
+            }
+            let vis = crate::tools::skill_visibility(&taken, r, &body);
+            obj.insert("model_can_see".into(), json!(vis.model_can_see()));
+            if let crate::tools::SkillVisibility::NotMounted(why) = vis {
+                obj.insert("not_mounted_reason".into(), json!(why));
+            }
+            // 挂上的话它就占住这个名字，后面的 SKILL 要跟它比对。
+            if vis.model_can_see() {
+                taken.push(crate::skills_repo::as_tool_spec(r, &body));
             }
         }
         items.push(j);

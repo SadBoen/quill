@@ -123,6 +123,64 @@
   `McpLinkStatus` 组件
 - **状态**：已修已回归
 
+## ISSUE-006 · SKILL 名带下划线会被数据库拒掉，「顶掉内置工具」这条路径不可达
+
+- **发现于**：把 SKILL 挂进 `ToolRegistry` 时写回归测试
+- **现象**：想测「一个叫 `list_experts` 的 SKILL 会顶掉内置工具」这条风险，
+  在测试里绕过 HTTP 入口直接往 `skills` 插 `name='list_experts'`，插入失败：
+  `CHECK constraint failed: name GLOB '[a-z0-9]*' AND name NOT GLOB '*[^a-z0-9-]*' AND name NOT GLOB '*..*'`。
+- **严重度**：轻微（不是产品 bug，但影响守卫该怎么写）
+- **根因**：0001 迁移里 `skills.name` 的 CHECK 只允许 `[a-z0-9-]`，**下划线不在内**；
+  `normalize_name` 也把 `_` 换成 `-`。两边一致地禁止「SKILL 与内置工具同名」，
+  所以 `tools.rs` 里那个同名守卫在今天的 schema 下是一条**跑不到**的分支。
+- **复现**：往 `skills` 插任意 `name='list_experts'` 的行（换 user_id 也一样）。
+- **修复**：把两条否决路径（正文为空 / 与已有工具同名）从 `with_skills` 里就地判断
+  提成纯函数 `tools::veto`，直接对它单测，不再依赖「能不能造出脏数据」。
+  **为什么保留这个守卫**：MCP 工具名恰恰常用连字符（`read-file`），b 线铺完 rmcp
+  之后它就有用了 —— 但那时必须有一条测试能走到它。
+  集成测试改成断言两条**可达**的不变量：`a_dash_named_skill_coexists_with_the_underscore_named_builtin`、
+  `the_schema_itself_forbids_a_skill_from_taking_a_builtin_tools_underscored_name`。
+- **回归**：`a_skill_with_no_body_on_disk_is_vetoed_rather_than_registered_empty`、
+  `a_skill_may_not_replace_a_tool_that_already_has_that_name`（单测）；
+  上面两条集成测试；全量 907 passed / 0 failed
+- **状态**：已修已回归
+
+## ISSUE-007 · SKILL 正文整段进工具描述，每轮请求都要为它付 token
+
+- **发现于**：接 `with_skills` 时读 `as_tool_spec`
+- **现象**：`as_tool_spec` 把整段正文放进 `ToolSpec::description`，而工具描述是
+  **每一轮请求**都带在 `tools` 字段里的。`MAX_SKILL_CHARS` 是 20000，
+  装 3 个长 SKILL 就是每轮多约 60000 字符，**哪怕这一轮一个技能都没用到**。
+- **严重度**：严重（与设计理由直接矛盾）
+- **根因**：`skills_repo.rs` 里 `ToolSpec::new(&r.name, content)` 把正文当描述。
+  而这套设计的理由写的是「用不到就不占常驻上下文」—— 实际做到的是
+  「用不到也每次都出现，只是省掉了正文的返场」。理由与实现不符。
+- **复现**：装一个 20000 字符的 SKILL，看任意一次 chat 请求体里 `tools` 的长度。
+- **修复**：**未修**。`as_tool_spec` 的语义是既有决定且已被
+  `a_skill_becomes_a_tool_with_a_requiring_task_argument` 钉着（断言正文进 description），
+  这一轮的任务是「挂进去」，顺手改语义就是两件事混在一起。
+  候选改法：描述只放 `row.description`，正文由 handler 在被调用时返回 ——
+  这才是「用不到完全不出现」的本来意思。代价是正文会过 `MAX_RESULT_CHARS`（4000）
+  截断，要一并决定上限策略。**两个以上 SKILL 会有同样问题，不止一个。**
+- **回归**：无（尚未修）。修的时候要给一条「装 3 个长 SKILL 时 `tools` 长度不随正文增长」
+  的测试。
+- **状态**：待修
+
+## ISSUE-008 · `tool_allowlist` 只存不用
+
+- **发现于**：接 `with_skills` 时查 `SkillRow` 的字段
+- **现象**：`skills.tool_allowlist`（SKILL 允许调用哪些工具）有列、有读写、
+  有 `to_json` 输出，但**没有任何一行代码读它来做决定**。一个 SKILL 声称
+  「我只能用 `list_experts`」时，这个约束当前不生效。
+- **严重度**：轻微（现在）/ 严重（b 线之后）
+- **根因**：上一轮做存储层时把它当纯数据存了下来，执行层没接，所以没有消费方。
+- **复现**：存一条带 `tool_allowlist` 的 SKILL，然后在 `tools.rs` 里搜该字段 —— 0 处引用。
+- **修复**：**未修**。SKILL 目前只是「一套方法」不真的调工具，所以暂时不构成安全问题；
+  但 b 线把 MCP 工具接进来之后，这就是一个**用户以为有限制、实际没有**的字段 ——
+  与本项目「不许显示成接上了」的原则冲突。**b 线开始前必须处理。**
+- **回归**：无（尚未修）。
+- **状态**：待修
+
 ---
 
 ## 待补（还没跑到，先占位）

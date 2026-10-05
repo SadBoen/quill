@@ -342,11 +342,24 @@ testkit 里的假实现，生产路径为零。`teams` 表的 `guidelines` / `ma
 
 #### SKILL 即工具（抄 Octop 的 `SkillListItem.tool_name`）
 
-SKILL 不走 prompt，走 `tools` 字段 —— 于是「SKILL 怎么进 prompt」这个问题
-**不必回答**，用不到就不占常驻上下文。正文落盘到 `<db 同级>/skills/{slug}.md`，
-`skills` 行只留摘要与路径（与 Octop「挂目录给运行时」一致，也让
-`content_hash` 名副其实）。`skills_repo::as_tool_spec` 已经能把它变成
-`ToolSpec`，**但还没接进 `ToolRegistry`** —— 那是接上工具调用后的下一步。
+SKILL 不走 prompt，走 `tools` 字段。于是「SKILL 怎么进 prompt」这个问题
+**不必回答**。正文落盘到 `<db 同级>/skills/{slug}.md`，`skills` 行只留摘要与路径
+（与 Octop「挂目录给运行时」一致，也让 `content_hash` 名副其实）。
+
+**2026-10-06：已接进 `ToolRegistry`。** `ToolRegistry::with_skills(db, uid, skill_dir)`
+是 async 的（行在库里、正文在磁盘上），`builtin` 保持同步；`api_chat.rs` 构造完
+registry 就调它。四条决定都有测试钉住：只挂 `enabled` 的；磁盘没正文的跳过而不是
+注册空工具；与已有工具同名的跳过而不是顶掉它；查库失败**整条请求失败**，不静默降级成
+「只有内置工具」（静默降级会让「模型没学过我的技能」变成一个没有任何报错指向它的问题）。
+用户过滤复用 `skills_repo::list` 的 `user_id`，测试钉了 B 看不到 A 的技能。
+
+顺带发现三件事，记在 `TESTSETS/ISSUES.md`（#6 / #7 / #8）：
+- **#6** `skills.name` 的 CHECK 是 `NOT GLOB '*[^a-z0-9-]*'`，**连下划线都不允许**，
+  所以「SKILL 顶掉内置工具」在今天的 schema 下不可达。守卫因此被提成可单测的
+  `tools::veto`，而不是留一条没人验证的死分支（MCP 工具名常用连字符，b 线一通就有用了）。
+- **#7** `as_tool_spec` 把**整段正文**（上限 20000）放进 `ToolSpec::description`，
+  而工具描述每轮请求都带。装 3 个长 SKILL 就是每轮多几万 token，哪怕一个都没用到 ——
+  与上面「用不到就不占常驻上下文」的说法不符。**这条还没修**，b 线之后要定。
 
 #### 参考实现
 
@@ -361,8 +374,10 @@ prompt，是挂目录给运行时按需加载**。
    结论：抄 goose 的**技术选型**（`rmcp` crate），但不复用它的 crate ——
    `vendor/goose` 是独立 workspace（自带 `[workspace]`），quill 无法 path-depend；
    它的 `mcp_client.rs` 有 1687 行且与 agent 类型深度耦合。
-2. 把 SKILL 通过 `as_tool_spec` 挂进 `ToolRegistry`，按用户过滤。
+2. （已完成）把 SKILL 通过 `as_tool_spec` 挂进 `ToolRegistry`，按用户过滤。
 3. `PATCH /api/extensions/mcp/{name}`（部分更新）与 `GET /api/extensions/plugins`。
+4. `skills.tool_allowlist` 现在**只存不用**（ISSUES.md #8）。SKILL 还不调工具时无所谓，
+   但 b 线把 MCP 工具接进来之后，它就是一个「用户以为有限制、实际没有」的字段。
 
 #### 顺带修掉的前后端契约 bug
 

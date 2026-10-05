@@ -5,9 +5,14 @@
 
 ## 前置条件（不满足就别开始跑）
 
-- [ ] SKILL 已通过 `skills_repo::as_tool_spec` 挂进 `ToolRegistry`（对话里能真的调）
+- [x] SKILL 已通过 `skills_repo::as_tool_spec` 挂进 `ToolRegistry`（对话里能真的调）
+      —— 2026-10-06 完成。`ToolRegistry::with_skills`（async，行在库里、正文在磁盘上），
+      `api_chat.rs` 构造完 registry 就调。只挂 `enabled` 的；磁盘没正文的跳过而不是
+      注册空工具；与已有工具同名的跳过而不是顶掉它；查库失败**整条请求失败**，
+      不静默降级成「只有内置工具」。用户过滤复用 `skills_repo::list` 的 `user_id`。
 - [ ] MCP 协议层已接（`rmcp`），`GET /api/extensions/mcp` 的 `connected` 不再恒为 false
-- [ ] 全量门禁 0 failed
+- [x] 全量门禁 0 failed —— 2026-10-06：`cargo test --workspace` 907 passed / 0 failed、
+      `ui/web` 60 passed、`i18n-check` 0 问题、`library-check` 334/334
 
 ## 进度
 
@@ -34,6 +39,10 @@
 
 ## 下一件事
 
-按 `README.md` 的边界，先把 SKILL 接进 `ToolRegistry`，再铺 `rmcp`，
+按 `README.md` 的边界，先把 SKILL 接进 `ToolRegistry`（**已完成**），再铺 `rmcp`，
 之后才跑这 100 条。顺序反了的话，测出来的全是「功能还没做」，
 而不是真 bug。
+
+`rmcp` 铺完之后，`with_skills` 旁边要补 `with_mcp_tools` —— MCP 服务器
+`tools/list` 返回的条目走同一个 `ToolRegistry`，所以「内置的」与「MCP 来的」
+在模型看来没有区别。

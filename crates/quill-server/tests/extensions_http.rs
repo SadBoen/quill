@@ -741,3 +741,340 @@ async fn one_user_never_sees_another_users_skills() {
     let v = json_of(&body_text(resp).await);
     assert_eq!(v["skills"].as_array().unwrap().len(), 0);
 }
+
+// ------------------------------------------------- SKILL 挂进对话的工具表
+//
+// 下面这组盯的是「界面上装了技能，模型那边到底看不看得见」。
+// 之前只做到存储层：GET /api/extensions/skills 能列出 SKILL，但那不代表
+// 对话里真的有这个工具。中间这一段（`as_tool_spec` → `ToolRegistry`）没接上时，
+// 界面上一切正常，模型却永远不知道技能的存在 —— 没有任何报错会指向它。
+
+/// 按某个用户的身份，造出这次对话真正会用的那一份工具表。
+async fn tool_table(harness: &Harness, uid: &str) -> quill_server::tools::ToolRegistry {
+    let u = user_id(uid);
+    quill_server::tools::ToolRegistry::builtin(Arc::new(harness.state()), u)
+        .with_skills(harness.db.bridge().as_ref(), u, &harness.skill_dir())
+        .await
+        .expect("挂 SKILL 进工具表必须成功")
+}
+
+fn spec_names(r: &quill_server::tools::ToolRegistry) -> Vec<String> {
+    r.specs().into_iter().map(|s| s.name).collect()
+}
+
+#[tokio::test]
+async fn an_enabled_skill_reaches_the_model_as_a_tool_and_can_be_called() {
+    let h = Harness::new("ext-skill-into-tools");
+    seed_user(&h.db.bridge(), UID_A);
+    let (st, v) = post_skill(
+        &h,
+        serde_json::json!({
+            "slug": "code-review",
+            "description": "审代码的固定流程",
+            "content": "第一步：读 diff。第二步：找未处理的下拉。"
+        }),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+
+    let r = tool_table(&h, UID_A).await;
+
+    // 1. 工具真的在列表里（不是只在 GET 里出现过）。
+    let names = spec_names(&r);
+    assert!(
+        names.contains(&"code-review".to_string()),
+        "SKILL 必须在对话的工具表里，实际：{names:?}"
+    );
+    // 2. 内置工具不能被挤掉。
+    assert!(
+        names.contains(&"list_experts".to_string())
+            && names.contains(&"get_expert_detail".to_string()),
+        "内置工具应当仍在：{names:?}"
+    );
+    // 3. 模型得知道传什么参数。
+    let spec = r
+        .specs()
+        .into_iter()
+        .find(|s| s.name == "code-review")
+        .expect("刚才断言过它在");
+    assert_eq!(
+        spec.parameters["required"],
+        serde_json::json!(["task"]),
+        "没有必填参数，模型只能瞎猜"
+    );
+    // 4. 正文进了描述 —— 「SKILL 即工具」靠的就是这个。
+    assert!(
+        spec.description.contains("读 diff"),
+        "正文必须进工具描述，模型才知道这套方法是什么：{}",
+        spec.description
+    );
+
+    // 5. 真调用一次，走的是对话里同一条执行路径。
+    let call = quill_provider::ToolCall::new(
+        "c1",
+        "code-review",
+        serde_json::json!({"task": "审一下 x.rs 里的下拉"}),
+    );
+    let out = r.call(&call).expect("SKILL 工具必须能执行");
+    assert!(out.contains("code-review"), "要说清用的是哪套方法：{out}");
+    assert!(out.contains("审一下 x.rs 里的下拉"), "任务要回给模型：{out}");
+}
+
+#[tokio::test]
+async fn a_disabled_skill_is_not_offered_to_the_model() {
+    let h = Harness::new("ext-skill-disabled");
+    seed_user(&h.db.bridge(), UID_A);
+    let (st, v) = post_skill(
+        &h,
+        serde_json::json!({
+            "slug": "off-switch",
+            "content": "用户明确关掉的一套做法。",
+            "enabled": false
+        }),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+
+    let names = spec_names(&tool_table(&h, UID_A).await);
+    assert!(
+        !names.contains(&"off-switch".to_string()),
+        "关掉的技能不该出现在工具表里 —— 界面上禁用等于模型看不见：{names:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_skill_whose_body_vanished_from_disk_is_not_offered_as_an_empty_tool() {
+    // 库里说有、正文没了。挂一个 description 为空的工具进去，模型会调到一个
+    // 必然没有产出的东西，而界面上这个技能还显示「已启用」。
+    let h = Harness::new("ext-skill-body-vanished");
+    seed_user(&h.db.bridge(), UID_A);
+    post_skill(
+        &h,
+        serde_json::json!({"slug": "half-installed", "content": "原本在这里的做法。"}),
+    )
+    .await;
+    std::fs::remove_file(h.skill_dir().join("half-installed.md")).expect("删掉正文文件");
+
+    let names = spec_names(&tool_table(&h, UID_A).await);
+    assert!(
+        !names.contains(&"half-installed".to_string()),
+        "正文缺失的技能不该注册成工具：{names:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_dash_named_skill_coexists_with_the_underscore_named_builtin() {
+    // 「最像撞名」的真实情况：SKILL 叫 `list-experts`，内置工具叫 `list_experts`。
+    // 两者不是同一个名字，必须各自存在 —— 归一不会把连字符变成下划线。
+    let h = Harness::new("ext-skill-shadow");
+    seed_user(&h.db.bridge(), UID_A);
+    let (st, v) = post_skill(
+        &h,
+        serde_json::json!({
+            "slug": "list-experts",
+            "description": "用户自己写的一套列专家方法",
+            "content": "先按领域过滤，再排序。"
+        }),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+
+    let r = tool_table(&h, UID_A).await;
+    let names = spec_names(&r);
+    assert!(
+        names.contains(&"list-experts".to_string()) && names.contains(&"list_experts".to_string()),
+        "两个不同的工具都该在：{names:?}"
+    );
+    let builtin = r
+        .specs()
+        .into_iter()
+        .find(|s| s.name == "list_experts")
+        .expect("内置工具必须还在");
+    assert!(
+        !builtin.description.contains("先按领域过滤"),
+        "内置工具的描述被 SKILL 顶掉了：{}",
+        builtin.description
+    );
+}
+
+#[tokio::test]
+async fn the_schema_itself_forbids_a_skill_from_taking_a_builtin_tools_underscored_name() {
+    // 上面那条测试说明「连字符名」不会撞上「下划线名」。这一条钉住的是另一半：
+    // 连下划线都写不进 `skills.name`，所以 `list_experts` 这种名字只能是内置
+    // 工具的专利。守卫（`tools::veto` 的同名分支）在今天的 schema 下不可达，
+    // 靠的是这条 CHECK，不是靠代码里那个 if。
+    let h = Harness::new("ext-skill-name-check");
+    seed_user(&h.db.bridge(), UID_A);
+    let b = user_id(UID_A).as_bytes().to_vec();
+    let err = h
+        .db
+        .bridge()
+        .call(move |pool, _rt| {
+            Box::pin(async move {
+                sqlx::query(
+                    "INSERT INTO skills (user_id, name, version, source, source_ref, description, \
+                     enabled, content_hash, install_path, tool_allowlist_json, created_at, \
+                     updated_at, deleted_at) VALUES (?,?,'0.1.0','local',NULL,'',\
+                     1, zeroblob(32),'','[]',0,0,NULL)",
+                )
+                .bind(&b)
+                .bind("list_experts")
+                .execute(&pool)
+                .await
+                .map_err(|e| storage_error("插入带下划线的 skills 行", e))?;
+                Ok(())
+            })
+        })
+        .expect_err("带下划线的名字必须被 CHECK 拒掉");
+    assert!(
+        format!("{err}").contains("CHECK constraint failed"),
+        "要看到 CHECK 失败，而不是别的错误：{err}"
+    );
+}
+
+#[tokio::test]
+async fn one_users_skill_never_becomes_a_tool_for_another_user() {
+    let h = Harness::new("ext-skill-tool-isolation");
+    seed_user(&h.db.bridge(), UID_A);
+    seed_user(&h.db.bridge(), UID_B);
+    post_skill(
+        &h,
+        serde_json::json!({"slug": "a-private", "content": "A 的私有做法。"}),
+    )
+    .await;
+
+    let names = spec_names(&tool_table(&h, UID_B).await);
+    assert!(
+        !names.contains(&"a-private".to_string()),
+        "B 的工具表里绝不能出现 A 的技能：{names:?}"
+    );
+}
+
+// ------------------------------------------------- 界面报「模型看得见」的那一项
+//
+// GET /api/extensions/skills 与 tools::with_skills 调的是同一个
+// `tools::skill_visibility`。下面这组盯的就是**两边不许漂**：如果哪天有人只改了
+// 其中一边，界面上就会出现「已启用」的技能，而模型工具表里没有它 —— 那种故障
+// 没有任何报错会指向它。
+
+/// 读 GET /api/extensions/skills 的 `skills` 数组。
+async fn listed_skills(h: &Harness, token: &str) -> Vec<serde_json::Value> {
+    let resp = build_router(h.state())
+        .oneshot(req("GET", "/api/extensions/skills", token))
+        .await
+        .expect("请求失败");
+    let v = json_of(&body_text(resp).await);
+    v["skills"].as_array().cloned().expect("skills 必须是数组")
+}
+
+fn find_skill<'a>(list: &'a [serde_json::Value], slug: &str) -> &'a serde_json::Value {
+    list.iter()
+        .find(|s| s["slug"] == serde_json::json!(slug))
+        .unwrap_or_else(|| panic!("列表里没有 {slug}：{list:?}"))
+}
+
+#[tokio::test]
+async fn the_api_says_model_can_see_a_skill_exactly_when_it_reaches_the_tool_table() {
+    // 这一条是本组的支点：界面上那个布尔值，必须等于「工具表里到底有没有它」。
+    let h = Harness::new("ext-skill-model-can-see");
+    seed_user(&h.db.bridge(), UID_A);
+    for (slug, enabled) in [("kept", true), ("turned-off", false)] {
+        post_skill(
+            &h,
+            serde_json::json!({"slug": slug, "content": "一套做法。", "enabled": enabled}),
+        )
+        .await;
+    }
+
+    let list = listed_skills(&h, TOKEN_A).await;
+    let names = spec_names(&tool_table(&h, UID_A).await);
+
+    for slug in ["kept", "turned-off"] {
+        let item = find_skill(&list, slug);
+        let claimed = item["model_can_see"].as_bool().expect("必须有这个字段");
+        let actually = names.contains(&slug.to_string());
+        assert_eq!(
+            claimed, actually,
+            "{slug}：界面报 model_can_see={claimed}，工具表里实际上有={actually}。\
+             两边漂了 —— 界面上就是在说谎。"
+        );
+    }
+    assert_eq!(
+        find_skill(&list, "kept")["model_can_see"],
+        serde_json::json!(true),
+        "启用了、正文也在，就该报模型看得见"
+    );
+}
+
+#[tokio::test]
+async fn a_skill_whose_body_vanished_is_reported_unmountable_with_a_reason() {
+    // 「库里有行」不等于「模型看得见」。正文文件没了的话，with_skills 会跳过它，
+    // 界面就必须说清楚为什么 —— 否则用户只会看到「已启用」却怎么都不生效。
+    let h = Harness::new("ext-skill-unmountable-reason");
+    seed_user(&h.db.bridge(), UID_A);
+    post_skill(
+        &h,
+        serde_json::json!({"slug": "half", "content": "原本在这里的做法。"}),
+    )
+    .await;
+    std::fs::remove_file(h.skill_dir().join("half.md")).expect("删掉正文文件");
+
+    let list = listed_skills(&h, TOKEN_A).await;
+    let item = find_skill(&list, "half");
+    assert_eq!(item["model_can_see"], serde_json::json!(false));
+    assert_eq!(item["content_missing"], serde_json::json!(true));
+    let why = item["not_mounted_reason"]
+        .as_str()
+        .expect("没挂上就必须说原因");
+    assert!(
+        why.contains("正文"),
+        "原因要指向正文丢失：{why}"
+    );
+    assert!(
+        !spec_names(&tool_table(&h, UID_A).await).contains(&"half".to_string()),
+        "正文没了就不该进工具表"
+    );
+}
+
+#[tokio::test]
+async fn a_mounted_skill_carries_no_not_mounted_reason() {
+    // 挂了就是挂了。留一个空的 not_mounted_reason 会让前端有机会把
+    // 「没挂上，原因：」这种话显示出来。
+    let h = Harness::new("ext-skill-no-reason-when-ok");
+    seed_user(&h.db.bridge(), UID_A);
+    post_skill(
+        &h,
+        serde_json::json!({"slug": "fine", "content": "一套做法。"}),
+    )
+    .await;
+
+    let list = listed_skills(&h, TOKEN_A).await;
+    let item = find_skill(&list, "fine");
+    assert_eq!(item["model_can_see"], serde_json::json!(true));
+    assert!(
+        item.get("not_mounted_reason").is_none(),
+        "挂上了就不该有 not_mounted_reason：{item}"
+    );
+}
+
+#[tokio::test]
+async fn a_disabled_skill_is_listed_but_not_reported_as_visible() {
+    // 停用的技能仍然列得出来（用户要能看到自己装过什么、能再打开），
+    // 但绝不能报成模型看得见。
+    let h = Harness::new("ext-skill-disabled-listed");
+    seed_user(&h.db.bridge(), UID_A);
+    post_skill(
+        &h,
+        serde_json::json!({"slug": "paused", "content": "一套做法。", "enabled": false}),
+    )
+    .await;
+
+    let list = listed_skills(&h, TOKEN_A).await;
+    let item = find_skill(&list, "paused");
+    assert_eq!(item["enabled"], serde_json::json!(false));
+    assert_eq!(item["model_can_see"], serde_json::json!(false));
+    assert!(
+        item.get("not_mounted_reason").is_none(),
+        "停用是用户自己的选择，不是故障，不该报成「没挂上，原因：…」：{item}"
+    );
+}
