@@ -283,12 +283,21 @@
     library 334/334、依赖 8、`index.css` SHA256 未变。
 - **负向验证**：把 `mcpRowState` 改成恒 `return 'saved'`（那正是 ISSUE-010 本身的行为），
   如期有 **6 条变红**；破坏与回滚都在脚本内，`api.ts` 已确认复原。
-- **还没做到的验证，如实说**：
-  - **浏览器真机复验没做成**。本轮 50 条 SkillsBench 重跑正占着服务端，
-    react-query 反复重取导致 DOM 节点不停被替换：`fill` 先是 275s 超时，
-    之后连着三次 `STALE_ELEMENT_REF`。这种状态下点出来的结果不可信，
-    **不能**拿它当「已验证」。已构建好 `dist`，等批量跑完后再真机复验：
-    加入草稿 → 新卡片带「未保存（新增）」且按钮为「丢弃草稿」→ `curl` 确认服务端仍无此行。
+- **浏览器复验：只验了一半，如实说**：
+  - ✅ **验到了**：批量跑完、服务端空闲后重开 `/devices`，已保存的 `notes` 卡片
+    **没有**任何「未保存」标记，右上角「保存 MCP 配置」按钮**正确处于 disabled**
+    （没草稿时不该可点）。这正是 ISSUE-010 的一半 ——
+    反过来「没草稿却乱标未保存」同样是 bug，所以这一半也得验。
+  - ❌ **没验到**：填表 → 点「加入草稿」→ 观察新卡片带「未保存（新增）」且按钮是
+    「丢弃草稿」。这一段点不下去：`fill` 先 275 秒超时、再连着三次 `STALE_ELEMENT_REF`。
+  - ⚠ 查过了，**不是服务端负载也不是轮询**：批量跑完、服务完全空闲之后仍然复现；
+    MCP 查询是 `staleTime: 10_000`、**没有** `refetchInterval`。实际原因是
+    **每次渲染 `data-backend-node-id` 都被重新分配**，快照里的 ref 活不过一个动作。
+  - 按浏览器技能的规范，同一目标只允许刷新一次后重试、**不许改用猜坐标绕过**，
+    所以停在这里报告，而不是硬点出一个不可信的「通过」。
+  - **要补上这一步，得先解决 ref 活不过一个动作的问题**
+    （候选方向：让渲染稳定、或换一条交互通道）。在那之前本条的证据是
+    「10 条组件用例 + 负向验证 6 条会红」，**不是**浏览器端到端。
 
 ---
 
@@ -463,6 +472,72 @@
     —— 调用侧同一道闸门。
   - `ui/web/src/devices/DevicesMcpMount.test.tsx` 的
     「连上了但一个工具都没有时，原因必须显示出来」。
+
+---
+
+## ISSUE-032 · SkillsBench 50 条在当前接线下**结构上拿不到 PASS** —— 「0/50 通过」是口径问题，不是通过率
+
+**状态**：已定位，**未修**（修它要先定产品语义，见下）
+
+- **现象**：50 条跑完，`PASS = 0`、`PARTIAL = 0`。
+  修前 `FAIL 43 / UNJUDGEABLE 7`，修后 `FAIL 37 / UNJUDGEABLE 13`。
+  看着像「一条都没做对」，但那不是实情。
+- **根因（实测，不是推演）**：两份结果文件里逐条读 `judgement`，50 条**全部**是
+  | 维度 | 实际值 |
+  |---|---|
+  | `tools.judgeable` | **恒为 false**，`why` 一律是「这条任务不依赖任何外部服务器工具」 |
+  | `claims.judgeable` | **恒为 false**，`why` 一律是「expected_claims 为空，这一维度不判」 |
+  | `link.ok` | 唯一真正在量的东西 |
+
+  根子在 `TESTSETS/tasks.json`：SkillsBench 那 50 条的 `required_tools` 与
+  `expected_claims` **全是空的**。
+- **为什么于是永远拿不到 PASS**：`runner.py:verdict()` 的规则是
+  「**三个维度都判过且都过**才算 PASS」。两个内容维度恒不可判 ⇒ `judged == 0`
+  ⇒ 只能落到 `UNJUDGEABLE`（没失败但也没验过）或 `FAIL`（link 断 / 命中 quill 的 bug）。
+  **PASS 不可达。**
+  - `verdict()` 的注释其实预判过：「SkillsBench 里有相当一批正是这种任务」。
+    实测是**全部 50 条**，不是「相当一批」—— 注释低估了范围。
+- **严重度**：高（它让整个 SkillsBench 半边的数字**不可读**）
+  —— 现在没人能从「0/50」判断 quill 到底做得好不好。
+- **修它要先定产品语义，不能顺手改**。至少三条路，各有代价：
+  1. **补 `expected_claims`**：从 SkillsBench 的标准答案里抽关键值填进 tasks.json。
+     最正的路，但要人工核对 50 条，而且 4B 未必命中（那是「答案质量」，按红线不算 bug）。
+  2. **给 SkillsBench 一个「链路维度专用的 PASS」**：
+     `judged == 0` 但 `link.ok` 时，报一个像 `LINK_OK` 的结论而不是 `UNJUDGEABLE`。
+     好处是不再把「验过了」和「什么都没验」混在一个词里；代价是引入第四种判定。
+  3. **把 link ok 单独作为指标**（本轮临时就是这么记的）：不动 runner，
+     在 STATUS.md 里明确写「这 50 条只量链路，通过率无意义」。
+     成本最低，但指标不在工具里，靠人记。
+- **本轮的做法**：选了 3 作为**临时**记录口径，并把 1/2 记在这里等定夺。
+  **没有**偷偷改 `verdict()` 的判定 —— 那会让 100 条凭空多出一堆 PASS，
+  正是 `verdict()` 注释里警告过的那类错。
+- **回归**：无（本条还没动代码）。
+- **真正该看的数字**（已写进 STATUS.md）：
+  | | 修前 | 修后 |
+  |---|---|---|
+  | link ok | 7 / 50（14%） | 13 / 50（26%） |
+  | 轨迹里出现 `list_experts` / `get_expert_detail` | 28 | 0 |
+
+---
+
+## ISSUE-033 · 浏览器 ref 活不过一个动作 —— 每次渲染都重分配 `data-backend-node-id`
+
+**状态**：待修（本轮实测发现，挡住了 ISSUE-010 的端到端复验）
+
+- **现象**：`/devices` 页面上，任意 `inspect` 拿到的 ref，下一个动作几乎必然
+  `STALE_ELEMENT_REF: Browser target expired`。`fill` 还先撞过一次 275 秒超时。
+- **排除过的原因**（都查了，不是猜）：
+  - **不是服务端负载**：50 条批量跑完、服务完全空闲之后仍然复现。
+  - **不是轮询**：`devices.tsx` 的 MCP 查询是 `staleTime: 10_000`，
+    `refetchIntervalInBackground: false`，全项目 grep 不到 `refetchInterval`。
+  - **不是登录态**：页面正常渲染、数据正常加载（`notes` 的探测结果都在）。
+  - 实际观察到的现象是**每次渲染 `data-backend-node-id` 都被重新分配**，
+    快照里记的 ref 因此指向一个已经不存在的节点。
+- **影响**：这一条会**系统性地**卡住所有「先 inspect 再点」的浏览器回归，
+  不只是 ISSUE-010 那一条。这是继续跑 100 条真实任务时的拦路虎。
+- **修它之前**，浏览器侧只能做「纯读取」类验证（`inspect` / `query` / `screenshot`），
+  交互类验证拿不到可信结果 —— 不要拿猜坐标硬点出来的结果当通过。
+- **回归**：无（本条还没动代码）。
 
 ---
 
@@ -1381,6 +1456,35 @@
     这一条剩下的不是 quill 的 bug。
   - 顺带看到 ISSUE-027/028 生效：错误码从 `provider_unavailable`
     变成了 `tool_loop_exhausted`，两类故障不再混报。
+- **整批 50 条重跑后的全量对照**（这才是决定性证据）：
+  修前 `/tmp/quill-sb50.jsonl`，修后 `/tmp/quill-sb50-after-t29.jsonl`，
+  同一套隔离、同一台服务、同一批技能。
+
+  | | 修前 | 修后 |
+  |---|---|---|
+  | **轨迹里出现 `list_experts` / `get_expert_detail` 的条数** | **28** | **0** |
+  | link ok（链路真跑完且模型真给出正文） | 7 / 50（14%） | **13 / 50（26%）** |
+  | `tool_loop_exhausted` | 0（旧二进制把它错报成 `provider_unavailable`） | 27 |
+  | 上游 400 / 上下文超窗 | 5 | 5 |
+  | 上游回了看不懂的内容 | 2 | 4 |
+  | 上游 HTTP 500 | 1 | 1 |
+
+  - 专家工具调用 **28 → 0**，**没有一条例外**。这是唯一能直接归因于本修复的数字。
+  - 链路跑完的比例 14% → 26%，接近翻倍：省下来的工具预算让 4B 有机会收尾。
+  - ⚠ **逐条判定有 14 条变化，不能读成「进步」**：8 条 `FAIL → UNJUDGEABLE`，
+    另有 6 条在 `UNJUDGEABLE ↔ FAIL` 之间互有。已逐条核对那 4 条
+    `UNJUDGEABLE → FAIL`（`sb-exam-block-sequencing`、`sb-fix-druid-loophole-cve`、
+    `sb-invoice-fraud-detection`、`sb-manufacturing-fjsp-optimization`），
+    **不是修复带来的回退**：隔离设置与挂载技能逐字段相同，差别只在 4B 那一轮
+    恰好给出了 20~97 字的短回复（修前，`link.ok=true`、`reply_chars>0`），
+    还是打转到轮次耗尽（修后，`tool_loop_exhausted`、`reply_chars=0`）。
+    **n=1 的批量分不清「修好了」和「模型掷硬币」** —— 能确定的只有上面那条
+    直接可观测的 28 → 0。要把噪声压下去得同一条重复跑多次，那是另一件事。
+- **顺带挖出来的结构性问题（不属于本条，另记）**：SkillsBench 50 条
+  `required_tools` 与 `expected_claims` **全空**，两个内容维度恒不可判，
+  而 `runner.py:verdict()` 要求「三个维度都判过且都过」才算 PASS ——
+  所以这 50 条在当前接线下 **PASS 不可达**，永远落在 UNJUDGEABLE 或 FAIL。
+  「0/50 通过」不是通过率，是口径问题。详见 STATUS.md 的专门一节。
 - **负向验证**（不看「测试通过」，得看它会不会红）：
   临时把 `Ok(list) => !list.is_empty()` 改成 `Ok(_list) => true`（回到修复前行为），
   `no_experts_means_no_expert_tools_in_the_chat_tool_table` 如期变红：
