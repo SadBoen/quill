@@ -63,17 +63,30 @@ pub async fn list_mcp(
 /// 「3 个工具可用」而模型那轮一个都调不到 —— 配对没上、能力被关掉、
 /// 与内置工具撞名，这三种原因长得一模一样。
 async fn mcp_body(state: &AppState, uid: quill_adapters::UserId, rows: &[McpServerRow]) -> Value {
+    // **停用的服务器不握手，但要在 `status` 里如实出现。**
+    //
+    // 与 `tools::with_mcp_tools` 用**同一个** `tools::enabled_servers` 过滤 ——
+    // 两边各判一次，迟早漂；漂了就变成「界面说 mounted=3、模型一个都调不到」，
+    // 那正是本项目最不能出的那种不一致（ISSUE-014 那一类）。
+    //
+    // `servers` 仍然返回**全部**行（含停用的），因为前端要靠它把编辑表单回填、
+    // 再 POST 回来；这里就把停用的藏起来的话，用户在界面上再也开不回来。
+    let active = crate::tools::enabled_servers(rows.to_vec());
+    // **持有 String 而不是 &str**：`active` 紧接着要 move 进 `discover_all`，
+    // 借它的切片会活不过那次 move。
+    let active_names: Vec<String> = active.iter().map(|r| r.name.clone()).collect();
+
     // **只握手一次。** 状态与挂载名都从这同一批 `Discovery` 里出 ——
     // 分两次握手的话，用户配的进程会被拉起来两遍，而两遍的工具列表可能不一样，
     // 于是界面上「已挂载」那一栏会和自己都算不上稳定的第二次握手对不上。
-    let found = mcp_client::discover_all(rows.to_vec()).await;
+    let found = mcp_client::discover_all(active).await;
     let probes: Vec<mcp_client::Probe> = found.iter().map(|d| d.probe.clone()).collect();
     let summary = mcp_client::Summary::of(&probes);
     // 挂载口径与 `with_mcp_tools` 共用同一套判断（`tools::mcp_tool_visibility`），
     // 基线工具表也用 `tools::baseline_specs` 建 —— 界面上报的必须是**真的**挂了什么，
     // 而不是「如果挂的话大概会挂什么」。
     let mounted = mount_from(state, uid, &found).await;
-    let status: Vec<Value> = found
+    let mut status: Vec<Value> = found
         .iter()
         .map(|d| {
             let mut v = mcp_client::status_json(&d.probe);
@@ -90,6 +103,25 @@ async fn mcp_body(state: &AppState, uid: quill_adapters::UserId, rows: &[McpServ
             v
         })
         .collect();
+    // 停用的那些：**如实报「已停用」**，而不是把它们从 status 里抹掉 ——
+    // 抹掉的话界面上这台服务器就没了，用户会以为它被删了。
+    for row in rows.iter().filter(|r| !active_names.iter().any(|n| n == &r.name)) {
+        status.push(json!({
+            "name": row.name,
+            "probed": false,
+            "connected": false,
+            "tool_count": 0,
+            "mounted": 0,
+            "mounted_tools": [],
+            "not_mounted": [],
+            "disabled": true,
+            "error": "这台服务器已被停用：这一轮不握手、也不会挂任何工具进对话。\
+                      下一步：要重新启用，在编辑里把「启用」打开并保存。",
+            "protocol_version": Value::Null,
+            "server_info": Value::Null,
+            "server_declares_tools": Value::Null,
+        }));
+    }
     let total_mounted: usize = mounted.iter().map(|m| m.tools.len()).sum();
     let mut note = summary.note(&probes);
     if total_mounted > 0 {

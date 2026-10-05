@@ -982,8 +982,9 @@
 
 ## ISSUE-025 · runner 不做任务隔离：上一条挂的技能与服务器会漏进下一条
 
-**状态**：待修（2026-10-06，与 ISSUE-024 同一次批量跑发现）
-**归属**：**测试脚手架（`runner.py`）的缺陷，不是 quill 的** —— 理由见下
+**状态**：部分已修（2026-10-06）：**quill 侧**的 `enabled` 只存不用已修；
+  **`runner.py` 的任务隔离本轮未做**；**前端仍然没有开关**（见「未修」）
+**归属**：分两半，见下 —— quill 侧是**真 bug**，runner 侧是**测试脚手架缺陷**
 
 - **现象**（实测）：
   跑第 7 条（一条 **MCP-Atlas** 任务，`required_tools` 里没有任何技能依赖）时，
@@ -1019,6 +1020,67 @@
 - **回归**：跑一批 ≥3 条、每条技能集合不同的任务，断言第 N 条
   `GET /api/extensions/skills` 里 `model_can_see=true` 的集合**恰好**等于
   该任务声明的技能集合。这条断言现在必然失败（实测第 7 条就复现了）。
+- **修它之前先撞出的一条真 bug**：见 ISSUE-026 —— `mcp.enabled=false`
+  压根不生效，所以「让 runner 能按任务隔离 MCP」这件事在产品侧根本做不到。
+
+---
+
+## ISSUE-026 · MCP 服务器的 `enabled=false` 只存不用：用户停用了，工具照样挂进对话
+
+**状态**：已修（2026-10-06）
+
+- **严重度**：中等偏高（又是「界面/配置说一套、实际做另一套」，
+  与 ISSUE-008 `tool_allowlist` 只存不用是同一类病）
+- **现象**：`mcp_repo` 里有 `enabled` 列，`POST /api/extensions/mcp` 也从
+  请求体读它（`parse_server`：`obj.get("enabled")…unwrap_or(true)`），
+  `mcp_body` 也把它回给前端。但 `with_mcp_tools` 里：
+
+  ```rust
+  let rows = crate::mcp_repo::list(db, uid).await?;
+  let found = mcp_client::discover_all(rows.clone()).await;   // ← 一行都没判 enabled
+  ```
+
+  **用户把服务器停用了，这一轮照样握手、照样把它的工具挂进对话工具表。**
+  界面上没有任何提示，模型也照调不误。
+- **对比**：同一条路径上的**技能**是尊重 `enabled` 的
+  （`skill_visibility` 里 `if !row.enabled { return Disabled }`，
+  `with_skills` 里 `Disabled => continue`）。所以这不是「设计上就没这个概念」，
+  是**两条路径待遇不一致**，MCP 这条漏了。
+- **已修**（两处必须一起改，否则会**制造一个新的谎**）：
+  1. `tools::with_mcp_tools` 过滤掉 `enabled=false` 的行，全停用时直接返回，
+     **不去握手** —— 否则等于把用户主动关掉的进程全拉起来一遍。
+  2. `api_extensions::mcp_body` 用**同一个** `tools::enabled_servers` 过滤。
+     **只改第 1 处会造出「界面说 mounted=3、模型一个都调不到」** ——
+     那正是 ISSUE-014 那一类、两处口径不一致的谎。
+     停用的那台在 `status` 里**如实出现**（`probed:false` / `connected:false` /
+     `mounted:0` / `disabled:true` + 中文「下一步」），**不抹掉** ——
+     抹掉的话用户会以为它被删了。
+     `servers` 仍返回**全部**行（含停用的），否则前端回填编辑表单时开不回来。
+- **回归**：
+  - `tools::tests::a_disabled_mcp_server_is_not_mounted_at_all`
+  - `tools::tests::every_server_disabled_leaves_nothing_to_mount`
+    —— 全停用时**不许再去握手**
+  - `tools::tests::no_server_configured_stays_empty`
+  - 过滤逻辑抽成自由函数 `tools::enabled_servers` 才测得着：
+    `with_mcp_tools` 本体要真起 stdio 进程，测不了「过滤」这一层。
+  - 全量 **966 passed / 0 failed**（改前 963）。
+- **真机验过**（重启服务 → POST `enabled:false` → 再查）：
+  ```
+  停用前  notes  probed=True  connected=True  mounted=3  disabled=None
+  停用后  notes  probed=False connected=False mounted=0  disabled=True
+          error= 这台服务器已被停用：这一轮不握手、也不会挂任何工具进对话。
+                 下一步：要重新启用，在编辑里把「启用」打开并保存。
+          servers 里仍然列出了这台（否则用户在界面上开不回来）: ['notes']
+  ```
+  验完已把 `enabled` **恢复成 true**（`mounted=3`），没给下一轮留改脏的配置。
+- **未修（别当成已修）**：
+  1. **前端没有开关**。`ui/web/src/devices/api.ts` 的 `McpServerConfig`
+     **没有 `enabled` 字段** —— 界面只有 `enabled_capabilities`
+     （那是「启用哪些能力」，不是「这台跑不跑」）。所以这条修好之后，
+     用户仍然**没法在界面上停用一台 MCP 服务器**，只能走 API。
+     `api.ts` 的注释其实已经预期到了：「停用 / 非 stdio / 缺 command 都会是 false」，
+     说明这个状态被设计过，只是没有入口。
+  2. **`runner.py` 的任务隔离仍未做**（本条只是把路铺好了）。
 
 ---
 

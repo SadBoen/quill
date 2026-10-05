@@ -266,7 +266,8 @@ impl ToolRegistry {
     /// 界面上显示的工具数就会与模型实际拿到的对不上，而那种不一致没法从界面上看出来。
     /// 代价是每条消息都要把用户配的进程拉起来一遍 —— 这笔账记在 STATUS.md 的
     /// 「已知代价」里，真到扛不住时再上带 TTL 的缓存，并且**界面上要显示缓存年龄**。
-    pub async fn with_mcp_tools(
+
+pub async fn with_mcp_tools(
         mut self,
         db: &crate::db::DbBridge,
         uid: quill_adapters::UserId,
@@ -275,6 +276,20 @@ impl ToolRegistry {
         let rows = crate::mcp_repo::list(db, uid)
             .await
             .map_err(|e| format!("加载 MCP 服务器列表失败：{e}"))?;
+        if rows.is_empty() {
+            return Ok(self);
+        }
+        // **停用就是停用**：用户在配置里把 `enabled` 关掉的服务器，这一轮
+        // 不能握手、也不能挂工具。
+        //
+        // 原来这里一行都没判，`enabled` 存进了库、从 API 读得出来，却对
+        // 「模型这一轮真能调到什么」毫无影响 —— 与 ISSUE-008
+        // （`tool_allowlist` 只存不用）是同一种病。表现是：用户明明在界面上
+        // 关掉了一台服务器，它的工具照样出现在模型的工具表里，用户无从察觉。
+        //
+        // 与 `with_skills` 对停用技能的处理保持一致：跳过，不记日志 ——
+        // 停用是用户的明确选择，不是故障，记日志只会把真正的告警淹掉。
+        let rows = enabled_servers(rows);
         if rows.is_empty() {
             return Ok(self);
         }
@@ -525,6 +540,15 @@ impl SkillVisibility {
 /// 这次对话里，模型到底看不看得见这个 SKILL。
 ///
 /// `existing` 是**已经占住**的工具名（内置工具 + 前面已挂上的 SKILL）。
+/// 挑出**启用**的 MCP 服务器。抽成独立函数是为了能单测 ——
+/// `with_mcp_tools` 本体要真起 stdio 进程，测不了「过滤」这一层，
+/// 而「停用之后到底还挂不挂」恰恰是最该被钉住的那一条（ISSUE-026）。
+pub fn enabled_servers(
+    rows: Vec<crate::mcp_repo::McpServerRow>,
+) -> Vec<crate::mcp_repo::McpServerRow> {
+    rows.into_iter().filter(|r| r.enabled).collect()
+}
+
 pub fn skill_visibility(
     existing: &[ToolSpec],
     row: &crate::skills_repo::SkillRow,
@@ -808,6 +832,60 @@ mod tests {
         let specs = with_one_tool().specs();
         assert_eq!(skill_visibility(&specs, &row, "有正文"), SkillVisibility::Disabled);
         assert!(!skill_visibility(&specs, &row, "有正文").model_can_see());
+    }
+
+    /// ISSUE-026 的回归：**停用的 MCP 服务器不许进这一轮的工具表。**
+    ///
+    /// 修之前 `with_mcp_tools` 一行都没判 `enabled` —— 用户在配置里关掉了
+    /// 一台服务器，它的工具照样出现在模型的工具表里，界面上也看不出差别。
+    /// 与 ISSUE-008（`tool_allowlist` 只存不用）同一类病。
+    fn mcp_row(name: &str, enabled: bool) -> crate::mcp_repo::McpServerRow {
+        crate::mcp_repo::McpServerRow {
+            name: name.into(),
+            transport: "stdio".into(),
+            command: Some("echo".into()),
+            args: vec![],
+            env: vec![],
+            url: None,
+            headers: vec![],
+            enabled,
+            timeout_ms: 30_000,
+            description: String::new(),
+            cwd: None,
+            max_concurrent_calls: None,
+            enabled_capabilities: None,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    #[test]
+    fn a_disabled_mcp_server_is_not_mounted_at_all() {
+        let rows = vec![
+            mcp_row("on", true),
+            mcp_row("off", false),
+            mcp_row("also-on", true),
+        ];
+        let kept: Vec<String> = enabled_servers(rows).into_iter().map(|r| r.name).collect();
+        assert_eq!(
+            kept,
+            vec!["on".to_string(), "also-on".to_string()],
+            "停用的那台不许进工具表"
+        );
+    }
+
+    #[test]
+    fn every_server_disabled_leaves_nothing_to_mount() {
+        let kept = enabled_servers(vec![mcp_row("a", false), mcp_row("b", false)]);
+        assert!(
+            kept.is_empty(),
+            "全停用时不该再去握手 —— 那会把用户主动关掉的进程全拉起来一遍"
+        );
+    }
+
+    #[test]
+    fn no_server_configured_stays_empty() {
+        assert!(enabled_servers(vec![]).is_empty());
     }
 
     #[test]
