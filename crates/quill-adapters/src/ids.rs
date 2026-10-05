@@ -1,11 +1,9 @@
-
 use std::fmt;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct UuidBytes([u8; 16]);
 
 impl UuidBytes {
-
     pub const fn from_bytes(b: [u8; 16]) -> Self {
         Self(b)
     }
@@ -86,21 +84,18 @@ const fn hex_val(b: u8) -> Option<u8> {
 
 impl fmt::Debug for UuidBytes {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-
         write!(f, "UuidBytes({})", self.to_hyphenated())
     }
 }
 
 impl fmt::Display for UuidBytes {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-
         write!(f, "{:.16}…", self.to_compact_hex())
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseIdError {
-
     Empty,
 
     BadLength { got: usize },
@@ -133,7 +128,6 @@ impl std::error::Error for ParseIdError {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseSlugError {
-
     Empty,
 
     TooLong { len: usize, max: usize },
@@ -189,7 +183,6 @@ pub fn validate_slug(s: &str) -> Result<(), ParseSlugError> {
     for (i, &b) in bytes.iter().enumerate() {
         let ok = b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-';
         if !ok {
-
             let ch = s[i..].chars().next().unwrap_or('\u{fffd}');
             return Err(ParseSlugError::IllegalChar { index: i, ch });
         }
@@ -204,7 +197,6 @@ pub fn validate_slug(s: &str) -> Result<(), ParseSlugError> {
 pub struct UserId(UuidBytes);
 
 impl UserId {
-
     pub fn parse(s: &str) -> Result<Self, ParseIdError> {
         UuidBytes::parse(s).map(Self)
     }
@@ -226,7 +218,6 @@ impl UserId {
 pub struct SessionId(UuidBytes);
 
 impl SessionId {
-
     pub fn parse(s: &str) -> Result<Self, ParseIdError> {
         UuidBytes::parse(s).map(Self)
     }
@@ -248,7 +239,6 @@ impl SessionId {
 pub struct ProviderId(String);
 
 impl ProviderId {
-
     pub fn parse(s: &str) -> Result<Self, ParseSlugError> {
         validate_slug(s)?;
         Ok(Self(s.to_string()))
@@ -289,7 +279,6 @@ impl TryFrom<String> for ProviderId {
 pub struct ExpertId(String);
 
 impl ExpertId {
-
     pub fn parse(s: &str) -> Result<Self, ParseSlugError> {
         validate_slug(s)?;
         Ok(Self(s.to_string()))
@@ -330,7 +319,6 @@ impl TryFrom<String> for ExpertId {
 pub struct MemberId(String);
 
 impl MemberId {
-
     pub fn parse(s: &str) -> Result<Self, ParseSlugError> {
         validate_slug(s)?;
         Ok(Self(s.to_string()))
@@ -369,7 +357,6 @@ macro_rules! impl_display_short {
     ($t:ty, $tag:expr) => {
         impl fmt::Display for $t {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-
                 write!(f, concat!($tag, "{:.16}"), self.0.to_compact_hex())?;
                 f.write_str("…")
             }
@@ -432,7 +419,6 @@ mod tests {
 
     #[test]
     fn uuiddigest_rejects_whitespace_only_string() {
-
         assert_eq!(
             UserId::parse("   ").unwrap_err(),
             ParseIdError::BadLength { got: 3 }
@@ -441,11 +427,7 @@ mod tests {
 
     #[test]
     fn uuiddigest_rejects_wrong_length() {
-
-        for (input, want) in [
-            ("f81d4fae", 8usize),
-            ("f81d4fae-7dec-11d0-a765", 23),
-        ] {
+        for (input, want) in [("f81d4fae", 8usize), ("f81d4fae-7dec-11d0-a765", 23)] {
             assert_eq!(input.len(), want, "本用例的字面量长度与预期不符");
             assert_eq!(
                 UserId::parse(input).unwrap_err(),
@@ -470,7 +452,6 @@ mod tests {
 
     #[test]
     fn uuiddigest_rejects_non_hex_character() {
-
         assert_eq!(
             UserId::parse("z81d4fae7dec11d0a76500a0c91e6bf6").unwrap_err(),
             ParseIdError::NotHex { index: 0 }
@@ -484,7 +465,6 @@ mod tests {
 
     #[test]
     fn uuiddigest_rejects_hyphen_in_compact_form() {
-
         let bad = "f81d4fae7dec11d0a765-0a0c91e6bf6";
         assert_eq!(bad.len(), 32, "本用例依赖输入长度恰为 32");
         assert_eq!(
@@ -495,7 +475,6 @@ mod tests {
 
     #[test]
     fn uuiddigest_rejects_misplaced_hyphen_in_36_form() {
-
         let bad = "f81d4fa-7dec-11d0-a765-00a0c91e6bf6x";
         assert_eq!(bad.len(), 36, "本用例依赖输入长度恰为 36");
         assert_eq!(
@@ -538,7 +517,6 @@ mod tests {
 
     #[test]
     fn uuiddigest_display_prefix_distinguishes_the_two_128_bit_types() {
-
         let a = UserId::from_bytes([0xab; 16]);
         let b = SessionId::from_bytes([0xab; 16]);
         assert_ne!(
@@ -569,7 +547,6 @@ mod tests {
 
     #[test]
     fn uuiddigest_display_prefix_is_distinguishable_between_two_ids() {
-
         let a = SessionId::parse(HEX32).expect("应合法");
         let b = SessionId::parse("00000000000000000000000000000001").expect("应合法");
         assert_ne!(a.to_string(), b.to_string());
@@ -585,7 +562,6 @@ mod tests {
 
     #[test]
     fn uuiddigest_error_display_names_the_actual_bad_input_shape() {
-
         let msg = ParseIdError::BadLength { got: 7 }.to_string();
         assert!(msg.contains('7'), "错误信息须含实际长度：{msg}");
         let msg2 = ParseIdError::NotHex { index: 4 }.to_string();
@@ -604,7 +580,6 @@ mod tests {
 
     #[test]
     fn expert_and_provider_with_same_text_are_distinct_types() {
-
         let e = ExpertId::parse("cost-analyst").expect("应合法");
         let p = ProviderId::parse("cost-analyst").expect("应合法");
         assert_eq!(e.as_str(), p.as_str(), "两者承载同一字符串");
@@ -625,7 +600,6 @@ mod tests {
 
     #[test]
     fn member_id_for_expert_reports_error_when_result_exceeds_slug_limit() {
-
         let long = ExpertId::parse(&"a".repeat(MAX_SLUG_LEN)).expect("边界长度应合法");
         let err = MemberId::for_expert(&long, 42).unwrap_err();
         assert_eq!(
@@ -666,7 +640,6 @@ mod tests {
 
     #[test]
     fn slug_rejects_non_ascii() {
-
         let err = ExpertId::parse("成本").unwrap_err();
         match err {
             ParseSlugError::IllegalChar { index, ch } => {
@@ -728,7 +701,6 @@ mod tests {
 
     #[test]
     fn parse_attempts_are_countable_and_all_reach_a_verdict() {
-
         let slug_inputs = ["", "   ", "-x", "x-", "a--b", "A", "成本", &"a".repeat(65)];
         let n = slug_inputs.len();
         assert_eq!(n, 8, "已检查：slug 清单共 8 项");

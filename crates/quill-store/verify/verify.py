@@ -1,10 +1,4 @@
-"""隔离性与约束行为实测 —— 每一条断言都对应文档里的一条设计声明。
 
-运行：python3 crates/quill-store/verify/verify.py   退出码 0 = 全部通过
-路径全部由 __file__ 推算，因此可在任意 cwd、任意 clone 位置运行。
-被测对象是**真实迁移文件** migrations/0001_init.sql，不是它的副本 ——
-副本一旦漂移，全部 41 项断言会静默地测错文件。
-"""
 import sqlite3, sys, time
 from pathlib import Path
 
@@ -23,10 +17,6 @@ N  = bytes.fromhex('0a'*16)
 NOW = 1_700_000_000_000
 H32 = b'x'*32
 
-# `users.password_algo` 曾经有 DEFAULT 'argon2id'，但实现跑的是 PBKDF2——
-# 那是一份会骗人的 schema，默认值已删除（漏写该列 = 立即 INSERT 失败）。
-# 故本脚本的每条 users INSERT 都必须**显式**给出算法串。
-# 取值格式由 quill-control 的 `PasswordHasher::algo_tag()` 产出。
 ALGO = 'pbkdf2-hmac-sha256$i=600000'
 
 results = []
@@ -70,8 +60,7 @@ check("A 的 team_members 指向 B 的 session",
 check("A 的 task_dispatch 指向 B 的 member session",
       lambda: con.execute("INSERT INTO task_dispatches(user_id,id,room_id,team_id,round,leader_session_id,member_session_id,member_expert_id,task_digest,state,dispatched_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                           (U, bytes.fromhex('31'*16), 'r', TA, 0, SA, SB, 'e1', H32, 'RUNNING', NOW, NOW, NOW)), 'BLOCKED')
-# ⚠️ 已知缺口：wiki_index 无父行可挂复合外键（文档真相源是文件）。
-# 写错 user_id 会静默落入错误命名空间 —— 由 §7.3 的 doc_id↔文件双向审计兜底。
+
 check("[已知缺口] A 往 B 的 wiki_index 命名空间写词条 -> 记录实际行为",
       lambda: con.execute("INSERT INTO wiki_index(user_id,term,doc_id,term_kind,tf,field_len,rel_path,page_title,content_hash,bytes,indexed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                           (Ub, 'x', bytes.fromhex('41'*16), 0, 1, 10, 'a.md', 'T', H32, 100, NOW)), 'ALLOWED')

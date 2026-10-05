@@ -1,4 +1,3 @@
-
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -19,7 +18,6 @@ const OP_ROUND: &str = "列出某轮派工";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DispatchScope {
-
     pub team_id: [u8; 16],
 
     pub leader_session_id: SessionId,
@@ -28,7 +26,6 @@ pub struct DispatchScope {
 }
 
 impl DispatchScope {
-
     pub fn new(
         team_id: [u8; 16],
         leader_session_id: SessionId,
@@ -97,7 +94,6 @@ pub struct SqlxDispatchLedger {
 }
 
 impl SqlxDispatchLedger {
-
     pub fn new(db: Arc<DbBridge>, scope: DispatchScope) -> Self {
         Self {
             db,
@@ -302,7 +298,6 @@ fn row_into_record(row: &SqliteRow) -> Result<DispatchRecord, AgentError> {
         Some(Ok(outcome)) => record.settle_done(outcome)?,
         Some(Err(err)) => record.settle_failed(err)?,
         None => match state {
-
             DispatchState::Pending => {}
             DispatchState::Running => record.mark_running()?,
             DispatchState::Asking => {

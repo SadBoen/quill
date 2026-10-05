@@ -1,4 +1,3 @@
-
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
@@ -9,7 +8,6 @@ use quill_adapters::{
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FaultKind {
-
     Timeout,
 
     LinkDropped,
@@ -26,7 +24,6 @@ pub enum FaultKind {
 }
 
 impl FaultKind {
-
     pub fn to_error(&self, member: &MemberId) -> AdapterError {
         match self {
             Self::Timeout => AdapterError::Provider(format!("成员 {member} 超时")),
@@ -46,7 +43,6 @@ impl FaultKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Step {
-
     Outcome(MemberOutcome),
 
     Fault(FaultKind),
@@ -60,7 +56,6 @@ pub struct MockMemberExecutor {
 }
 
 impl MockMemberExecutor {
-
     pub fn new() -> Self {
         Self::default()
     }
@@ -123,7 +118,6 @@ impl MockMemberExecutor {
     }
 
     fn lock_script(&self) -> std::sync::MutexGuard<'_, Vec<Step>> {
-
         self.script.lock().expect("mock 脚本锁不应被毒化")
     }
 
@@ -145,7 +139,6 @@ pub struct CallRecord {
 }
 
 impl CallRecord {
-
     pub fn seq(&self) -> u64 {
         self.seq
     }
@@ -247,7 +240,6 @@ impl MemberExecutor for MockMemberExecutor {
 }
 
 impl MockMemberExecutor {
-
     fn next_steer_result(&self, member: &MemberId) -> Result<(), AdapterError> {
         let mut script = self.lock_script();
         match script.first().cloned() {
@@ -255,12 +247,9 @@ impl MockMemberExecutor {
                 script.remove(0);
                 Err(f.to_error(member))
             }
-            Some(Step::Outcome(_)) => {
-
-                Err(AdapterError::Internal(format!(
-                    "mock 脚本错位：成员 {member} 的 steer 撞上了 start 的成功步"
-                )))
-            }
+            Some(Step::Outcome(_)) => Err(AdapterError::Internal(format!(
+                "mock 脚本错位：成员 {member} 的 steer 撞上了 start 的成功步"
+            ))),
             None => {
                 let checked = self.lock_calls().len();
                 Err(AdapterError::Conflict(format!(

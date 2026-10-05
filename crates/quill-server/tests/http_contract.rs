@@ -1,4 +1,3 @@
-
 mod common;
 
 use axum::body::Body;
@@ -110,7 +109,6 @@ async fn healthz_returns_200_without_auth() {
 
 #[tokio::test]
 async fn auth_me_returns_200_with_resolved_identity() {
-
     let resp = app!()
         .oneshot(authed("GET", "/api/auth/me", TOKEN_ADMIN))
         .await
@@ -136,22 +134,19 @@ async fn auth_me_returns_200_with_resolved_identity() {
 }
 
 #[tokio::test]
-async fn version_returns_200_with_contract_pointer() {
+async fn version_returns_200_with_version_field() {
     let resp = app!()
         .oneshot(authed("GET", "/api/version", TOKEN_PLAIN))
         .await
         .expect("oneshot 失败");
     assert_eq!(resp.status(), StatusCode::OK);
     let text = body_text(resp).await;
-    assert!(
-        text.contains("PHASE2_CONTRACT.md"),
-        "应指明契约出处：{text}"
-    );
+    assert!(text.contains("version"), "应返回版本号：{text}");
+    assert!(!text.contains(".md"), "不应再指向任何已删除的文档：{text}");
 }
 
 #[tokio::test]
 async fn missing_token_is_401_not_404_or_500() {
-
     let resp = app!()
         .oneshot(req("GET", "/api/sessions"))
         .await
@@ -168,7 +163,6 @@ async fn missing_token_is_401_not_404_or_500() {
 
 #[tokio::test]
 async fn three_auth_failure_modes_produce_byte_identical_responses() {
-
     let missing = app!()
         .oneshot(req("GET", "/api/sessions"))
         .await
@@ -182,7 +176,6 @@ async fn three_auth_failure_modes_produce_byte_identical_responses() {
             Request::builder()
                 .method("GET")
                 .uri("/api/sessions")
-
                 .header("authorization", TOKEN_ADMIN)
                 .body(Body::empty())
                 .expect("构造失败"),
@@ -233,7 +226,6 @@ async fn unregistered_path_is_404_with_chinese_body() {
 
 #[tokio::test]
 async fn extra_routes_list_does_not_leak_into_404_claim() {
-
     for &(_, path) in EXTRA_ROUTES {
         let concrete = path.replace("{path}", "a/b").replace("{name}", "n");
         let resp = app!().oneshot(req("GET", &concrete)).await.expect("失败");
@@ -269,7 +261,6 @@ async fn registered_but_unimplemented_route_returns_501_with_route_name() {
 
 #[tokio::test]
 async fn unimplemented_route_still_requires_auth_first() {
-
     let resp = app!()
         .oneshot(req("GET", "/api/sessions"))
         .await
@@ -279,7 +270,6 @@ async fn unimplemented_route_still_requires_auth_first() {
 
 #[tokio::test]
 async fn every_contract_route_responds_and_is_never_a_false_success() {
-
     const IMPLEMENTED: [(&str, &str); 8] = [
         ("GET", "/api/version"),
         ("GET", "/api/auth/me"),
@@ -292,7 +282,6 @@ async fn every_contract_route_responds_and_is_never_a_false_success() {
     ];
 
     for &(method, path) in CONTRACT_ROUTES {
-
         let concrete = path
             .replace("{id}", "0192b7c8-0000-7000-8000-000000000003")
             .replace("{slug}", "cost-analyst")
@@ -317,7 +306,6 @@ async fn every_contract_route_responds_and_is_never_a_false_success() {
 
         let implemented = IMPLEMENTED.iter().any(|(m, p)| *m == method && *p == path);
         if implemented {
-
             assert_ne!(
                 status,
                 StatusCode::NOT_IMPLEMENTED,
@@ -375,7 +363,6 @@ async fn dispatch_routes_are_registered_and_answer_in_chinese() {
 
 #[tokio::test]
 async fn wrong_method_on_existing_path_is_405_not_404() {
-
     let resp = app!()
         .oneshot(authed("PUT", "/api/sessions", TOKEN_ADMIN))
         .await
@@ -387,7 +374,6 @@ async fn wrong_method_on_existing_path_is_405_not_404() {
 
 #[tokio::test]
 async fn panic_in_handler_becomes_500_and_leaks_nothing_internally() {
-
     let resp = build_router(state_with_selftest(true))
         .oneshot(req("GET", "/__selftest__/panic"))
         .await
@@ -418,7 +404,6 @@ async fn panic_in_handler_becomes_500_and_leaks_nothing_internally() {
 
 #[tokio::test]
 async fn selftest_panic_route_is_absent_unless_explicitly_enabled() {
-
     let resp = app!()
         .oneshot(req("GET", "/__selftest__/panic"))
         .await
@@ -445,7 +430,6 @@ async fn successful_responses_also_carry_request_id_for_traceability() {
 
 #[tokio::test]
 async fn healthz_surfaces_startup_warnings_so_silent_fallback_is_impossible() {
-
     let bad = AppState {
         config: {
             let mut c = Config::from_env();

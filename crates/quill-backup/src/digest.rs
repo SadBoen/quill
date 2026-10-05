@@ -1,4 +1,3 @@
-
 use sha2::{Digest, Sha256};
 use std::io::{self, Read};
 use std::path::Path;
@@ -48,7 +47,6 @@ mod tests {
 
     #[test]
     fn sha256_matches_published_test_vectors() {
-
         assert_eq!(
             sha256_bytes(b""),
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"

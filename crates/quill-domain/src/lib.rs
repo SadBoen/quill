@@ -1,4 +1,3 @@
-
 pub mod team;
 
 pub use quill_adapters::ids::{
@@ -16,7 +15,6 @@ pub struct TeamId(String);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TeamIdError {
-
     Empty,
 
     Invalid(ParseSlugError),
@@ -34,7 +32,6 @@ impl std::fmt::Display for TeamIdError {
 impl std::error::Error for TeamIdError {}
 
 impl TeamId {
-
     pub fn parse(s: &str) -> Result<Self, TeamIdError> {
         if s.trim().is_empty() {
             return Err(TeamIdError::Empty);
@@ -88,11 +85,9 @@ mod tests {
 
     #[test]
     fn team_id_rejects_illegal_slug_reusing_contract_rules() {
-
         let err = TeamId::parse("Growth Squad").unwrap_err();
         match err {
             TeamIdError::Invalid(ParseSlugError::IllegalChar { index, ch }) => {
-
                 assert_eq!(index, 0, "首个非法字符是大写 G");
                 assert_eq!(ch, 'G');
             }
@@ -104,7 +99,6 @@ mod tests {
 
     #[test]
     fn reexported_ids_are_the_same_types_as_contract_layer() {
-
         let u = quill_adapters::ids::UserId::from_bytes([7; 16]);
         let v: UserId = u;
         assert_eq!(v.as_bytes(), &[7u8; 16]);

@@ -1,4 +1,3 @@
-
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -13,7 +12,6 @@ pub struct TestDb {
 }
 
 impl TestDb {
-
     pub fn new(label: &str) -> Self {
         let n = SEQ.fetch_add(1, Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!(
@@ -57,7 +55,6 @@ impl TestDb {
 
 impl Drop for TestDb {
     fn drop(&mut self) {
-
         if let Some(b) = self.bridge.take() {
             drop(b);
         }
@@ -73,7 +70,6 @@ pub fn migration_sql() -> String {
 }
 
 pub fn scalar_i64(db: &Arc<DbBridge>, sql: &str) -> i64 {
-
     let sql = sql.to_string();
     db.call(move |pool, _rt| {
         Box::pin(async move {

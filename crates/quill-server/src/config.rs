@@ -1,4 +1,3 @@
-
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -12,7 +11,6 @@ pub const DEFAULT_DB_MAX_CONNECTIONS: u32 = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Warning {
-
     pub source: String,
 
     pub message: String,
@@ -26,7 +24,6 @@ impl std::fmt::Display for Warning {
 
 #[derive(Debug, Clone)]
 pub struct Config {
-
     pub addr: SocketAddr,
 
     pub web_dir: PathBuf,
@@ -41,7 +38,6 @@ pub struct Config {
 }
 
 impl Config {
-
     pub fn from_env() -> Self {
         let mut warnings = Vec::new();
 
@@ -74,12 +70,9 @@ impl Config {
 
 fn parse_addr(warnings: &mut Vec<Warning>) -> SocketAddr {
     match std::env::var("QUILL_ADDR") {
-        Err(_) => {
-
-            DEFAULT_ADDR
-                .parse()
-                .expect("DEFAULT_ADDR 是本文件内的字面量常量，非用户输入")
-        }
+        Err(_) => DEFAULT_ADDR
+            .parse()
+            .expect("DEFAULT_ADDR 是本文件内的字面量常量，非用户输入"),
         Ok(raw) => {
             let trimmed = raw.trim();
             match trimmed.parse::<SocketAddr>() {
@@ -115,7 +108,6 @@ fn parse_web_dir(warnings: &mut Vec<Warning>) -> PathBuf {
             }
             let p = PathBuf::from(trimmed);
             if !p.exists() {
-
                 warnings.push(Warning {
                     source: "QUILL_WEB_DIR".to_string(),
                     message: format!(
@@ -152,7 +144,6 @@ fn parse_db_path(raw: Option<&str>, warnings: &mut Vec<Warning>) -> PathBuf {
             }
             let p = PathBuf::from(trimmed);
             match p.parent() {
-
                 Some(dir) if !dir.as_os_str().is_empty() && !dir.is_dir() => {
                     warnings.push(Warning {
                         source: "QUILL_DB_PATH".to_string(),
@@ -175,7 +166,6 @@ fn parse_db_max_connections(raw: Option<&str>, warnings: &mut Vec<Warning>) -> u
     match raw {
         None => DEFAULT_DB_MAX_CONNECTIONS,
         Some(raw) => match raw.trim().parse::<u32>() {
-
             Ok(n) if n >= 1 => n,
             _ => {
                 warnings.push(Warning {
@@ -229,14 +219,12 @@ mod tests {
     }
     #[test]
     fn default_addr_parses() {
-
         let a: SocketAddr = DEFAULT_ADDR.parse().expect("默认地址必须可解析");
         assert!(a.ip().is_loopback(), "默认只听回环，不听全网卡");
     }
 
     #[test]
     fn from_env_never_panics_on_garbage_addr() {
-
         let a = parse_addr(&mut vec![]);
         assert!(a.port() > 0, "回退默认值必须仍是可绑定端口");
     }

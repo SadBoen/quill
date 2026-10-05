@@ -14,11 +14,7 @@ name = "quill-cli"
 path = "src/main.rs"
 
 [dependencies]
-# ⚠️ 零新增外部 crate：全部是 workspace 内已有的 crate。
-# 判据：`git diff -- Cargo.lock` 不新增任何 `[[package]]` 条目。
-#
-# 依赖方向：CLI 是**面向用户的入口**，与 quill-server 同处依赖图顶端，
-# 故允许依赖全部 quill-*（契约 §一：只有它和 quill-server 可以）。
+
 quill-adapters = { path = "../quill-adapters" }
 quill-domain = { path = "../quill-domain" }
 quill-store = { path = "../quill-store" }
@@ -27,14 +23,9 @@ quill-wiki = { path = "../quill-wiki" }
 quill-agent = { path = "../quill-agent" }
 quill-backup = { path = "../quill-backup" }
 quill-upgrade = { path = "../quill-upgrade" }
-# ⚠️ 依赖 quill-server 只为一件事：复用它的 `SqlxExpertRepository`。
-#    专家的 SQL 实现**只有那一份**；CLI 若自己再写一遍 SQL，
-#    两处必然漂移（"隔离漏了 WHERE owner_user_id"这种事故就是这么来的）。
+
 quill-server = { path = "../quill-server" }
 
-# 只用 std 做参数解析，**不引入 clap**：
-# 一个 5 个子命令的 CLI 用不上 clap，而 clap 会带进 8+ 个传递包。
-# 「零新增外部 crate」的原意是防依赖膨胀，不是逼自己手写解析器。
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 sqlx = { version = "0.8", default-features = false, features = [
     "runtime-tokio",
@@ -43,8 +34,6 @@ sqlx = { version = "0.8", default-features = false, features = [
 sha2 = "0.10"
 
 [dev-dependencies]
-# ⚠️ 刻意为空：测试用 std::env::temp_dir 造工作区
-# （与 quill-backup / quill-upgrade 的测试同一手法），不引入 tempfile。
 
 [lints.rust]
 unsafe_code = "forbid"

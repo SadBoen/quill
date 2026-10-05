@@ -1,4 +1,3 @@
-
 #[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(test)]
@@ -17,7 +16,6 @@ pub const INVITE_CODE_BYTES: usize = 16;
 pub const INVITE_CODE_HEX_LEN: usize = INVITE_CODE_BYTES * 2;
 
 pub trait SecretSource: Send + Sync + 'static {
-
     fn fill(&self, out: &mut [u8]);
 }
 
@@ -41,7 +39,6 @@ fn fill_or_panic(out: &mut [u8], read: impl FnOnce(&mut [u8]) -> Result<(), getr
 
 impl SecretSource for OsEntropySource {
     fn fill(&self, out: &mut [u8]) {
-
         if out.is_empty() {
             return;
         }
@@ -58,7 +55,6 @@ pub struct NonCsprngEntropySource {
 
 #[cfg(test)]
 impl NonCsprngEntropySource {
-
     pub fn new() -> Self {
         Self {
             counter: AtomicU64::new(0),
@@ -239,7 +235,6 @@ mod tests {
 
     #[test]
     fn hex_decode_exact_handles_other_widths() {
-
         let e = || ControlError::InviteMalformed;
         let c = "0123456789abcdef0123456789abcdef";
         assert_eq!(c.len(), INVITE_CODE_HEX_LEN);
@@ -255,7 +250,6 @@ mod tests {
 
     #[test]
     fn sha256_matches_published_vector() {
-
         assert_eq!(
             hex_encode(&sha256(b"abc")),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
@@ -327,7 +321,6 @@ mod tests {
 
     #[test]
     fn zero_source_still_produces_full_length_output() {
-
         let out = random_bytes(&ZeroSource, TOKEN_BYTES);
         assert_eq!(out.len(), TOKEN_BYTES);
         assert!(out.iter().all(|b| *b == 0), "ZeroSource 应全零");
@@ -399,7 +392,6 @@ mod tests {
 
     #[test]
     fn the_fake_source_derives_everything_from_one_process_level_secret() {
-
         let a = NonCsprngEntropySource::new();
         let b = NonCsprngEntropySource::new();
         assert_ne!(

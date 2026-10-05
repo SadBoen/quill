@@ -1,4 +1,3 @@
-
 pub mod dispatch;
 pub mod error;
 pub mod expert;
@@ -24,7 +23,6 @@ mod tests {
 
     #[test]
     fn public_error_variants_are_constructible_from_outside_the_crate() {
-
         let e: AgentError = AgentError::ExpertNotFound {
             id: quill_adapters::ExpertId::parse("x").expect("应合法"),
         };

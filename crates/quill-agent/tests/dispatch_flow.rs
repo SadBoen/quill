@@ -1,4 +1,3 @@
-
 use std::sync::Arc;
 
 use quill_adapters::{
@@ -119,7 +118,6 @@ fn all_members_deliver_and_report_carries_counts() {
 
 #[test]
 fn partial_outcome_counts_as_delivered_with_its_completed_scope() {
-
     let partial = MemberOutcome::new(
         MemberId::parse("cost-analyst-1").expect("应合法"),
         MemberStatus::Partial,
@@ -145,7 +143,6 @@ fn partial_outcome_counts_as_delivered_with_its_completed_scope() {
 
 #[test]
 fn member_self_reported_failure_is_recorded_as_failed_not_delivered() {
-
     let failed = MemberOutcome::failed(
         MemberId::parse("cost-analyst-1").expect("应合法"),
         "只完成了成本结构分析",
@@ -169,7 +166,6 @@ fn member_self_reported_failure_is_recorded_as_failed_not_delivered() {
 
 #[test]
 fn dispatching_to_an_expert_outside_the_team_is_rejected_before_touching_the_executor() {
-
     let (m, d) = dispatcher(vec![]);
     let err = round(&d, &team3(), 0, &[task("risk-reviewer", 1)]).expect_err("团外专家必须判红");
     assert!(
@@ -181,7 +177,6 @@ fn dispatching_to_an_expert_outside_the_team_is_rejected_before_touching_the_exe
 
 #[test]
 fn one_invalid_task_aborts_the_whole_round_without_dispatching_any_member() {
-
     let (m, d) = dispatcher(vec![ok_step("cost-analyst-1", "会被丢掉的产出")]);
     let tasks = [task("cost-analyst", 1), task("risk-reviewer", 1)];
     let err = round(&d, &team3(), 0, &tasks).expect_err("团外专家必须判红");
@@ -199,7 +194,6 @@ fn one_invalid_task_aborts_the_whole_round_without_dispatching_any_member() {
 
 #[test]
 fn a_cycle_in_a_later_task_also_prevents_every_earlier_dispatch() {
-
     let (m, d) = dispatcher(vec![ok_step("cost-analyst-1", "会被丢掉的产出")]);
     let hops = chain(&[("growth-analyst", "t-001")]);
     let tasks = [task("cost-analyst", 1), task("growth-analyst", 1)];
@@ -213,7 +207,6 @@ fn a_cycle_in_a_later_task_also_prevents_every_earlier_dispatch() {
 
 #[test]
 fn leader_may_receive_a_dispatch_even_though_it_is_not_in_the_member_set() {
-
     let (_, d) = dispatcher(vec![ok_step("leader-bot-1", "主持人执行完毕")]);
     let report = round(&d, &team3(), 0, &[task("leader-bot", 1)]).expect("leader 应可被派工");
     assert_eq!(report.delivered_count(), 1);
@@ -221,7 +214,6 @@ fn leader_may_receive_a_dispatch_even_though_it_is_not_in_the_member_set() {
 
 #[test]
 fn rejection_timeout_and_link_drop_each_produce_a_distinct_failure() {
-
     let cases = [
         (FaultKind::Rejected, "member_rejected", false),
         (FaultKind::Timeout, "member_rejected", true),
@@ -260,7 +252,6 @@ fn rejection_timeout_and_link_drop_each_produce_a_distinct_failure() {
 
 #[test]
 fn failed_members_do_not_stop_the_others_in_the_same_round() {
-
     let (m, d) = dispatcher(vec![
         Step::Fault(FaultKind::Timeout),
         ok_step("growth-analyst-1", "增长来自自然流量"),
@@ -284,7 +275,6 @@ fn failed_members_do_not_stop_the_others_in_the_same_round() {
 
 #[test]
 fn a_failed_dispatch_is_never_retried_automatically() {
-
     let (m, d) = dispatcher(vec![Step::Fault(FaultKind::PeerUnreachable)]);
     let report = round(&d, &team3(), 0, &[task("cost-analyst", 1)]).expect("派工应返回报告");
     assert_eq!(report.failed_count(), 1);
@@ -313,7 +303,6 @@ fn revoked_authorization_failure_carries_its_own_code() {
 
 #[test]
 fn report_summary_carries_the_copyable_doctor_command_for_every_failure() {
-
     let (_, d) = dispatcher(vec![
         Step::Fault(FaultKind::Rejected),
         Step::Fault(FaultKind::LinkDropped),
@@ -339,7 +328,6 @@ fn report_summary_carries_the_copyable_doctor_command_for_every_failure() {
 
 #[test]
 fn replaying_the_same_round_never_calls_the_executor_twice() {
-
     let (m, d) = dispatcher(vec![ok_step("cost-analyst-1", "成本集中在存储")]);
     let t = team3();
     let tasks = [task("cost-analyst", 1)];
@@ -364,7 +352,6 @@ fn replaying_the_same_round_never_calls_the_executor_twice() {
 
 #[test]
 fn a_different_round_is_a_different_dispatch_and_does_run() {
-
     let (m, d) = dispatcher(vec![
         ok_step("cost-analyst-1", "第 0 轮结论"),
         ok_step("cost-analyst-2", "第 1 轮结论"),
@@ -396,7 +383,6 @@ fn a_different_room_is_a_different_dispatch_and_does_run() {
 
 #[test]
 fn the_same_room_and_round_are_isolated_between_users() {
-
     let (m, d) = dispatcher(vec![
         ok_step("cost-analyst-1", "A 的结论"),
         ok_step("cost-analyst-1", "B 的结论"),
@@ -433,7 +419,6 @@ fn two_dispatches_in_one_round_target_different_members_and_both_run() {
 
 #[test]
 fn begin_distinguishes_created_from_existed() {
-
     let (_, d) = dispatcher(vec![]);
     let key = DispatchKey::new(u(1), ROOM, 0, e("cost-analyst")).expect("键应合法");
     let rec = || {
@@ -457,7 +442,6 @@ fn begin_distinguishes_created_from_existed() {
 
 #[test]
 fn a_fresh_dispatch_is_not_reported_as_a_crash_recovery() {
-
     let (_, d) = dispatcher(vec![ok_step("cost-analyst-1", "首派成功")]);
     let report = round(&d, &team3(), 0, &[task("cost-analyst", 1)]).expect("首派应成功");
     assert_eq!(report.delivered_count(), 1);
@@ -470,7 +454,6 @@ fn a_fresh_dispatch_is_not_reported_as_a_crash_recovery() {
 
 #[test]
 fn a_replayed_pending_dispatch_is_reported_as_a_recovery() {
-
     let key = DispatchKey::new(u(1), ROOM, 0, e("cost-analyst")).expect("键应合法");
     let (_, d) = dispatcher(vec![ok_step("cost-analyst-1", "恢复后跑成功")]);
     d.ledger()
@@ -486,7 +469,6 @@ fn a_replayed_pending_dispatch_is_reported_as_a_recovery() {
 
 #[test]
 fn pending_dispatch_after_a_crash_is_safe_to_retry_and_does_rerun() {
-
     let (m, d) = dispatcher(vec![ok_step("cost-analyst-1", "崩溃后补跑成功")]);
     let key = DispatchKey::new(u(1), ROOM, 0, e("cost-analyst")).expect("键应合法");
 
@@ -522,7 +504,6 @@ fn pending_dispatch_after_a_crash_is_safe_to_retry_and_does_rerun() {
 
 #[test]
 fn running_dispatch_after_a_crash_requires_human_confirmation_and_is_not_rerun() {
-
     let (m, d) = dispatcher(vec![ok_step("cost-analyst-1", "不该被调用")]);
     let key = DispatchKey::new(u(1), ROOM, 0, e("cost-analyst")).expect("键应合法");
     let mut rec = DispatchRecord::pending(
@@ -574,7 +555,6 @@ fn asking_dispatch_also_requires_human_confirmation() {
 
 #[test]
 fn recovery_of_a_clean_ledger_reports_zero_checked_not_unknown() {
-
     let (_, d) = dispatcher(vec![]);
     let rec = d.recover(&u(1)).expect("恢复判定应成功");
     assert_eq!(rec.checked, 0, "已检查：确实 0 条在途");
@@ -588,7 +568,6 @@ fn recovery_of_a_clean_ledger_reports_zero_checked_not_unknown() {
 
 #[test]
 fn recovery_only_sees_the_requesting_users_inflight_dispatches() {
-
     let (_, d) = dispatcher(vec![]);
     for owner in [u(1), u(2)] {
         let key = DispatchKey::new(owner, ROOM, 0, e("cost-analyst")).expect("键应合法");
@@ -607,7 +586,6 @@ fn recovery_only_sees_the_requesting_users_inflight_dispatches() {
 
 #[test]
 fn a_settled_dispatch_cannot_be_settled_again() {
-
     let key = DispatchKey::new(u(1), ROOM, 0, e("cost-analyst")).expect("键应合法");
     let mut rec = DispatchRecord::pending(key, MemberId::parse("cost-analyst-1").expect("应合法"));
     rec.mark_running().expect("应合法");
@@ -628,7 +606,6 @@ fn a_settled_dispatch_cannot_be_settled_again() {
 
 #[test]
 fn a_failed_outcome_cannot_be_settled_as_done() {
-
     let key = DispatchKey::new(u(1), ROOM, 0, e("cost-analyst")).expect("键应合法");
     let mut rec = DispatchRecord::pending(key, MemberId::parse("cost-analyst-1").expect("应合法"));
     rec.mark_running().expect("应合法");
@@ -655,7 +632,6 @@ fn running_cannot_be_entered_from_a_settled_state() {
 
 #[test]
 fn asking_requires_a_positive_depth() {
-
     let key = DispatchKey::new(u(1), ROOM, 0, e("cost-analyst")).expect("键应合法");
     let mut rec = DispatchRecord::pending(key, MemberId::parse("cost-analyst-1").expect("应合法"));
     let err = rec.mark_asking(0).expect_err("深度 0 必须判红");
@@ -670,7 +646,6 @@ fn asking_requires_a_positive_depth() {
 
 #[test]
 fn dispatch_state_wire_names_match_the_schema_check_list() {
-
     let all = [
         (DispatchState::Pending, "PENDING"),
         (DispatchState::Running, "RUNNING"),
@@ -698,7 +673,6 @@ fn dispatch_state_wire_names_match_the_schema_check_list() {
 
 #[test]
 fn inflight_and_terminal_partition_the_six_states_without_gaps() {
-
     let all = [
         DispatchState::Pending,
         DispatchState::Running,
@@ -719,7 +693,6 @@ fn inflight_and_terminal_partition_the_six_states_without_gaps() {
 
 #[test]
 fn dispatching_an_expert_already_on_the_chain_is_rejected_before_the_executor_runs() {
-
     let (m, d) = dispatcher(vec![]);
     let hops = chain(&[("node-a", "t-001"), ("cost-analyst", "t-002")]);
     let err = d
@@ -782,7 +755,6 @@ fn a_legal_chain_passes_through_and_is_forwarded_to_the_request() {
 
 #[test]
 fn steer_failure_is_reported_but_does_not_settle_the_dispatch() {
-
     let (_, d) = dispatcher(vec![Step::Fault(FaultKind::LinkDropped)]);
     let member = MemberId::parse("cost-analyst-1").expect("应合法");
     let err = d
@@ -800,7 +772,6 @@ fn steer_failure_is_reported_but_does_not_settle_the_dispatch() {
 
 #[test]
 fn stop_round_does_not_halt_members_but_abort_room_does() {
-
     let (m, d) = dispatcher(vec![]);
     let a = MemberId::parse("cost-analyst-1").expect("应合法");
     let b = MemberId::parse("growth-analyst-1").expect("应合法");
@@ -820,7 +791,6 @@ fn stop_round_does_not_halt_members_but_abort_room_does() {
 
 #[test]
 fn steer_with_blank_text_is_rejected_before_reaching_the_executor() {
-
     let (m, d) = dispatcher(vec![]);
     let member = MemberId::parse("cost-analyst-1").expect("应合法");
     let err = d.steer(&member, "   ").expect_err("空白消息必须判红");
@@ -830,7 +800,6 @@ fn steer_with_blank_text_is_rejected_before_reaching_the_executor() {
 
 #[test]
 fn a_task_with_a_member_from_another_expert_is_rejected() {
-
     let err = DispatchTask::new(
         e("cost-analyst"),
         MemberId::parse("growth-analyst-1").expect("应合法"),
@@ -865,7 +834,6 @@ fn a_task_with_empty_title_or_instructions_is_rejected() {
 
 #[test]
 fn a_blank_room_id_is_rejected() {
-
     let err = DispatchKey::new(u(1), "  ", 0, e("cost-analyst")).expect_err("空房间应判红");
     assert_eq!(err.code(), "dispatch_request_invalid");
     assert!(err.to_string().contains("房间"), "须点名房间：{err}");
@@ -882,7 +850,6 @@ fn dispatch_key_display_is_readable_for_logs() {
 
 #[test]
 fn list_round_returns_records_sorted_by_member_expert() {
-
     let (_, d) = dispatcher(vec![]);
     let prefix = RoundPrefix {
         owner: u(1),
@@ -913,7 +880,6 @@ fn list_round_returns_records_sorted_by_member_expert() {
 
 #[test]
 fn list_round_of_another_users_room_is_empty_not_their_data() {
-
     let (_, d) = dispatcher(vec![]);
     let key = DispatchKey::new(u(1), ROOM, 0, e("cost-analyst")).expect("键应合法");
     d.ledger()

@@ -1,4 +1,3 @@
-
 use std::sync::Arc;
 
 use sqlx::SqlitePool;
@@ -23,7 +22,6 @@ pub const MAX_INVITE_USES: i32 = 1_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AuthPolicy {
-
     pub max_failures: i32,
 
     pub lock_millis: i64,
@@ -36,7 +34,6 @@ pub struct AuthPolicy {
 }
 
 impl AuthPolicy {
-
     pub const fn production() -> Self {
         Self {
             max_failures: 5,
@@ -63,7 +60,6 @@ impl AuthPolicy {
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct RegistrationRequest {
-
     pub username: String,
 
     pub display_name: String,
@@ -85,7 +81,6 @@ impl std::fmt::Debug for RegistrationRequest {
 }
 
 impl RegistrationRequest {
-
     pub fn new(
         username: impl Into<String>,
         display_name: impl Into<String>,
@@ -107,7 +102,6 @@ impl RegistrationRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthSession {
-
     pub session_id: SessionId,
 
     pub user_id: UserId,
@@ -125,7 +119,6 @@ pub struct AuthSession {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Authenticated {
-
     pub session_id: SessionId,
 
     pub user_id: UserId,
@@ -137,7 +130,6 @@ pub struct Authenticated {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IssuedInvite {
-
     pub id: UuidBytes,
 
     pub code: String,
@@ -151,7 +143,6 @@ pub struct IssuedInvite {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InviteSummary {
-
     pub id: UuidBytes,
 
     pub created_by: UserId,
@@ -171,7 +162,6 @@ pub struct InviteSummary {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LogoutOutcome {
-
     pub revoked: u64,
 }
 
@@ -184,7 +174,6 @@ pub struct ControlPlane {
 }
 
 impl std::fmt::Debug for ControlPlane {
-
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ControlPlane")
             .field("hasher", &self.hasher)
@@ -194,7 +183,6 @@ impl std::fmt::Debug for ControlPlane {
 }
 
 impl ControlPlane {
-
     pub fn new_with_os_entropy(
         pool: SqlitePool,
         clock: Arc<dyn Clock>,
@@ -750,11 +738,9 @@ struct NewSession<'a> {
 
 #[derive(Debug, Clone, Copy)]
 enum SessionOrigin {
-
     Login,
 
     Rotation {
-
         family_id: SessionId,
 
         parent_id: SessionId,

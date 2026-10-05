@@ -1,4 +1,3 @@
-
 use std::sync::Arc;
 
 use crate::auth::TokenResolver;
@@ -8,7 +7,6 @@ use crate::error::ApiError;
 
 #[derive(Clone)]
 pub struct AppState {
-
     pub config: Config,
 
     pub tokens: std::sync::Arc<dyn TokenResolver>,
@@ -20,7 +18,6 @@ pub struct AppState {
 
 impl std::fmt::Debug for AppState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-
         f.debug_struct("AppState")
             .field("addr", &self.config.addr)
             .field("warnings", &self.config.warnings)
@@ -31,7 +28,6 @@ impl std::fmt::Debug for AppState {
 }
 
 impl AppState {
-
     pub fn db(&self) -> Result<&Arc<DbBridge>, ApiError> {
         self.db.as_ref().ok_or_else(|| {
             ApiError::storage_unavailable(self.db_problem.clone().unwrap_or_else(|| {

@@ -6,8 +6,7 @@ description = "领域模型（领域实体 / 聚合；身份类型自 quill-adap
 license = "Apache-2.0"
 
 [dependencies]
-# 依据 docs/DECISIONS.md D-2026-10-05-01：身份型 newtype 定义在契约层，
-# 本 crate 依赖并 re-export，保持 quill_domain::UserId 调用路径不破。
+
 quill-adapters = { path = "../quill-adapters" }
 
 [dev-dependencies]

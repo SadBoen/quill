@@ -1,5 +1,3 @@
-﻿
-
 use quill_cli::{cmd_doctor, cmd_experts, Opts};
 use std::path::{Path, PathBuf};
 
@@ -220,7 +218,6 @@ fn 未知选项必须拒绝_不得默默用默认值() {
 
 #[test]
 fn 参数顺序不影响命令识别() {
-
     let cases: Vec<Vec<String>> = vec![
         vec!["experts".into(), "ls".into()],
         vec![

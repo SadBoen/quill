@@ -1,4 +1,3 @@
-
 use quill_server::config::Config;
 use quill_server::server;
 

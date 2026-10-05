@@ -1,4 +1,3 @@
-
 use std::sync::Arc;
 
 use quill_adapters::{
@@ -113,7 +112,6 @@ fn start_consumes_script_in_order() {
 
 #[test]
 fn steer_is_recorded_after_start_so_orchestration_can_assert_order() {
-
     let m = Arc::new(MockMemberExecutor::new());
     m.push_ok(member("cost-analyst-1"), "产出")
         .push_fault(FaultKind::LinkDropped);
@@ -150,7 +148,6 @@ fn abort_records_scope_and_room_scope_marks_member_halted() {
 
 #[test]
 fn stop_round_does_not_mark_member_as_halted() {
-
     let m = Arc::new(MockMemberExecutor::new());
     abort(&m, "cost-analyst-1", AbortScope::StopRound).expect("应成功");
 
@@ -211,7 +208,6 @@ fn each_network_fault_maps_to_a_distinct_error() {
 
 #[test]
 fn rejected_maps_to_forbidden_while_network_faults_map_to_provider() {
-
     let m = Arc::new(MockMemberExecutor::new());
 
     m.push_fault(FaultKind::Rejected);
@@ -245,7 +241,6 @@ fn rejected_maps_to_forbidden_while_network_faults_map_to_provider() {
 
 #[test]
 fn provider_faults_are_retryable_and_policy_faults_are_not() {
-
     let m = Arc::new(MockMemberExecutor::new());
 
     m.push_fault(FaultKind::Timeout);
@@ -266,7 +261,6 @@ fn provider_faults_are_retryable_and_policy_faults_are_not() {
 
 #[test]
 fn steer_failure_does_not_change_member_state() {
-
     let m = Arc::new(MockMemberExecutor::new());
     m.push_fault(FaultKind::LinkDropped);
 
@@ -296,7 +290,6 @@ fn custom_member_fault_keeps_its_message() {
 
 #[test]
 fn start_with_empty_script_fails_instead_of_silently_succeeding() {
-
     let m = Arc::new(MockMemberExecutor::new());
     let err = start(&m, "cost-analyst", "cost-analyst-1").expect_err("必须失败");
     assert!(
@@ -322,7 +315,6 @@ fn steer_with_empty_script_fails_instead_of_silently_succeeding() {
 
 #[test]
 fn steer_hitting_a_start_success_step_reports_script_misalignment() {
-
     let m = Arc::new(MockMemberExecutor::new());
     m.push_ok(member("cost-analyst-1"), "产出");
 
@@ -340,7 +332,6 @@ fn steer_hitting_a_start_success_step_reports_script_misalignment() {
 
 #[test]
 fn exhausted_script_error_reports_how_many_calls_were_checked() {
-
     let m = Arc::new(MockMemberExecutor::new());
     let err = start(&m, "cost-analyst", "cost-analyst-1").expect_err("必须失败");
     assert!(
@@ -351,7 +342,6 @@ fn exhausted_script_error_reports_how_many_calls_were_checked() {
 
 #[test]
 fn called_in_order_returns_false_when_one_side_never_happened() {
-
     let m = Arc::new(MockMemberExecutor::new());
     m.push_ok(member("cost-analyst-1"), "产出");
     start(&m, "cost-analyst", "cost-analyst-1").expect("start 应成功");
@@ -396,7 +386,6 @@ fn clear_calls_resets_ledger_but_keeps_script() {
 
 #[test]
 fn outcome_step_carries_partial_status() {
-
     let m = Arc::new(MockMemberExecutor::new());
     let partial = MemberOutcome::new(
         member("cost-analyst-1"),
@@ -432,7 +421,6 @@ fn outcome_step_carries_failed_status_with_scope_only() {
 
 #[test]
 fn chain_helper_builds_usable_hops_for_cycle_checks() {
-
     let hops = chain(&[("node-a", "t-001"), ("node-b", "t-002")]);
     assert_eq!(hops.len(), 2, "已检查：应构造 2 跳");
     assert_eq!(hops[0].node(), "node-a");
@@ -451,7 +439,6 @@ fn chain_helper_builds_usable_hops_for_cycle_checks() {
 
 #[test]
 fn mock_is_usable_from_multiple_threads() {
-
     let m = Arc::new(MockMemberExecutor::new());
     for i in 0..8 {
         m.push_ok(member(&format!("cost-analyst-{i}")), "产出");

@@ -1,4 +1,3 @@
-
 use std::fmt;
 
 use axum::http::StatusCode;
@@ -8,36 +7,50 @@ use serde_json::json;
 
 #[derive(Debug, Clone)]
 pub enum ApiError {
-
     Unauthorized {
-
         detail: &'static str,
     },
 
-    Forbidden { detail: String },
+    Forbidden {
+        detail: String,
+    },
 
-    NotFound { path: String },
+    NotFound {
+        path: String,
+    },
 
-    EntityNotFound { detail: String },
+    EntityNotFound {
+        detail: String,
+    },
 
-    BadRequest { detail: String },
+    BadRequest {
+        detail: String,
+    },
 
-    Conflict { detail: String },
+    Conflict {
+        detail: String,
+    },
 
-    MethodNotAllowed { method: String, path: String },
+    MethodNotAllowed {
+        method: String,
+        path: String,
+    },
 
     NotImplemented {
         method: &'static str,
         path: &'static str,
     },
 
-    StorageUnavailable { detail: String },
+    StorageUnavailable {
+        detail: String,
+    },
 
-    Internal { detail: String },
+    Internal {
+        detail: String,
+    },
 }
 
 impl ApiError {
-
     pub const fn unauthorized() -> Self {
         Self::Unauthorized {
             detail: "未认证或凭据无效",
@@ -131,10 +144,9 @@ impl ApiError {
             }
             Self::BadRequest { detail } => detail.clone(),
             Self::Conflict { detail } => detail.clone(),
-            Self::NotImplemented { method, path } => format!(
-                "路由 {method} {path} 已按 docs/PHASE2_CONTRACT.md §5.1 登记，\
-                 但能力尚未实现"
-            ),
+            Self::NotImplemented { method, path } => {
+                format!("路由 {method} {path} 已登记，但能力尚未实现")
+            }
             Self::StorageUnavailable { detail } => detail.clone(),
             Self::Internal { detail } => detail.clone(),
         }
@@ -152,8 +164,8 @@ impl ApiError {
                  或联系管理员在 QUILL_TOKENS 中把你标记为 admin。"
             }
             Self::NotFound { .. } => {
-                "对照 docs/PHASE2_CONTRACT.md §5.1 的路由表确认路径拼写；\
-                 本实例当前只装配 HTTP 骨架，未登记的路径一律 404（不会静默兜底）。"
+                "确认路径拼写是否与调用方约定一致；\
+                 本实例未登记的路径一律 404（不会静默兜底成 200）。"
             }
             Self::EntityNotFound { .. } => {
                 "确认标识拼写（小写 kebab-case）；\
@@ -170,7 +182,7 @@ impl ApiError {
                  若要替换请先 `DELETE` 再创建（专家名删除后可复用）。"
             }
             Self::MethodNotAllowed { .. } => {
-                "对照 docs/PHASE2_CONTRACT.md §5.1 确认该路径允许的方法；\
+                "确认该路径允许的方法；\
                  路径存在但方法不对不会被当成 404。"
             }
             Self::NotImplemented { .. } => {
@@ -227,7 +239,6 @@ mod tests {
 
     #[test]
     fn unauthorized_has_single_shape_so_user_enumeration_is_impossible() {
-
         let a = ApiError::unauthorized();
         let b = ApiError::unauthorized();
         assert_eq!(a.detail(), b.detail());
@@ -237,7 +248,6 @@ mod tests {
 
     #[test]
     fn every_variant_carries_a_non_empty_next_step() {
-
         let cases = [
             ApiError::unauthorized(),
             ApiError::forbidden("非 admin"),

@@ -1,9 +1,7 @@
-
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub trait Clock: Send + Sync + 'static {
-
     fn now_millis(&self) -> i64;
 }
 
@@ -26,7 +24,6 @@ pub struct ManualClock {
 }
 
 impl ManualClock {
-
     pub fn new(start_ms: i64) -> Self {
         Self {
             now_ms: AtomicI64::new(start_ms),
@@ -53,7 +50,6 @@ impl Clock for ManualClock {
 }
 
 impl Default for ManualClock {
-
     fn default() -> Self {
         Self::new(1_704_067_200_000)
     }
@@ -76,7 +72,6 @@ mod tests {
 
     #[test]
     fn manual_clock_is_shared_across_threads() {
-
         let c = std::sync::Arc::new(ManualClock::new(0));
         let mut handles = Vec::new();
         for _ in 0..4 {
@@ -94,14 +89,12 @@ mod tests {
     #[test]
     #[should_panic(expected = "ManualClock 只能前进")]
     fn manual_clock_refuses_to_go_backwards() {
-
         let c = ManualClock::new(1_000);
         c.set(500);
     }
 
     #[test]
     fn system_clock_is_after_2020_and_matches_reasonable_magnitude() {
-
         let c = SystemClock;
         let t = c.now_millis();
         assert!(

@@ -1,4 +1,3 @@
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::page::{Page, PageType};
@@ -7,7 +6,6 @@ pub const STRUCTURAL_FILES: [&str; 2] = ["index.md", "log.md"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphNode {
-
     pub path: String,
 
     pub title: String,
@@ -23,7 +21,6 @@ pub struct GraphNode {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnresolvedLink {
-
     pub from: String,
 
     pub target: String,
@@ -37,7 +34,6 @@ pub struct LinkGraph {
 }
 
 impl LinkGraph {
-
     pub fn build(pages: &[Page]) -> Self {
         let pages: Vec<&Page> = pages
             .iter()
@@ -154,7 +150,6 @@ impl LinkGraph {
         for (i, a) in paths.iter().enumerate() {
             for b in paths.iter().skip(i + 1) {
                 let (Some(na), Some(nb)) = (self.nodes.get(*a), self.nodes.get(*b)) else {
-
                     continue;
                 };
                 let shared = shared_tags(&na.tags, &nb.tags);
@@ -287,7 +282,6 @@ mod tests {
 
     #[test]
     fn orphan_ignores_index_md_links() {
-
         let pages = vec![
             page("index.md", "---\ntitle: 索引\n---\n\n- [[只有目录链]]\n"),
             concept("a.md", "只有目录链", "无", "t"),
@@ -300,7 +294,6 @@ mod tests {
 
     #[test]
     fn non_orphan_when_linked_by_a_page() {
-
         let pages = vec![
             concept("a.md", "A", "见 [[B]]", "t"),
             concept("b.md", "B", "见 [[A]]", "t"),
@@ -353,7 +346,6 @@ mod tests {
 
     #[test]
     fn duplicate_titles_keep_first_declared() {
-
         let pages = vec![
             concept("a.md", "同名", "见 [[同名]]", "t"),
             concept("b.md", "同名", "无", "t"),

@@ -1,4 +1,3 @@
-
 use crate::{store, Opts, Outcome};
 use quill_adapters::UserId;
 use quill_agent::{ExpertRegistry, ExpertRepository};
@@ -21,7 +20,6 @@ async fn registry(
     o: &Opts,
     create_user: bool,
 ) -> Result<(ExpertRegistry<SqlxExpertRepository>, UserId), Outcome> {
-
     let pool = store::open_db(&o.db).await?;
     let (uid, created) = store::resolve_user(&pool, &o.user, create_user).await?;
     if created {
@@ -135,7 +133,6 @@ async fn rm(o: &Opts) -> Outcome {
         Err(e) => return Outcome::undet(format!("查专家失败（{e}）。")),
     };
     let Some(mut expert) = found else {
-
         return Outcome::fail(format!(
             "专家 {slug:?} 不存在，或不属于你。\n\
              （本命令对「不存在」与「无权访问」返回同一句话，避免被用来枚举别人的专家。）"

@@ -1,4 +1,3 @@
-
 use quill_cli::{dispatch, Outcome, USAGE};
 use std::process::ExitCode;
 

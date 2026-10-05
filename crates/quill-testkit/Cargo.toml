@@ -6,21 +6,11 @@ description = "Quill 测试基础设施（公共部分）—— canary 工厂 / 
 license = "Apache-2.0"
 publish = false
 
-# ⚠️ 本 crate 是**测试设施**，不进 release 产物的依赖树。
-# 它只被 dev-dependencies 引用。
-
 [dependencies]
-# 本 crate 只依赖**契约层**，不依赖任何实现层（quill-store / agent / wiki ...），
-# 否则测试替身会反向承重。
-# 依据 docs/DECISIONS.md D-2026-10-05-01：mock 实现的是 quill-adapters 的
-# MemberExecutor trait，故必须依赖它。
+
 quill-adapters = { path = "../quill-adapters" }
-# 刻意**不引入** tokio / uuid / async-trait：
-# MockMemberExecutor 的 future 不 await 任何 IO，用 Waker::noop() 有界轮询即可，
-# 保持 testkit 零第三方依赖（见下方原注释）。
 
 [dev-dependencies]
-# 基础设施本身的自测不需要额外依赖 —— 刻意保持最小
 
 [lints.rust]
 unsafe_code = "forbid"

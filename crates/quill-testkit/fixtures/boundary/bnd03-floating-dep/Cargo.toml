@@ -2,5 +2,5 @@
 members = []
 
 [workspace.dependencies]
-# 🚨 违规：浮动到 branch，上游每周二发版 → 构建结果不可复现
+
 goose = { git = "https://github.com/aaif-goose/goose", branch = "main" }

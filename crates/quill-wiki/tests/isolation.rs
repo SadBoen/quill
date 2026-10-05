@@ -1,4 +1,3 @@
-
 use quill_wiki::store::WikiStore;
 use quill_wiki::UserId;
 

@@ -1,4 +1,3 @@
-
 use sqlx::error::{DatabaseError, ErrorKind};
 use sqlx::{Row, SqlitePool};
 
@@ -22,7 +21,7 @@ where
     match f().await {
         Ok(_) => panic!("❌ [{case}] 语句被【接受】了 —— 预期应因约束被拒绝"),
         Err(sqlx::Error::Database(ref e)) => match constraint_kind(&**e) {
-            Some(_) => {  }
+            Some(_) => {}
             None => panic!(
                 "🚨 [{case}] 语句因【非约束原因】失败 —— 这是装置失效，不是约束生效！\n\
                  若把它当成「约束生效」就是假绿（第 1 类假闸门）。\n错误: {e}"
@@ -615,7 +614,6 @@ async fn c2_team_and_member_invariants() {
     seed_team_a(&pool).await;
 
     assert_legal("C2 前置：leader 成员", || async {
-
         sqlx::query(TM)
             .bind(id(1))
             .bind(id(0x41))
@@ -932,7 +930,6 @@ async fn g1_key_queries_use_indexes() {
     ];
 
     for (name, sql) in cases {
-
         let rows = sqlx::query(&format!("EXPLAIN QUERY PLAN {sql}"))
             .bind(id(1))
             .bind(id(0x11))

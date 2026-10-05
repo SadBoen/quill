@@ -1,4 +1,3 @@
-
 use std::collections::BTreeSet;
 
 use crate::{ExpertId, TeamId};
@@ -7,7 +6,6 @@ pub const MAX_TEAM_MEMBERS: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TeamError {
-
     IdEmpty,
 
     IdInvalid(String),
@@ -16,12 +14,7 @@ pub enum TeamError {
 
     DuplicateMember(ExpertId),
 
-    TooManyMembers {
-
-        got: usize,
-
-        max: usize,
-    },
+    TooManyMembers { got: usize, max: usize },
 
     UnknownExpert(ExpertId),
 }
@@ -52,7 +45,6 @@ pub struct Team {
 }
 
 impl Team {
-
     pub fn new(id: TeamId, name: impl Into<String>, leader: ExpertId) -> Result<Self, TeamError> {
         let name = name.into();
         if name.trim().is_empty() {
@@ -122,7 +114,6 @@ impl Team {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AddOutcome {
-
     Added,
 }
 
@@ -210,7 +201,6 @@ mod tests {
 
     #[test]
     fn add_member_rejects_duplicate_expert_in_same_team() {
-
         let mut t = team_of("growth-squad", "增长小队", "cost-analyst").expect("应合法");
         let r = roster3();
         let e = ExpertId::parse("cost-analyst").expect("应合法");
@@ -224,7 +214,6 @@ mod tests {
 
     #[test]
     fn add_member_rejects_expert_not_in_roster() {
-
         let mut t = team_of("growth-squad", "增长小队", "cost-analyst").expect("应合法");
         let r = roster3();
         let stranger = ExpertId::parse("stranger").expect("应合法");
@@ -237,7 +226,6 @@ mod tests {
 
     #[test]
     fn add_member_enforces_cap_and_reports_got_and_max() {
-
         let mut t = team_of("big-team", "大团队", "cost-analyst").expect("应合法");
         let mut r: BTreeSet<ExpertId> = BTreeSet::new();
         for i in 0..=MAX_TEAM_MEMBERS {
@@ -267,7 +255,6 @@ mod tests {
 
     #[test]
     fn same_expert_can_join_multiple_teams() {
-
         let e = ExpertId::parse("cost-analyst").expect("应合法");
         let r = roster(&["cost-analyst"]);
         let mut t1 = team_of("team-a", "A 队", "growth-analyst").expect("应合法");
@@ -285,7 +272,6 @@ mod tests {
 
     #[test]
     fn remove_member_returns_false_for_non_member() {
-
         let mut t = team_of("t-1", "队", "cost-analyst").expect("应合法");
         let absent = ExpertId::parse("growth-analyst").expect("应合法");
         assert!(!t.remove_member(&absent), "移除非成员应返回 false");
@@ -321,7 +307,6 @@ mod tests {
 
     #[test]
     fn empty_roster_rejects_every_expert() {
-
         let mut t = team_of("t-1", "队", "cost-analyst").expect("应合法");
         let empty = BTreeSet::new();
         let e = ExpertId::parse("cost-analyst").expect("应合法");
@@ -334,7 +319,6 @@ mod tests {
 
     #[test]
     fn error_display_carries_the_offending_identity() {
-
         let msg = TeamError::DuplicateMember(ExpertId::parse("cost-analyst").expect("应合法"))
             .to_string();
         assert!(msg.contains("cost-analyst"), "错误须含专家名：{msg}");

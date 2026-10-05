@@ -1,4 +1,3 @@
-
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
@@ -18,7 +17,6 @@ pub const LOG_FILE: &str = "log.md";
 
 #[derive(Debug)]
 pub enum WikiError {
-
     PathEscape {
         attempt: String,
         reason: &'static str,
@@ -29,9 +27,14 @@ pub enum WikiError {
         reason: &'static str,
     },
 
-    Io { path: PathBuf, source: io::Error },
+    Io {
+        path: PathBuf,
+        source: io::Error,
+    },
 
-    NotUtf8 { path: PathBuf },
+    NotUtf8 {
+        path: PathBuf,
+    },
 
     MalformedIndex(String),
 
@@ -72,10 +75,8 @@ impl std::error::Error for WikiError {
 }
 
 impl From<WikiError> for quill_adapters::AdapterError {
-
     fn from(e: WikiError) -> Self {
         match e {
-
             WikiError::PathEscape { .. } | WikiError::InvalidPath { .. } => {
                 Self::Forbidden(e.to_string())
             }
@@ -97,7 +98,6 @@ pub struct WikiStore {
 }
 
 impl WikiStore {
-
     pub fn new(base: impl AsRef<Path>, user: UserId) -> Self {
         Self {
             base: base.as_ref().to_path_buf(),
@@ -333,7 +333,6 @@ fn write_atomic(p: &Path, content: &str) -> Result<(), WikiError> {
         source,
     })?;
     std::fs::rename(&tmp, p).map_err(|source| {
-
         let _ = std::fs::remove_file(&tmp);
         WikiError::Io {
             path: p.to_path_buf(),

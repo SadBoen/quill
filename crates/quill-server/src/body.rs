@@ -1,4 +1,3 @@
-
 use axum::extract::{FromRequest, Request};
 use serde_json::Value;
 
@@ -17,7 +16,6 @@ where
         match axum::Json::<Value>::from_request(req, state).await {
             Ok(axum::Json(v)) => Ok(Self(v)),
             Err(rej) => {
-
                 eprintln!("[api] 请求体提取失败：{}", rej.body_text());
                 Err(ApiError::bad_request(
                     "请求体不是合法的 JSON。\

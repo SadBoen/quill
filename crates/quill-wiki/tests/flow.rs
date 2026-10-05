@@ -1,4 +1,3 @@
-
 use std::path::{Path, PathBuf};
 
 use quill_adapters::{
@@ -14,7 +13,6 @@ use quill_wiki::{run_lint, Date, LintConfig, UserId};
 const SUMMARY: &str = "测试摄入";
 
 struct FakeBackend {
-
     base: PathBuf,
     user: UserId,
 
@@ -64,7 +62,6 @@ impl FakeBackend {
             .push(ctx.source.text);
 
         if let Some(claimed) = &self.lie_about {
-
             return Ok(IndexReceipt {
                 touched: claimed.clone(),
                 summary: "谎报回执".to_string(),
@@ -74,7 +71,6 @@ impl FakeBackend {
         let store = WikiStore::new(&self.base, self.user);
         let mut touched = Vec::new();
         for w in &self.writes {
-
             let page = page_from_wire(w)?;
             store.write_page(&page.path, &w.content)?;
             touched.push(page.path);
@@ -518,7 +514,6 @@ fn lint_run_reports_and_logs() {
 
 #[test]
 fn lint_does_not_run_on_every_ingest() {
-
     let base = tmp_root("no-auto-lint");
     let store = WikiStore::new(&base, user(1));
     store.ensure_layout().expect("建三层");

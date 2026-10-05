@@ -1,4 +1,3 @@
-
 use std::collections::BTreeMap;
 
 use axum::extract::{Path, RawQuery, State};
@@ -68,7 +67,6 @@ pub async fn book(
             )
         })?;
     if members.is_empty() {
-
         return Err(ApiError::bad_request(
             "members 为空：没有任何成员要派，记账不会产生任何记录。".to_string(),
         ));

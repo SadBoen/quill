@@ -1,4 +1,3 @@
-
 use crate::{store, Opts, Outcome};
 use quill_wiki::WikiStore;
 

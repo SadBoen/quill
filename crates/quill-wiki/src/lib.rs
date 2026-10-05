@@ -1,4 +1,3 @@
-
 pub mod backend;
 pub mod date;
 pub mod graph;
@@ -46,7 +45,6 @@ mod tests {
 
     #[test]
     fn module_surface_is_reachable() {
-
         let _: Option<PageType> = None;
         let _: Option<LogOp> = None;
         let _: Option<Rule> = None;

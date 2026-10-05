@@ -1,4 +1,3 @@
-
 mod common;
 mod dispatch_seed;
 
@@ -193,7 +192,6 @@ async fn expert_crud_walks_the_full_lifecycle_over_http() {
 
 #[tokio::test]
 async fn user_b_cannot_see_or_touch_user_a_expert_and_gets_404_not_403() {
-
     let t = TestDb::new("http-expert-isolation");
     let app = state(&t);
     build_router(app.clone())
@@ -271,7 +269,6 @@ async fn user_b_cannot_see_or_touch_user_a_expert_and_gets_404_not_403() {
 
 #[tokio::test]
 async fn storage_unavailable_is_503_and_never_an_empty_200() {
-
     let resp = build_router(state_without_db())
         .oneshot(req("GET", "/api/experts", Some(TOKEN_A), None))
         .await
@@ -373,7 +370,6 @@ async fn bad_input_is_400_in_chinese_and_unknown_fields_are_rejected() {
 
 #[tokio::test]
 async fn expert_import_export_are_still_501_not_fake_success() {
-
     let t = TestDb::new("http-expert-501");
     let app = state(&t);
     for (method, path) in [
@@ -396,7 +392,6 @@ async fn expert_import_export_are_still_501_not_fake_success() {
 
 #[tokio::test]
 async fn unauthenticated_expert_requests_are_401_before_anything_else() {
-
     let t = TestDb::new("http-expert-401");
     let resp = build_router(state(&t))
         .oneshot(req("GET", "/api/experts", None, None))

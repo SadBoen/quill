@@ -1,4 +1,3 @@
-
 use crate::Outcome;
 use quill_store::{configure_pool, run_migration};
 use sqlx::SqlitePool;

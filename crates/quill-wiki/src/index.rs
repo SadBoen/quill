@@ -1,4 +1,3 @@
-
 use std::collections::BTreeMap;
 
 use crate::date::Date;
@@ -9,7 +8,6 @@ pub const INDEX_TITLE: &str = "# Wiki 索引";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexEntry {
-
     pub title: String,
 
     pub summary: String,
@@ -22,9 +20,7 @@ pub struct IndexEntry {
 }
 
 impl IndexEntry {
-
     pub fn from_page(p: &Page) -> Option<Self> {
-
         let page_type = p.page_type()?;
         let updated = p.frontmatter.updated.or(p.frontmatter.created)?;
         Some(Self {
@@ -78,7 +74,6 @@ pub struct WikiIndex {
 }
 
 impl WikiIndex {
-
     pub fn new() -> Self {
         Self::default()
     }
@@ -134,7 +129,6 @@ impl WikiIndex {
     }
 
     pub fn render(&self) -> String {
-
         let buckets: [(PageType, &str); 6] = [
             (PageType::Entity, "Entities"),
             (PageType::Concept, "Concepts"),
@@ -346,7 +340,6 @@ mod tests {
 
     #[test]
     fn parse_ignores_non_entry_lines_without_erroring() {
-
         let text = format!(
             "{}\n\n## Concepts\n\n一行说明文字\n- [[A]] — 摘要。（source_count=1, updated=2026-10-04）\n",
             INDEX_TITLE

@@ -1,4 +1,3 @@
-
 mod common;
 mod dispatch_seed;
 
@@ -42,7 +41,6 @@ fn fixture(
     let f = seed(&t.bridge(), u(owner), team_seed, members);
     let mut map: BTreeMap<ExpertId, SessionId> = BTreeMap::new();
     for m in members {
-
         map.insert(e(m), member_session(team_seed, &e(m)));
     }
     let ledger = SqlxDispatchLedger::new(
@@ -55,7 +53,6 @@ fn fixture(
 
 #[test]
 fn begin_twice_returns_created_then_existed() {
-
     let (t, ledger, room) = fixture("dispatch-idempotent", 1, 0x11, &["cost-analyst"]);
     let k = key(u(1), &room, 0, "cost-analyst");
 
@@ -96,7 +93,6 @@ fn begin_twice_returns_created_then_existed() {
 
 #[test]
 fn begin_does_not_overwrite_an_existing_record() {
-
     let (_t, ledger, room) = fixture("dispatch-no-overwrite", 1, 0x12, &["cost-analyst"]);
     let k = key(u(1), &room, 0, "cost-analyst");
 
@@ -126,7 +122,6 @@ fn begin_does_not_overwrite_an_existing_record() {
 
 #[test]
 fn same_key_of_another_user_is_independent() {
-
     let t = TestDb::new("dispatch-isolation");
 
     seed(&t.bridge(), u(1), 0x13, &["cost-analyst"]);
@@ -200,7 +195,6 @@ fn same_key_of_another_user_is_independent() {
 
 #[test]
 fn state_transitions_and_settlement_survive_a_real_roundtrip() {
-
     let (t, ledger, room) = fixture(
         "dispatch-transitions",
         1,
@@ -330,7 +324,6 @@ fn inflight_lists_only_inflight_and_list_round_is_sorted() {
 
 #[test]
 fn missing_member_session_is_reported_and_writes_nothing() {
-
     let t = TestDb::new("dispatch-missing-session");
     seed(&t.bridge(), u(1), 0x17, &["cost-analyst"]);
 
@@ -364,7 +357,6 @@ fn missing_member_session_is_reported_and_writes_nothing() {
 
 #[test]
 fn dispatcher_agrees_with_the_ledger_on_replay() {
-
     use std::sync::Mutex;
 
     #[derive(Debug, Clone, Default)]
@@ -452,7 +444,6 @@ fn dispatcher_agrees_with_the_ledger_on_replay() {
 
 #[test]
 fn a_fresh_bridge_sees_the_dispatches_written_by_the_previous_one() {
-
     let t = TestDb::new("dispatch-restart");
     let path = t.path();
     {

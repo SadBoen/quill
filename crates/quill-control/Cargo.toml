@@ -5,41 +5,17 @@ edition = "2021"
 description = "多用户控制面（账号 / 鉴权 / 会话管理）"
 license = "Apache-2.0"
 
-# crate 依赖方向（docs/PHASE2_CONTRACT.md §一）：
-# 本 crate 允许依赖 quill-adapters / quill-domain / quill-store；
-# 禁止依赖 vendor/goose、quill-agent、quill-wiki、quill-server、quill-ext-hub。
-# 由 scripts/check-crate-deps.sh（G40）强制。
 [dependencies]
 quill-adapters = { path = "../quill-adapters" }
 quill-domain = { path = "../quill-domain" }
 quill-store = { path = "../quill-store" }
 
-# ⚠️ 以下三个**不是新增外部 crate**：三者都已在 Cargo.lock 里
-# （sqlx 由 quill-store 引入、sha2 由 sqlx-core 引入、tokio 由 sqlx 引入），
-# 这里只是把「已经在编译单元里」的依赖写成直接依赖。
-# 判据：`git diff Cargo.lock` 只会多出 quill-control 的 dependencies 列表项，
-# **不会新增任何 [[package]] 条目** —— 「零新增外部 crate」不变式保持。
-#
-# · sqlx：直接对 users / sessions_auth / invites 三表做数据访问。
-#   quill-store 只提供连接层（configure_pool / run_migration），
-#   **不提供任何仓储方法**（实测其 src/lib.rs 只有这些 + 一个 user_dir_name），
-#   故控制面必须自己发 SQL。特性与 quill-store 保持一致，不新增 feature。
-# · sha2：SHA-256 原语。用于 ①会话令牌摘要 ②邀请码摘要 ③PBKDF2 密码派生。
-#   ⚠️ PBKDF2 是**临时方案**，缺口与风险见 src/password.rs 顶部。
-# · tokio：仅测试需要（#[tokio::test]），故只在 dev-dependencies。
 sqlx = { version = "0.8", default-features = false, features = [
     "runtime-tokio",
     "sqlite",
 ] }
 sha2 = "0.10"
 
-# ✅ 主理人裁决 D-2026-10-05-08：唯一被允许的新增外部 crate，**仅**用于
-# 把会话令牌 / 邀请码 / 密码盐的熵源换成真 CSPRNG（crates/quill-control/src/secret.rs）。
-#
-# 为什么不违反「防依赖膨胀」：getrandom 在 Linux 上直接走 getrandom(2) 系统调用，
-# 它的**唯一**传递依赖是 cfg-if，而 cfg-if 早已在 Cargo.lock 里
-# （实测：本仓库已含 cfg-if / libc）—— 故本次新增的 [[package]] 条目恰好一条。
-# 加它之前的替代方案是「用 RandomState 拼种子」，那让令牌可被推算。
 getrandom = "0.4.3"
 
 [dev-dependencies]

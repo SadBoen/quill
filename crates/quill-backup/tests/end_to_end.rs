@@ -1,4 +1,3 @@
-
 use quill_backup::{
     create_backup, restore_backup, BackupError, BackupSource, ExcludedEntry, Manifest,
     MANIFEST_NAME,
@@ -310,7 +309,6 @@ async fn 同一份备份恢复两次结果完全相同() {
 
 #[tokio::test]
 async fn 空目录不进清单恢复后不重建但有文件内容的目录都在() {
-
     let ws = workspace("e2e-emptydir");
     let db_path = ws.join("quill.db");
     let data_root = ws.join("data");
@@ -350,7 +348,6 @@ async fn 空目录不进清单恢复后不重建但有文件内容的目录都�
 
 #[tokio::test]
 async fn 恢复到已有数据的目录时同内容覆盖而不同内容保留() {
-
     let ws = workspace("e2e-keep");
     let db_path = ws.join("quill.db");
     let data_root = ws.join("data");

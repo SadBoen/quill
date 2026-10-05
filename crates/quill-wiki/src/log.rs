@@ -1,9 +1,7 @@
-
 use crate::date::Date;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum LogOp {
-
     Ingest,
 
     Query,
@@ -12,7 +10,6 @@ pub enum LogOp {
 }
 
 impl LogOp {
-
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Ingest => "ingest",
@@ -43,7 +40,6 @@ pub const LOG_HEADING_PREFIX: &str = "## [";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogEntry {
-
     pub date: Date,
 
     pub op: LogOp,
@@ -54,7 +50,6 @@ pub struct LogEntry {
 }
 
 impl LogEntry {
-
     pub fn new(date: Date, op: LogOp, title: impl Into<String>, body: impl Into<String>) -> Self {
         let title = title.into();
         let title = if title.trim().is_empty() {
@@ -91,14 +86,12 @@ impl LogEntry {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ParsedLog {
-
     pub entries: Vec<LogEntry>,
 
     pub skipped_headings: usize,
 }
 
 impl ParsedLog {
-
     pub fn tail(&self, n: usize) -> &[LogEntry] {
         let start = self.entries.len().saturating_sub(n);
         &self.entries[start..]

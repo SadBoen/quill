@@ -1,7 +1,5 @@
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GateRule {
-
     pub id: String,
 
     pub desc: String,
@@ -10,7 +8,6 @@ pub struct GateRule {
 }
 
 impl GateRule {
-
     pub fn new(id: impl Into<String>, desc: impl Into<String>, pattern: impl Into<String>) -> Self {
         Self {
             id: id.into(),
@@ -26,7 +23,6 @@ impl GateRule {
 
 #[derive(Debug, Clone)]
 pub struct RuleSelfTest {
-
     pub rule_id: String,
 
     pub should_detect: bool,
@@ -43,7 +39,6 @@ pub struct GateRuleSet {
 }
 
 impl GateRuleSet {
-
     pub fn new() -> Self {
         Self::default()
     }
@@ -135,14 +130,12 @@ impl GateRuleSet {
 
 #[derive(Debug, Clone)]
 pub struct SelfTestReport {
-
     pub checked: usize,
 
     pub failures: Vec<String>,
 }
 
 impl SelfTestReport {
-
     pub fn is_ok(&self) -> bool {
         self.failures.is_empty()
     }
@@ -215,7 +208,6 @@ mod tests {
 
     #[test]
     fn rule_without_self_test_is_reported() {
-
         let mut s = GateRuleSet::new();
         s.add_rule(GateRule::new("r1", "无自检的规则", "bad"));
         let rep = s.run_self_tests().unwrap();
@@ -225,7 +217,6 @@ mod tests {
 
     #[test]
     fn detect_returns_precise_rule_id() {
-
         let s = build_rules();
         let text = "let a = Config::global(); let b = Paths::config_dir();";
         let ids = s.scan(text);
@@ -236,7 +227,6 @@ mod tests {
 
     #[test]
     fn no_false_positive_on_injected_config_access() {
-
         let s = build_rules();
         let text = "fn get(cfg: &Config) -> PathBuf { cfg.data_dir().to_owned() }";
         assert!(s.scan(text).is_empty(), "注入式访问被误报了");
@@ -244,7 +234,6 @@ mod tests {
 
     #[test]
     fn broken_self_test_is_detected() {
-
         let mut s = GateRuleSet::new();
         s.add_rule(GateRule::new("r1", "测试规则", "Config::global()"));
         s.add_self_test(RuleSelfTest {

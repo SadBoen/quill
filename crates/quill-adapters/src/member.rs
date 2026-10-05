@@ -1,9 +1,7 @@
-
 use crate::ids::{ExpertId, MemberId, SessionId, UserId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AdapterError {
-
     Unauthorized(String),
 
     Forbidden(String),
@@ -20,7 +18,6 @@ pub enum AdapterError {
 }
 
 impl AdapterError {
-
     pub fn detail(&self) -> &str {
         match self {
             Self::Unauthorized(s)
@@ -57,14 +54,12 @@ impl std::error::Error for AdapterError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AbortScope {
-
     StopRound,
 
     AbortRoom,
 }
 
 impl AbortScope {
-
     pub fn halts_members(&self) -> bool {
         matches!(self, Self::AbortRoom)
     }
@@ -87,7 +82,6 @@ pub struct Message {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MessageRole {
-
     User,
 
     Assistant,
@@ -96,7 +90,6 @@ pub enum MessageRole {
 }
 
 impl MessageRole {
-
     pub fn as_wire(&self) -> &'static str {
         match self {
             Self::User => "user",
@@ -107,7 +100,6 @@ impl MessageRole {
 }
 
 impl Message {
-
     pub fn new(role: MessageRole, text: impl Into<String>) -> Result<Self, InvalidMessage> {
         let text = text.into();
         if text.trim().is_empty() {
@@ -131,7 +123,6 @@ impl Message {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InvalidMessage {
-
     EmptyText,
 }
 
@@ -152,7 +143,6 @@ pub struct ChainHop {
 }
 
 impl ChainHop {
-
     pub fn new(node: impl Into<String>, task: impl Into<String>) -> Result<Self, InvalidChainHop> {
         let node = node.into();
         let task = task.into();
@@ -176,7 +166,6 @@ impl ChainHop {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InvalidChainHop {
-
     EmptyNode,
 
     EmptyTask,
@@ -207,17 +196,11 @@ pub struct MemberStartRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InvalidStartRequest {
-
     EmptyTitle,
 
     EmptyInstructions,
 
-    MemberExpertMismatch {
-
-        expert: String,
-
-        member: String,
-    },
+    MemberExpertMismatch { expert: String, member: String },
 }
 
 impl std::fmt::Display for InvalidStartRequest {
@@ -236,7 +219,6 @@ impl std::fmt::Display for InvalidStartRequest {
 impl std::error::Error for InvalidStartRequest {}
 
 impl MemberStartRequest {
-
     pub fn new(
         owner: UserId,
         session: SessionId,
@@ -319,7 +301,6 @@ impl MemberStartRequest {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MemberStatus {
-
     Done,
 
     Partial,
@@ -330,7 +311,6 @@ pub enum MemberStatus {
 }
 
 impl MemberStatus {
-
     pub fn as_wire(&self) -> &'static str {
         match self {
             Self::Done => "done",
@@ -361,7 +341,6 @@ pub struct MemberOutcome {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InvalidOutcome {
-
     EmptyScope,
 
     MissingOutput,
@@ -382,7 +361,6 @@ impl std::fmt::Display for InvalidOutcome {
 impl std::error::Error for InvalidOutcome {}
 
 impl MemberOutcome {
-
     pub fn new(
         member: MemberId,
         status: MemberStatus,
@@ -399,7 +377,6 @@ impl MemberOutcome {
                 return Err(InvalidOutcome::MissingOutput);
             }
         } else if !output.trim().is_empty() {
-
             return Err(InvalidOutcome::BlankOutput);
         }
         Ok(Self {
@@ -437,25 +414,11 @@ impl MemberOutcome {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChainCheck {
+    Ok { depth: usize },
 
-    Ok {
+    Cycle { node: String, first_at: usize },
 
-        depth: usize,
-    },
-
-    Cycle {
-
-        node: String,
-
-        first_at: usize,
-    },
-
-    TooDeep {
-
-        depth: usize,
-
-        max: usize,
-    },
+    TooDeep { depth: usize, max: usize },
 }
 
 pub const MAX_CHAIN_DEPTH: usize = 4;
@@ -478,7 +441,6 @@ pub fn check_chain(chain: &[ChainHop], node: &str) -> ChainCheck {
 }
 
 pub trait MemberExecutor: Send + Sync + 'static {
-
     fn start(
         &self,
         req: MemberStartRequest,
@@ -538,7 +500,6 @@ mod tests {
 
     #[test]
     fn adapter_error_variants_have_distinct_wire_prefixes() {
-
         let errs = [
             AdapterError::Unauthorized("a".into()),
             AdapterError::Forbidden("a".into()),
@@ -599,7 +560,6 @@ mod tests {
 
     #[test]
     fn message_rejects_empty_and_whitespace_text() {
-
         for bad in ["", " ", "\t", "\n", "  \r\n  "] {
             assert_eq!(
                 Message::user(bad).unwrap_err(),
@@ -648,12 +608,10 @@ mod tests {
             r.session().to_compact_hex(),
             "已检查：owner 与 session 携带不同的身份值"
         );
-
     }
 
     #[test]
     fn start_request_rejects_member_of_a_different_expert() {
-
         let err = MemberStartRequest::new(
             u(1),
             s(2),
@@ -733,7 +691,6 @@ mod tests {
 
     #[test]
     fn outcome_deliverable_status_without_output_is_rejected() {
-
         for status in [MemberStatus::Done, MemberStatus::Partial] {
             assert_eq!(
                 MemberOutcome::new(member("m-1"), status, "s", "").unwrap_err(),
@@ -750,7 +707,6 @@ mod tests {
 
     #[test]
     fn outcome_non_deliverable_status_with_output_is_rejected() {
-
         for status in [MemberStatus::Failed, MemberStatus::Cancelled] {
             assert_eq!(
                 MemberOutcome::new(member("m-1"), status, "s", "半截内容").unwrap_err(),
@@ -762,7 +718,6 @@ mod tests {
 
     #[test]
     fn outcome_requires_scope_even_when_failed() {
-
         for bad in ["", "  "] {
             assert_eq!(
                 MemberOutcome::new(member("m-1"), MemberStatus::Failed, bad, "").unwrap_err(),
@@ -812,7 +767,6 @@ mod tests {
 
     #[test]
     fn chain_detects_a_to_b_to_a_cycle() {
-
         let chain = vec![
             ChainHop::new("node-a", "t-001").expect("应合法"),
             ChainHop::new("node-b", "t-002").expect("应合法"),
@@ -850,7 +804,6 @@ mod tests {
 
     #[test]
     fn chain_too_deep_is_reported_with_actual_and_limit() {
-
         let chain: Vec<ChainHop> = (0..4)
             .map(|i| ChainHop::new(format!("node-{i}"), format!("t-{i}")).expect("应合法"))
             .collect();
@@ -870,7 +823,6 @@ mod tests {
 
     #[test]
     fn chain_check_outcomes_are_mutually_exclusive_across_full_length_sweep() {
-
         let mut ok = 0;
         let mut cycle = 0;
         let mut deep = 0;

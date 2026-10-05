@@ -1,72 +1,3 @@
--- ════════════════════════════════════════════════════════════════════════════
--- Quill v1 schema
---
--- 实测环境：SQLite 3.46.1（44 条语句全部干净应用；41 项隔离性断言全绿）
---   ⚠️ 2026-10-05 接手复核：原写「3.53.1」有误，本机实测为 3.46.1
---      （Python 3.13.5 内置 sqlite3 模块；WSL 无 sqlite3 CLI，故全部走模块）。
---      44 条 = 14 CREATE TABLE + 22 CREATE INDEX + 8 CREATE UNIQUE INDEX，已复核。
--- 验证脚本（已入库，不再是 .scratch 里的悬空声明）：
---   crates/quill-store/verify/run.sh            一键跑全部，rc≠0 即失败
---   crates/quill-store/verify/verify.py          41 项隔离性/约束/执行计划断言
---   crates/quill-store/verify/assert_invites.py  17 项 invites 结构与「零写路径」断言
---   crates/quill-store/verify/retrieval_final.py 15 查询词召回率对照实验（非断言，rc 恒 0）
---   三者均以 __file__ 推算路径，直接指向本文件，无副本、不依赖任何外部 CLI。
---
--- 约定：
---   BLOB id      = uuid v7 原始 16 字节（时间有序 → B-tree 追加写入不分裂）
---   INTEGER 时间  = Unix epoch 毫秒 UTC（SQLite 无 DATE 类型；INTEGER 比较最快）
---   全部 STRICT  = 写入时类型错配立即报错，不留到查询期
---   全部软删除    = deleted_at（NULL = 存活），唯一索引用部分索引
---
--- ┌─────────────────────────────────────────────────────────────────────────┐
--- │ 检索层说明（曾被误判为「缺 FTS5 虚表 = 检索功能不存在」，此处留档）      │
--- │                                                                         │
--- │ 本 schema 【不】建 FTS5 虚表，这是实测结论而非遗漏：                    │
--- │   方案                              召回率    约束能力                   │
--- │   ────────────────────────────────  ────────  ──────────────────────    │
--- │   FTS5 default(unicode61)             0/15    —                          │
--- │   FTS5 trigram                        4/15    —                          │
--- │   FTS5 + jieba 预分词                11/15    STRICT/CHECK/FK 全不支持 │
--- │   ★ wiki_index 自建倒排 + BM25       11/15    全部支持                  │
--- │   （实测脚本 verify/retrieval_final.py，15 个查询词全部出自原文）       │
--- │                                                                         │
--- │ 三条否决理由：                                                          │
--- │   1. FTS5 是【精确 token 匹配】，不做子串召回。索引存「知识库设计」      │
--- │      时查「知识」返回 0（实测）。⚠️ 但「知识」在 wiki_index 上同样      │
--- │      返回 0（实测 4/15 未命中含「知识」）：根因是分词边界 —— 3 字复合词│
--- │      吸收了 2 字查询词，wiki_index 本身不能凭空补回没入库的词。          │
--- │      正确表述是「wiki_index【可以】做子串召回，但前提是入库端同时索引   │
--- │      2-gram 与复合词」（见下方 wiki_index 段与 quill-wiki 分词器约定）。 │
--- │   2. 虚表拿不到数据库约束。实测 CREATE VIRTUAL TABLE ... CHECK(x)       │
--- │      → "parse error"。而 user_id 隔离正是靠 CHECK/FK/复合主键实现的     │
--- │      （见 messages 的复合外键）。引入虚表 = 开一个不受保护的口子。        │
--- │   3. 加了它还要保证两套索引一致 —— 重建顺序、失败处理、对账全部翻倍。    │
--- │                                                                         │
--- │ BM25 在 wiki_index 上完全可执行：SQL 取倒排，Rust 侧打分。             │
--- │ 若未来 wiki 规模到 BM25 变慢（真实瓶颈），正确做法是换 tantivy          │
--- │ （真倒排库，支持中文 analyzer），而不是补 FTS5 虚表。                    │
--- └─────────────────────────────────────────────────────────────────────────┘
---
--- ┌─────────────────────────────────────────────────────────────────────────┐
--- │ ⚠️ busy_timeout —— 为什么「为什么」要写在 DDL 文件里                       │
--- │                                                                         │
--- │ 实际 PRAGMA 设置在 Rust 侧连接池（quill-store/src/pool.rs），因为        │
--- │ PRAGMA 是【连接级】的、不是【数据库级】的 —— 它不被记在数据库文件里。     │
--- │ 但「为什么必须设」属于 schema 约束，写在这里防止后人误删：              │
--- │                                                                         │
--- │   1. 写池 size=1 时，默认 busy_timeout=0 → 第 2 个并发写者立即          │
--- │      SQLITE_BUSY 报错，而不是等待。配 5000ms = 等 5 秒。                 │
--- │   2. journal_mode=WAL 与 busy_timeout 必须【同批 PRAGMA 设置】。        │
--- │      若 pool.rs 里 WAL 已生效但 busy_timeout 因某分支漏设，             │
--- │      WAL 单写者的排队等待就退化成立即失败 —— 静默劣化，不报错。          │
--- │   3. 两者顺序也有讲究：先 journal_mode=WAL（改写数据库头，              │
--- │      需要独占锁），再 busy_timeout（纯连接属性）。                      │
--- │                                                                         │
--- │ 必测断言（见 verify.py 与 backend-engineer 的连接池测试）：              │
--- │   对连接池中【每一条连接】断言 PRAGMA foreign_keys = 1                   │
--- │   —— foreign_keys 默认是 OFF，漏开则本文所有复合外键全部形同虚设。       │
--- └─────────────────────────────────────────────────────────────────────────┘
--- ════════════════════════════════════════════════════════════════════════════
 
 CREATE TABLE schema_version (
   version     INTEGER NOT NULL PRIMARY KEY,
@@ -78,8 +9,6 @@ CREATE TABLE schema_version (
   note        TEXT    NOT NULL DEFAULT ''
 ) STRICT;
 
--- ─────────────────────────── control 域 ───────────────────────────
-
 CREATE TABLE users (
   id               BLOB    NOT NULL PRIMARY KEY,
   username         TEXT    NOT NULL,
@@ -87,13 +16,7 @@ CREATE TABLE users (
   display_name     TEXT    NOT NULL,
   password_hash    BLOB    NOT NULL,
   password_salt    BLOB    NOT NULL,
-  -- ⚠️ 曾经这里写着 DEFAULT 'argon2id'，但实现的算法是 PBKDF2-HMAC-SHA256
-  --    （见 crates/quill-control/src/password.rs 模块文档）。
-  --    一个"默认写成没实现的算法"的 schema 比没有 schema 更危险：漏写该列的行
-  --    会**静默**存下 argon2id，而验证端根本不认这个值——用户永远登不进去，
-  --    且没有任何一行报错。故这里**刻意不给默认值**：漏写列 = 立即 INSERT 失败。
-  -- 取值不枚举：合法值由 quill-control 的 PasswordHasher::algo_tag() 产出，
-  -- schema 不认识 Rust 常量，枚举即漂移（铁律：验证器不得与被验证对象共享真相源）。
+
   password_algo    TEXT    NOT NULL,
   role             TEXT    NOT NULL,
   status           TEXT    NOT NULL DEFAULT 'active',
@@ -162,15 +85,13 @@ CREATE TABLE invites (
   CHECK (length(code_hash) = 32),
   CHECK (role IN ('owner','member')),
   CHECK (used_count <= max_uses),
-  -- 邀请码必须能在被接受前过期；否则建出来就是「一出生就过期」的废数据
+
   CHECK (expires_at > created_at),
   FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE,
   FOREIGN KEY (accepted_by) REFERENCES users(id) ON DELETE SET NULL
 ) STRICT;
 
 CREATE UNIQUE INDEX ux_invites_code ON invites (code_hash);
-
--- ─────────────────────────── ext-hub 域 ───────────────────────────
 
 CREATE TABLE experts (
   id             TEXT    NOT NULL,
@@ -293,20 +214,6 @@ CREATE TABLE plugins (
 CREATE INDEX ix_plugins_enabled ON plugins (user_id, enabled)
   WHERE deleted_at IS NULL;
 
--- ═══════════════ BM25 倒排索引（可重建缓存）═══════════════
---
--- ★ 这张表【就是】资料库的检索索引，BM25 在它上面执行。
---   检索流程：SQL 按 (user_id, term) 取倒排 → Rust 侧算 BM25 → 按 positions 截片段。
---   实测（verify/retrieval_final.py）：中文召回 11/15，与 FTS5+jieba 预分词持平。
---   4 个未命中均为「2 字查询词被 3 字复合词吸收」的分词边界问题（所有方案共性），
---   靠【入库端同时索引 2-gram 与复合词】解决，见 quill-wiki 的分词器约定。
---
---   真相源是 data/{uid}/wiki/wiki/**.md，本表可随时 DELETE + 重建：
---     cargo xtask wiki reindex --user <id>
---
---   两个额外索引服务两件事（均非主键前缀，故必需）：
---     ix_wiki_doc  → 增量更新时删某文档的全部词条
---     ix_wiki_path → reindex 完整性对账（xtask wiki verify 的双向 diff）
 CREATE TABLE wiki_index (
   user_id      BLOB    NOT NULL,
   term         TEXT    NOT NULL,
@@ -334,8 +241,6 @@ CREATE TABLE wiki_index (
 
 CREATE INDEX ix_wiki_doc ON wiki_index (user_id, doc_id);
 CREATE INDEX ix_wiki_path ON wiki_index (user_id, rel_path);
-
--- ─────────────────────────── agent 域 ───────────────────────────
 
 CREATE TABLE sessions (
   user_id             BLOB    NOT NULL,
@@ -492,11 +397,8 @@ CREATE TABLE task_dispatches (
   FOREIGN KEY (user_id, member_session_id) REFERENCES sessions(user_id, id) ON DELETE CASCADE
 ) STRICT;
 
-
-
 CREATE UNIQUE INDEX ux_teams_room ON teams (user_id, room_id) WHERE deleted_at IS NULL;
 CREATE INDEX ix_teams_recent ON teams (user_id, updated_at DESC) WHERE deleted_at IS NULL;
-
 
 CREATE INDEX ix_sessions_recent ON sessions (user_id, last_active_at DESC, id)
   WHERE deleted_at IS NULL;
@@ -506,18 +408,15 @@ CREATE UNIQUE INDEX ux_sessions_checkpoint ON sessions (user_id, checkpoint_key)
 CREATE INDEX ix_sessions_inflight ON sessions (user_id, last_active_at)
   WHERE deleted_at IS NULL AND state IN ('PLANNING','DISPATCHING','COLLECTING','DELIVERING','running','cancelling');
 
-
 CREATE UNIQUE INDEX ux_team_leader ON team_members (user_id, team_id) WHERE role = 'leader';
 CREATE INDEX ix_tm_expert ON team_members (user_id, expert_id);
 CREATE INDEX ix_tm_state ON team_members (user_id, team_id, state);
-
 
 CREATE UNIQUE INDEX ux_messages_seq ON messages (user_id, session_id, seq);
 CREATE INDEX ix_messages_context ON messages (user_id, session_id, seq DESC);
 CREATE INDEX ix_messages_citations ON messages (user_id, session_id, seq)
   WHERE citations_json IS NOT NULL;
 CREATE INDEX ix_messages_dispatch ON messages (user_id, dispatch_id) WHERE dispatch_id IS NOT NULL;
-
 
 CREATE UNIQUE INDEX ux_dispatch_once
   ON task_dispatches (user_id, room_id, round, member_expert_id);

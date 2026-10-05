@@ -1,9 +1,7 @@
-
 use crate::date::Date;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PageType {
-
     Summary,
 
     Entity,
@@ -18,7 +16,6 @@ pub enum PageType {
 }
 
 impl PageType {
-
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Summary => "summary",
@@ -67,7 +64,6 @@ impl std::str::FromStr for PageType {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnknownField {
-
     pub key: String,
 
     pub value: String,
@@ -75,7 +71,6 @@ pub struct UnknownField {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Frontmatter {
-
     pub title: Option<String>,
 
     pub page_type: Option<PageType>,
@@ -93,14 +88,18 @@ pub struct Frontmatter {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PageWarning {
-
     MissingFrontmatter,
 
     UnterminatedFrontmatter,
 
-    MalformedFrontmatterLine { line_no: usize, raw: String },
+    MalformedFrontmatterLine {
+        line_no: usize,
+        raw: String,
+    },
 
-    UnknownPageType { raw: String },
+    UnknownPageType {
+        raw: String,
+    },
 
     BadDate {
         key: String,
@@ -108,13 +107,21 @@ pub enum PageWarning {
         reason: String,
     },
 
-    BadSourceCount { raw: String },
+    BadSourceCount {
+        raw: String,
+    },
 
-    UnclosedWikilink { at: usize },
+    UnclosedWikilink {
+        at: usize,
+    },
 
-    EmptyWikilink { at: usize },
+    EmptyWikilink {
+        at: usize,
+    },
 
-    NestedWikilink { at: usize },
+    NestedWikilink {
+        at: usize,
+    },
 }
 
 impl std::fmt::Display for PageWarning {
@@ -148,7 +155,6 @@ impl std::fmt::Display for PageWarning {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Wikilink {
-
     pub target: String,
 
     pub alias: Option<String>,
@@ -173,7 +179,6 @@ impl std::fmt::Display for Wikilink {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Page {
-
     pub path: String,
 
     pub frontmatter: Frontmatter,
@@ -186,7 +191,6 @@ pub struct Page {
 }
 
 impl Page {
-
     pub fn title(&self) -> String {
         self.frontmatter
             .title
@@ -267,7 +271,6 @@ fn parse_frontmatter(
     let mut i = start;
     let body_start = loop {
         if i >= lines.len() {
-
             warnings.push(PageWarning::UnterminatedFrontmatter);
 
             break i;
@@ -295,14 +298,12 @@ fn parse_frontmatter(
             let item = trimmed[2..].trim();
             match list_key.as_deref() {
                 Some("tags") => {
-
                     let item = item.trim_matches(['"', '\'']);
                     if !item.is_empty() {
                         fm.tags.push(item.to_string());
                     }
                 }
                 Some(other) => {
-
                     fm.unknown.push(UnknownField {
                         key: other.to_string(),
                         value: format!("[列表项 {item}]"),
@@ -334,7 +335,6 @@ fn parse_frontmatter(
         }
 
         if value.is_empty() {
-
             list_key = Some(key);
             continue;
         }
@@ -350,7 +350,6 @@ fn closing_exists_after(lines: &[&str], i: usize) -> bool {
 }
 
 fn apply_field(fm: &mut Frontmatter, key: &str, value: &str, warnings: &mut Vec<PageWarning>) {
-
     let unquoted = value.trim();
     let unquoted = unquoted
         .strip_prefix('"')
@@ -375,7 +374,6 @@ fn apply_field(fm: &mut Frontmatter, key: &str, value: &str, warnings: &mut Vec<
             }),
         },
         "tags" => {
-
             if let Some(inner) = unquoted.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
                 for part in inner.split(',') {
                     let t = part.trim().trim_matches(['"', '\'']);
@@ -387,29 +385,26 @@ fn apply_field(fm: &mut Frontmatter, key: &str, value: &str, warnings: &mut Vec<
                 fm.tags.push(unquoted.to_string());
             }
         }
-        "created" | "updated" => {
-
-            match Date::parse(unquoted) {
-                Ok(d) => {
-                    if key == "created" {
-                        fm.created = Some(d);
-                    } else {
-                        fm.updated = Some(d);
-                    }
-                }
-                Err(e) => {
-                    fm.unknown.push(UnknownField {
-                        key: key.to_string(),
-                        value: unquoted.to_string(),
-                    });
-                    warnings.push(PageWarning::BadDate {
-                        key: key.to_string(),
-                        raw: unquoted.to_string(),
-                        reason: e.to_string(),
-                    });
+        "created" | "updated" => match Date::parse(unquoted) {
+            Ok(d) => {
+                if key == "created" {
+                    fm.created = Some(d);
+                } else {
+                    fm.updated = Some(d);
                 }
             }
-        }
+            Err(e) => {
+                fm.unknown.push(UnknownField {
+                    key: key.to_string(),
+                    value: unquoted.to_string(),
+                });
+                warnings.push(PageWarning::BadDate {
+                    key: key.to_string(),
+                    raw: unquoted.to_string(),
+                    reason: e.to_string(),
+                });
+            }
+        },
         "source_count" => match unquoted.parse::<u32>() {
             Ok(n) => fm.source_count = Some(n),
             Err(_) => warnings.push(PageWarning::BadSourceCount {
@@ -443,11 +438,9 @@ pub fn parse_wikilinks(body: &str, warnings: &mut Vec<PageWarning>) -> Vec<Wikil
         let t = line.trim_start();
         match open_fence {
             Some(marker) => {
-
                 if t.starts_with(marker) && t[marker.len()..].trim().is_empty() {
                     open_fence = None;
                 }
-
             }
             None => match fence_marker_of(t) {
                 Some(marker) => open_fence = Some(marker),
@@ -501,7 +494,6 @@ fn scan_line(line: &str, base: usize, out: &mut Vec<Wikilink>, warnings: &mut Ve
         let alias = alias.filter(|a| !a.is_empty());
 
         if target.is_empty() {
-
             warnings.push(PageWarning::EmptyWikilink { at: base + open });
             i = close + 2;
             continue;
@@ -556,7 +548,6 @@ mod tests {
 
     #[test]
     fn parses_spec_example() {
-
         let text = "---\n\
 title: Rust 所有权\n\
 type: concept\n\
@@ -601,7 +592,6 @@ source_count: 3\n\
 
     #[test]
     fn unterminated_frontmatter_keeps_what_it_parsed() {
-
         let p = parse_page("a.md", "---\ntitle: A\ntype: entity\n\n正文仍在。\n");
         assert!(p.warnings.contains(&PageWarning::UnterminatedFrontmatter));
         assert_eq!(p.frontmatter.title.as_deref(), Some("A"));
@@ -656,7 +646,6 @@ source_count: 3\n\
 
     #[test]
     fn nested_and_broken_wikilinks() {
-
         let text = "---\ntitle: 嵌套用例\ntype: concept\n---\n\n真链接 [[A]]，嵌套写法 [[外层 [[内层]] 收尾]] 结束，未闭合 [[B";
         let p = parse_page("a.md", text);
         assert_eq!(p.links.len(), 1);
@@ -675,7 +664,6 @@ source_count: 3\n\
 
     #[test]
     fn page_internal_anchor_is_not_a_link_edge() {
-
         let p = parse_page("a.md", "见 [[#小节]]。\n");
         assert!(p.links.is_empty(), "页内锚点不该产生边：{:?}", p.links);
     }

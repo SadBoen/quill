@@ -1,5 +1,3 @@
-﻿
-
 pub mod cmd_backup;
 pub mod cmd_doctor;
 pub mod cmd_experts;
@@ -87,7 +85,6 @@ pub struct Opts {
 }
 
 impl Opts {
-
     pub fn parse(args: &[String]) -> Result<Self, Outcome> {
         let mut o = Opts {
             user: "alice".into(),

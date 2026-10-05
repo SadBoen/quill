@@ -6,24 +6,12 @@ description = "备份与恢复（WAL 安全一致性）"
 license = "Apache-2.0"
 
 [dependencies]
-# crate 依赖方向（契约 §1）：quill-backup 允许依赖 adapters + domain。
+
 quill-adapters = { path = "../quill-adapters" }
 quill-domain = { path = "../quill-domain" }
-# ⚠️ quill-store：一致性备份必须走 `VACUUM INTO`（铁律三），
-#    该语句要在**打开目标库的连接**上执行，故需要它的连接池类型。
-#    quill-store 本身只提供连接层（configure_pool / run_migration），不提供仓储，
-#    符合本 crate「只做备份恢复」的边界。
+
 quill-store = { path = "../quill-store" }
 
-# ⚠️ 以下两个**不是新增外部 crate**：两者都已在 Cargo.lock 里
-# （sqlx 由 quill-store 引入、sha2 由 sqlx-core 引入），
-# 这里只是把「已经在编译单元里」的依赖写成直接依赖。
-# 判据：`git diff -- Cargo.lock` 不会新增任何 `[[package]]` 条目
-# ——「零新增外部 crate」不变式保持（docs/FACTS.md 第三节）。
-#
-# · sqlx：发 `VACUUM INTO` / `PRAGMA integrity_check`。
-#   特性与 quill-store 保持一致，不新增 feature（feature 会改变依赖树）。
-# · sha2：SHA-256，用于清单里的内容摘要（损坏检测，非防篡改认证）。
 sqlx = { version = "0.8", default-features = false, features = [
     "runtime-tokio",
     "sqlite",
@@ -31,7 +19,7 @@ sqlx = { version = "0.8", default-features = false, features = [
 sha2 = "0.10"
 
 [dev-dependencies]
-# ⚠️ tokio 仅测试需要（#[tokio::test]），故只在 dev-dependencies。
+
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [lints.rust]

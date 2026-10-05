@@ -1,4 +1,3 @@
-
 use axum::extract::Path;
 use axum::routing::{get, patch, post};
 use axum::Router;
@@ -13,14 +12,12 @@ fn not_implemented(method: &'static str, path: &'static str) -> ApiError {
 }
 
 pub fn build_router(state: AppState) -> Router {
-
     let mut public = Router::new()
         .route("/healthz", get(healthz))
         .route("/api/auth/login", post(login_stub))
         .route("/api/auth/refresh", post(refresh_stub));
 
     if state.config.enable_selftest {
-
         async fn selftest_panic() -> axum::response::Response {
             panic!("自检用内部信息：不得泄漏到响应体");
         }
@@ -258,10 +255,8 @@ pub fn build_router(state: AppState) -> Router {
         .merge(backup)
         .merge(upgrade)
         .merge(authed_misc)
-
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
-
         .layer(crate::middleware::GuardLayer)
         .with_state(state)
 }
@@ -316,7 +311,6 @@ async fn version(_u: crate::auth::AuthUser) -> impl axum::response::IntoResponse
     use serde_json::json;
     Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
-        "contract": "docs/PHASE2_CONTRACT.md §5.1",
     }))
 }
 

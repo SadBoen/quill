@@ -1,4 +1,3 @@
-
 use std::sync::Arc;
 
 use quill_adapters::{ExpertId, SessionId, UserId};
@@ -6,7 +5,6 @@ use quill_server::db::{storage_error, DbBridge};
 
 #[derive(Debug, Clone)]
 pub struct Fixture {
-
     pub team_id: [u8; 16],
 
     pub leader_session: SessionId,

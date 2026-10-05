@@ -1,4 +1,3 @@
-
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -34,7 +33,6 @@ struct WorkerHandle {
 
 impl Drop for WorkerHandle {
     fn drop(&mut self) {
-
         if let Ok(mut slot) = self.handle.lock() {
             if let Some(h) = slot.take() {
                 let _ = h.join();
@@ -45,7 +43,6 @@ impl Drop for WorkerHandle {
 
 impl fmt::Debug for DbBridge {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-
         f.debug_struct("DbBridge")
             .field("path", &self.path)
             .finish_non_exhaustive()
@@ -53,7 +50,6 @@ impl fmt::Debug for DbBridge {
 }
 
 impl DbBridge {
-
     pub fn open(path: &str, max_connections: u32) -> Result<Self, AgentError> {
         let (job_tx, job_rx) = mpsc::channel::<Job>();
         let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
@@ -84,7 +80,6 @@ impl DbBridge {
                     }
                 };
                 if ready_tx.send(Ok(())).is_err() {
-
                     return;
                 }
                 thread_alive.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -113,7 +108,6 @@ impl DbBridge {
                 path: path.to_string(),
             }),
             Ok(Err(msg)) => {
-
                 let _ = worker.join();
                 Err(AgentError::Storage { detail: msg })
             }
@@ -219,9 +213,7 @@ impl DbBridge {
 }
 
 impl Drop for DbBridge {
-    fn drop(&mut self) {
-
-    }
+    fn drop(&mut self) {}
 }
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -318,7 +310,6 @@ mod tests {
 
     #[test]
     fn digest16_distinguishes_segment_boundaries() {
-
         let a = digest16("dispatch-id", &[b"ab", b"c"]);
         let b = digest16("dispatch-id", &[b"a", b"bc"]);
         assert_ne!(a, b, "分段边界不同必须产出不同标识");

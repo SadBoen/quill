@@ -1,9 +1,7 @@
-
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FaultInjection {
-
     pub kind: FaultKind,
 
     pub times: Option<u32>,
@@ -12,7 +10,6 @@ pub struct FaultInjection {
 }
 
 impl Default for FaultInjection {
-
     fn default() -> Self {
         Self {
             kind: FaultKind::Http5xx,
@@ -24,7 +21,6 @@ impl Default for FaultInjection {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FaultKind {
-
     Http5xx,
 
     Http429,
@@ -45,7 +41,6 @@ pub enum FaultKind {
 }
 
 impl FaultKind {
-
     pub fn parse(s: &str) -> Option<Self> {
         Some(match s {
             "http_500" => Self::Http5xx,
@@ -68,7 +63,6 @@ impl FaultKind {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MatchCond {
-
     pub role: Option<String>,
 
     pub contains: Option<String>,
@@ -77,7 +71,6 @@ pub struct MatchCond {
 }
 
 impl MatchCond {
-
     pub fn user_contains(s: &str) -> Self {
         Self {
             role: Some("user".into()),
@@ -97,7 +90,6 @@ impl MatchCond {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Step {
-
     pub match_cond: MatchCond,
 
     pub fault: Option<FaultInjection>,
@@ -105,16 +97,13 @@ pub struct Step {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Scenario {
-
     pub name: String,
 
     pub steps: Vec<Step>,
 }
 
 impl Scenario {
-
     pub fn from_yaml(yaml: &str) -> Result<Self, ScriptError> {
-
         let mut name = String::new();
         let mut steps = Vec::new();
         let mut cur: Option<Step> = None;
@@ -194,7 +183,6 @@ impl Scenario {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScriptError {
-
     Syntax { line: usize, msg: String },
 }
 
@@ -228,7 +216,6 @@ fn parse_match(s: &str) -> MatchCond {
 }
 
 fn parse_fault(s: &str) -> FaultInjection {
-
     let inner = s.trim().trim_start_matches('{').trim_end_matches('}');
     let map: BTreeMap<&str, &str> = inner
         .split(',')
@@ -275,21 +262,18 @@ mod tests {
 
     #[test]
     fn missing_name_is_rejected() {
-
         let r = Scenario::from_yaml("steps:\n  - match: { role: user }");
         assert!(r.is_err(), "缺 name 必须报错");
     }
 
     #[test]
     fn no_match_returns_none_not_empty() {
-
         let s = Scenario::from_yaml(SAMPLE_TEAM_SCENARIO).unwrap();
         assert!(s.find_step("完全无关的内容").is_none());
     }
 
     #[test]
     fn match_is_by_content_not_order() {
-
         let s = Scenario::from_yaml(SAMPLE_TEAM_SCENARIO).unwrap();
 
         let st = s.find_step("现在请 __FINAL__ 汇总").unwrap();
@@ -303,7 +287,6 @@ mod tests {
 
     #[test]
     fn hang_is_marked_permanent() {
-
         assert!(FaultKind::Hang.is_permanent());
         assert!(!FaultKind::Http5xx.is_permanent());
     }

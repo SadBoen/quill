@@ -1,4 +1,3 @@
-
 #![forbid(unsafe_code)]
 #![deny(missing_debug_implementations)]
 
@@ -23,7 +22,6 @@ mod tests {
 
     #[test]
     fn public_surface_is_reachable() {
-
         assert_eq!(MANIFEST_NAME, "MANIFEST");
         assert_eq!(MANIFEST_VERSION, "v1");
         assert!(is_digest_hex(&sha256_bytes(b"quill")));

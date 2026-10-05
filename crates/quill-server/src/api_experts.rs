@@ -1,4 +1,3 @@
-
 use axum::extract::{Path, State};
 use axum::Json;
 use serde_json::{json, Value};
@@ -87,7 +86,6 @@ pub async fn patch(
         touched = true;
     }
     if !touched {
-
         return Err(ApiError::bad_request(
             "请求体里没有任何可改字段。\
              可改字段：display_name（字符串）、description（字符串）、default_enabled（布尔）。"
@@ -221,7 +219,6 @@ pub fn map_agent_error<T>(op: &str, r: Result<T, AgentError>) -> Result<T, ApiEr
 }
 
 pub fn agent_error_to_api(op: &str, e: AgentError) -> ApiError {
-
     eprintln!("[api] {op} 失败（错误码 {}）：{e}", e.code());
     match e {
         AgentError::ExpertNotFound { id } | AgentError::ExpertDeleted { id } => {
@@ -271,7 +268,6 @@ mod tests {
 
     #[test]
     fn storage_error_never_leaks_the_underlying_sql_text() {
-
         let internal = "no such table: experts (code 1)";
         let err = agent_error_to_api(
             "列出专家",

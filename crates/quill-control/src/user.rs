@@ -1,4 +1,3 @@
-
 use quill_domain::UserId;
 
 use crate::error::ControlError;
@@ -11,14 +10,12 @@ pub const MAX_DISPLAY_NAME_LEN: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UserRole {
-
     Owner,
 
     Member,
 }
 
 impl UserRole {
-
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Owner => "owner",
@@ -43,14 +40,12 @@ impl UserRole {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UserStatus {
-
     Active,
 
     Disabled,
 }
 
 impl UserStatus {
-
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Active => "active",
@@ -73,7 +68,6 @@ impl UserStatus {
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct UserProfile {
-
     pub id: UserId,
 
     pub username: String,
@@ -129,7 +123,6 @@ pub fn validate_username(username_norm: &str) -> Result<(), ControlError> {
     for ch in username_norm.chars() {
         let ok = ch.is_ascii_alphanumeric() || ch == '.' || ch == '_' || ch == '-';
         if !ok {
-
             if ch.is_whitespace() {
                 return Err(bad("含空格 —— 用户名不能有空格，请用下划线"));
             }
@@ -183,7 +176,6 @@ mod tests {
 
     #[test]
     fn valid_usernames_pass() {
-
         let cases: Vec<String> = vec![
             "abc".to_string(),
             "zhang_wei".to_string(),
@@ -212,7 +204,6 @@ mod tests {
                 "zhang@wei",
                 "含非法字符 —— 只允许 a-z、0-9、点、下划线、连字符",
             ),
-
             (
                 "zhang伟民",
                 "含非 ASCII 字符 —— 只允许 a-z、0-9、点、下划线、连字符",
@@ -239,7 +230,6 @@ mod tests {
 
     #[test]
     fn uppercase_is_rejected_after_normalization_but_normalization_removes_it() {
-
         let n = normalize_username("ZhangWei");
         assert_eq!(n, "zhangwei");
         assert!(validate_username(&n).is_ok());
@@ -282,7 +272,6 @@ mod tests {
 
     #[test]
     fn role_and_status_reject_values_outside_schema_check() {
-
         for bad in ["admin", "OWNER", "", "owner "].iter() {
             assert!(UserRole::parse(bad).is_err(), "{bad:?} 必须被拒");
         }

@@ -1,28 +1,22 @@
-
 use std::fmt;
 use std::io;
 use std::path::Path;
 
 #[derive(Debug)]
 pub enum BackupError {
-
     DbMissing {
-
         path: Box<Path>,
     },
 
     DataRootMissing {
-
         path: Box<Path>,
     },
 
     DestNotEmpty {
-
         path: Box<Path>,
     },
 
     Io {
-
         what: String,
 
         path: Box<Path>,
@@ -31,19 +25,16 @@ pub enum BackupError {
     },
 
     Sqlx {
-
         stmt: String,
 
         source: Box<sqlx::Error>,
     },
 
     ManifestMissing {
-
         path: Box<Path>,
     },
 
     ManifestBadLine {
-
         line_no: usize,
 
         content: String,
@@ -52,29 +43,24 @@ pub enum BackupError {
     },
 
     ManifestBadVersion {
-
         found: String,
     },
 
     ManifestDupKey {
-
         key: String,
     },
 
     ManifestUnknownKey {
-
         key: String,
     },
 
     UnsafePath {
-
         raw: String,
 
         why: &'static str,
     },
 
     DigestMismatch {
-
         rel: String,
 
         expect: String,
@@ -83,7 +69,6 @@ pub enum BackupError {
     },
 
     SizeMismatch {
-
         rel: String,
 
         expect: u64,
@@ -92,7 +77,6 @@ pub enum BackupError {
     },
 
     FileCountMismatch {
-
         declared: usize,
 
         actual: usize,
@@ -174,7 +158,6 @@ impl std::error::Error for BackupError {
 }
 
 impl BackupError {
-
     pub fn fix_command(&self) -> Option<String> {
         match self {
             Self::DbMissing { path } => Some(format!(
@@ -286,7 +269,6 @@ mod tests {
 
     #[test]
     fn every_variant_yields_chinese_message() {
-
         let cases: Vec<BackupError> = vec![
             BackupError::DbMissing {
                 path: bp("/x/quill.db"),
@@ -369,7 +351,6 @@ mod tests {
 
     #[test]
     fn security_violations_refuse_instead_of_offering_a_bypass() {
-
         let e = BackupError::UnsafePath {
             raw: "../../etc/passwd".into(),
             why: "含上级目录",
@@ -394,7 +375,6 @@ mod tests {
 
     #[test]
     fn error_is_small_enough_to_not_inflate_every_result() {
-
         let s = std::mem::size_of::<BackupError>();
         assert!(
             s <= 128,

@@ -1,4 +1,3 @@
-
 use std::sync::Arc;
 
 use axum::extract::{FromRef, FromRequestParts};
@@ -9,7 +8,6 @@ use crate::state::AppState;
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct AuthContext {
-
     pub user_id: quill_domain::UserId,
 
     pub is_admin: bool,
@@ -25,13 +23,11 @@ impl std::fmt::Debug for AuthContext {
 }
 
 pub trait TokenResolver: Send + Sync + 'static {
-
     fn resolve(&self, token: &str) -> Result<AuthContext, TokenRejected>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenRejected {
-
     Unknown,
 
     Malformed,
@@ -52,7 +48,6 @@ pub struct EnvTokenResolver {
 }
 
 impl EnvTokenResolver {
-
     pub fn new(entries: Vec<(String, AuthContext)>) -> Self {
         Self { entries }
     }
@@ -141,7 +136,6 @@ pub fn require_auth(state: &AppState, parts: &mut Parts) -> Result<AuthContext, 
         .map(str::to_owned);
 
     let Some(header) = header else {
-
         return Err(ApiError::unauthorized());
     };
     let Some(token) = header.strip_prefix("Bearer ") else {
@@ -152,7 +146,6 @@ pub fn require_auth(state: &AppState, parts: &mut Parts) -> Result<AuthContext, 
     match state.tokens.resolve(token) {
         Ok(ctx) => Ok(ctx),
         Err(reason) => {
-
             eprintln!(
                 "[auth] 401 请求路径 {} —— 令牌被拒：{reason}",
                 parts.uri.path()

@@ -2,4 +2,4 @@
 name = "quill-brs"
 version = "0.1.0"
 edition = "2021"
-build = "build.rs"      # ← 显式声明构建脚本，否则 cargo 不编译它
+build = "build.rs"

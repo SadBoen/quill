@@ -1,4 +1,3 @@
-
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -10,7 +9,6 @@ pub struct DecryptCounter {
 }
 
 impl DecryptCounter {
-
     pub fn new() -> Self {
         Self::default()
     }
@@ -58,7 +56,6 @@ pub struct PanicCounter {
 }
 
 impl PanicCounter {
-
     pub fn new() -> Self {
         Self::default()
     }
@@ -92,7 +89,6 @@ impl PanicCounter {
 
 #[derive(Debug, Clone)]
 pub struct PermitLedger {
-
     issued: Arc<AtomicUsize>,
 
     released: Arc<AtomicUsize>,
@@ -101,7 +97,6 @@ pub struct PermitLedger {
 }
 
 impl PermitLedger {
-
     pub fn new(capacity: usize) -> Self {
         Self {
             issued: Arc::new(AtomicUsize::new(0)),
@@ -165,7 +160,6 @@ mod tests {
 
     #[test]
     fn decrypt_counter_catches_a_real_attempt() {
-
         let c = DecryptCounter::new();
         c.record("provider-B");
         assert_eq!(c.count(), 1);
@@ -194,7 +188,6 @@ mod tests {
 
     #[test]
     fn permit_ledger_detects_leak() {
-
         let ledger = PermitLedger::new(2);
         ledger.record_issue();
         ledger.record_issue();

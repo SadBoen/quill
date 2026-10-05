@@ -1,4 +1,3 @@
-
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -25,7 +24,6 @@ pub struct SqlxExpertRepository {
 }
 
 impl SqlxExpertRepository {
-
     pub fn new(db: Arc<DbBridge>) -> Self {
         Self { db }
     }
@@ -131,7 +129,6 @@ async fn sql_roster(
                 out.insert(id);
             }
             Err(e) => {
-
                 return Err(crate::db::invariant_broken(format!(
                     "experts 表里存在非法专家标识 {raw:?}（{e}）：\
                      表上的 CHECK 约束应已拦住它，请检查写入路径是否绕过了 STRICT/GLOB 约束"
@@ -168,7 +165,6 @@ fn row_into_expert(row: &SqliteRow) -> Result<Expert, AgentError> {
     })?;
 
     let mut expert = if is_builtin == 1 {
-
         if visibility != Visibility::BuiltinSystem {
             return Err(crate::db::invariant_broken(format!(
                 "专家 {id} 是内置专家（is_builtin=1）但 visibility = {visibility}，\
@@ -195,14 +191,12 @@ fn row_into_expert(row: &SqliteRow) -> Result<Expert, AgentError> {
         }
         let mut e = Expert::user_authored(owner, id.clone(), display_name, description)?;
         if default_enabled != 1 {
-
             e.set_default_enabled(&owner, false)?;
         }
         e
     };
 
     if deleted_at.is_some() {
-
         expert.soft_delete(&owner)?;
     }
     Ok(expert)

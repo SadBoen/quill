@@ -1,9 +1,7 @@
-
 pub const CANARY_PREFIX: &str = "ZZQUILLTESTCANARY";
 
 #[derive(Debug, Clone)]
 pub struct TestUser {
-
     pub label: String,
 
     pub canary: String,
@@ -26,7 +24,6 @@ pub struct TestUserBuilder {
 }
 
 impl TestUserBuilder {
-
     pub fn new(label: impl Into<String>) -> Self {
         let label = label.into();
         let canary = format!("{CANARY_PREFIX}-{label}-");
@@ -127,7 +124,6 @@ pub fn test_user(label: &str) -> TestUser {
 }
 
 impl TestUser {
-
     pub fn all_marks(&self) -> Vec<String> {
         let kinds = [
             "sess", "msg", "soul", "wiki", "raw", "key", "mcp", "team", "mem",
@@ -164,14 +160,12 @@ mod tests {
 
     #[test]
     fn canary_prefix_is_unmistakable() {
-
         assert!(CANARY_PREFIX.chars().all(|c| c.is_ascii_uppercase()));
         assert!(!CANARY_PREFIX.contains(' '));
     }
 
     #[test]
     fn expert_slug_stays_legal_shape() {
-
         let u = TestUserBuilder::new("u1").expert_slug("demo").build();
 
         assert!(

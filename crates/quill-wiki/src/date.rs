@@ -1,4 +1,3 @@
-
 use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -10,7 +9,6 @@ pub struct Date {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DateError {
-
     BadLength { got: usize },
 
     BadShape(String),
@@ -64,7 +62,6 @@ fn days_in_month(year: u16, month: u8) -> u8 {
 }
 
 impl Date {
-
     pub fn new(year: u16, month: u8, day: u8) -> Result<Self, DateError> {
         if year == 0 {
             return Err(DateError::YearZero);

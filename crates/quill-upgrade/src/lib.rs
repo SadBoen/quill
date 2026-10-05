@@ -1,4 +1,3 @@
-
 use quill_backup::{
     create_backup, restore_backup, BackupError, BackupReport, BackupSource, RestoreReport,
 };
@@ -16,7 +15,6 @@ pub struct PreUpgradeGuard {
 }
 
 impl PreUpgradeGuard {
-
     pub fn backup_dir(&self) -> &Path {
         &self.backup_dir
     }
@@ -49,8 +47,10 @@ impl PreUpgradeGuard {
 
 #[derive(Debug)]
 pub enum UpgradeError {
-
-    PreUpgradeBackupFailed { dest: PathBuf, source: BackupError },
+    PreUpgradeBackupFailed {
+        dest: PathBuf,
+        source: BackupError,
+    },
 
     RollbackFailed {
         backup_dir: PathBuf,

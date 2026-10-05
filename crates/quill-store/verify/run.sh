@@ -1,9 +1,4 @@
-#!/usr/bin/env bash
-# 0001_init.sql 的可复现验证入口。
-#   用法：bash crates/quill-store/verify/run.sh
-#   退出码非 0 = 有断言未通过（不做任何吞异常兜底）
-#
-# 三份脚本均只用 Python 内置 sqlite3 模块，不依赖 sqlite3 / zstd 等 CLI（铁律三）。
+
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"

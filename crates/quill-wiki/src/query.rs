@@ -1,4 +1,3 @@
-
 use quill_adapters::{AdapterError, KnowledgeBackend, KnowledgePage, UserId};
 
 use crate::backend::{page_from_wire, query_context};
@@ -14,7 +13,6 @@ pub const MAX_CANDIDATE_PAGES: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueryRequest {
-
     pub question: String,
 
     pub date: Date,
@@ -22,7 +20,6 @@ pub struct QueryRequest {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct QueryOutcome {
-
     pub answer: String,
 
     pub used_pages: Vec<String>,
@@ -137,7 +134,6 @@ pub fn archive_answer(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArchiveOutcome {
-
     pub path: String,
 
     pub index_entries: usize,
@@ -146,7 +142,6 @@ pub struct ArchiveOutcome {
 }
 
 fn candidates_len(store: &WikiStore) -> usize {
-
     match store.read_index() {
         Ok(Some(t)) => WikiIndex::parse(&t).map(|i| i.len()).unwrap_or(0),
         _ => 0,

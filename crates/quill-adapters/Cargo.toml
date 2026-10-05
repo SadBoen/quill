@@ -5,9 +5,7 @@ edition = "2021"
 description = "Quill 定制注入点（唯一允许跨层的 crate）"
 license = "Apache-2.0"
 
-# ⚠️ 铁律（boundary 规则）：本 crate **禁止**依赖任何其他 quill crate。
-# 它是契约层，一旦反向依赖即形成环。
 [dependencies]
-# 铁律十七：P0-8 禁 panic = "abort"（catch_unwind 会变 no-op）
+
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros"] }

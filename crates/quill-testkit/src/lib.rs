@@ -1,4 +1,3 @@
-
 #![forbid(unsafe_code)]
 #![deny(missing_debug_implementations)]
 
@@ -17,7 +16,6 @@ pub use scan::{LeakHit, LeakScan};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TestDiagnostic {
-
     pub seed: u64,
 
     pub fixture_dump: Option<std::path::PathBuf>,
@@ -26,7 +24,6 @@ pub struct TestDiagnostic {
 }
 
 impl TestDiagnostic {
-
     pub fn repro_command(&self) -> String {
         match &self.fixture_dump {
             Some(p) => format!(
@@ -69,7 +66,6 @@ mod tests {
 
     #[test]
     fn seed_is_deterministic_without_env() {
-
         assert_eq!(test_seed(), test_seed());
     }
 

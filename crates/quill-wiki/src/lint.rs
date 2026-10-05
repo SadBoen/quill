@@ -1,4 +1,3 @@
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
@@ -10,7 +9,6 @@ pub const DEFAULT_MIN_SHARED_TAGS: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Rule {
-
     OrphanPage,
 
     BrokenLink,
@@ -31,7 +29,6 @@ pub enum Rule {
 }
 
 impl Rule {
-
     pub const fn id(self) -> &'static str {
         match self {
             Self::OrphanPage => "orphan-page",
@@ -67,8 +64,10 @@ impl fmt::Display for Rule {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Contradiction {
-
-    DuplicateSubject { first: String, second: String },
+    DuplicateSubject {
+        first: String,
+        second: String,
+    },
 
     ConflictingAssertion {
         first_page: String,
@@ -84,7 +83,6 @@ pub enum Contradiction {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Finding {
-
     pub rule: Rule,
 
     pub pages: Vec<String>,
@@ -116,7 +114,6 @@ impl Finding {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LintConfig {
-
     pub min_shared_tags: usize,
 
     pub detect_duplicate_subject: bool,
@@ -133,7 +130,6 @@ impl Default for LintConfig {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LintStats {
-
     pub pages_checked: usize,
 
     pub links_checked: usize,
@@ -147,14 +143,12 @@ pub struct LintStats {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LintReport {
-
     pub findings: Vec<Finding>,
 
     pub stats: LintStats,
 }
 
 impl LintReport {
-
     pub fn count(&self, rule: Rule) -> usize {
         self.findings.iter().filter(|f| f.rule == rule).count()
     }
@@ -393,7 +387,6 @@ fn normalize_value(v: &str) -> String {
 }
 
 fn conflicting_assertion_findings(pages: &[&Page], stats: &mut LintStats) -> Vec<Finding> {
-
     let mut by_key: BTreeMap<String, Vec<(String, String, String)>> = BTreeMap::new();
     let mut updated_of: BTreeMap<String, String> = BTreeMap::new();
     for p in pages {
@@ -473,7 +466,6 @@ mod tests {
     }
 
     fn clean_pages() -> Vec<Page> {
-
         vec![
             concept(
                 "a.md",
@@ -547,7 +539,6 @@ mod tests {
 
     #[test]
     fn index_md_page_is_never_an_orphan() {
-
         let mut pages = clean_pages();
         pages.push(p("index.md", "---\ntitle: 索引\n---\n\n- [[A]]\n- [[B]]\n"));
         let r = lint(&pages, None, &LintConfig::default());
@@ -652,7 +643,6 @@ mod tests {
 
     #[test]
     fn same_assertion_value_is_not_a_contradiction() {
-
         let pages = vec![
             p(
                 "a.md",
@@ -670,7 +660,6 @@ mod tests {
 
     #[test]
     fn zero_assertions_is_visible_not_silently_clean() {
-
         let pages = vec![
             concept("a.md", "A", "没有断言行", "x"),
             concept("b.md", "B", "见 [[A]]", "y"),

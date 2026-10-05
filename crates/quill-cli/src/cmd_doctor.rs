@@ -1,4 +1,3 @@
-
 use crate::{store, Opts, Outcome};
 use std::path::Path;
 

@@ -1,4 +1,3 @@
-
 use quill_adapters::{AdapterError, KnowledgeBackend, UserId};
 
 use crate::backend::{ingest_context, split_receipt};
@@ -14,7 +13,6 @@ pub const DEFAULT_SCHEMA_FILE: &str = "AGENTS.md";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IngestRequest {
-
     pub source_rel: String,
 
     pub date: Date,
@@ -24,7 +22,6 @@ pub struct IngestRequest {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IngestOutcome {
-
     pub written: Vec<String>,
 
     pub index_entries: usize,
@@ -33,7 +30,6 @@ pub struct IngestOutcome {
 }
 
 impl IngestOutcome {
-
     pub fn touched_count(&self) -> usize {
         self.written.len()
     }
@@ -45,7 +41,6 @@ pub async fn ingest<B: KnowledgeBackend>(
     user: UserId,
     req: &IngestRequest,
 ) -> Result<IngestOutcome, WikiError> {
-
     store.ensure_layout()?;
 
     let source_text = store.read_raw(&req.source_rel)?;
@@ -159,7 +154,6 @@ pub fn pick_related(pages: &[Page], focus: &[String], source_rel: &str) -> Vec<P
         .filter(|p| !is_structural(&p.path))
         .filter(|p| {
             if focus.is_empty() {
-
                 return p.path.to_lowercase().contains(&stem);
             }
             let title = p.title().to_lowercase();

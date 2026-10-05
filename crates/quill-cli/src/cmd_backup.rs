@@ -1,4 +1,3 @@
-
 use crate::{store, Opts, Outcome};
 use quill_backup::{create_backup, restore_backup, BackupSource};
 

@@ -1,4 +1,3 @@
-
 use crate::digest::{is_digest_hex, DIGEST_HEX_LEN};
 use crate::error::BackupError;
 
@@ -25,7 +24,6 @@ const KNOWN_KEYS: &[&str] = &[
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestEntry {
-
     pub rel: String,
 
     pub bytes: u64,
@@ -35,7 +33,6 @@ pub struct ManifestEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExcludedEntry {
-
     pub rel: String,
 
     pub reason: String,
@@ -43,7 +40,6 @@ pub struct ExcludedEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Manifest {
-
     pub created_unix: u64,
 
     pub db_bytes: u64,
@@ -58,7 +54,6 @@ pub struct Manifest {
 }
 
 impl Manifest {
-
     pub fn render(&self) -> String {
         let mut files = self.files.clone();
         files.sort_by(|a, b| a.rel.cmp(&b.rel));
@@ -264,7 +259,6 @@ impl Manifest {
 }
 
 fn bad_line(line_no: usize, content: &str, reason: &str) -> BackupError {
-
     let short: String = content.chars().take(120).collect();
     BackupError::ManifestBadLine {
         line_no,
@@ -358,10 +352,7 @@ pub fn is_forbidden_in_backup(file_name: &str) -> bool {
     }
 
     match lower.rsplit_once('.') {
-        Some((stem, ext)) => {
-
-            !stem.is_empty() && FORBIDDEN_EXT.contains(&ext)
-        }
+        Some((stem, ext)) => !stem.is_empty() && FORBIDDEN_EXT.contains(&ext),
         None => false,
     }
 }
@@ -406,7 +397,6 @@ mod tests {
 
     #[test]
     fn render_is_deterministic_regardless_of_input_order() {
-
         let mut a = sample();
         a.files.reverse();
         let b = sample();
@@ -415,7 +405,6 @@ mod tests {
 
     #[test]
     fn secrets_enc_is_backed_up_but_master_key_is_not() {
-
         assert!(
             !is_forbidden_in_backup("secrets.enc"),
             "secrets.enc 是密文，必须能进备份"
@@ -450,7 +439,6 @@ mod tests {
 
     #[test]
     fn keyval_keys_are_not_mistaken_for_entry_lines() {
-
         let text = sample().render();
         for k in [
             "file.count",
@@ -478,7 +466,6 @@ mod tests {
 
     #[test]
     fn rejects_missing_required_key() {
-
         let text: String = sample()
             .render()
             .lines()
@@ -493,7 +480,6 @@ mod tests {
 
     #[test]
     fn rejects_truncated_manifest_via_count_mismatch() {
-
         let mut lines: Vec<String> = sample().render().lines().map(str::to_string).collect();
         let pos = lines
             .iter()
@@ -519,7 +505,6 @@ mod tests {
 
     #[test]
     fn rejects_duplicate_rel_path() {
-
         let dup = "u1/wiki/index.md";
         let sha = "b".repeat(64);
         let text = format!(
@@ -592,7 +577,6 @@ mod tests {
 
     #[test]
     fn path_traversal_variants_are_all_rejected() {
-
         for bad in [
             "../etc/passwd",
             "u1/../../etc/passwd",
@@ -621,7 +605,6 @@ mod tests {
 
     #[test]
     fn manifest_traversal_entry_is_rejected_at_parse_time() {
-
         let text = mutate(
             &sample_text(),
             "u1/wiki/index.md",

@@ -1,4 +1,3 @@
-
 mod common;
 
 use std::sync::Arc;
@@ -86,7 +85,6 @@ fn create_read_update_delete_roundtrip_on_a_real_database() {
 
 #[test]
 fn other_user_can_neither_read_nor_modify_nor_delete_my_expert() {
-
     let t = TestDb::new("expert-isolation");
     let r = registry(&t.bridge());
     let a = u(1);
@@ -139,7 +137,6 @@ fn other_user_can_neither_read_nor_modify_nor_delete_my_expert() {
 
 #[test]
 fn soft_delete_then_recreate_same_id_succeeds_and_keeps_one_row() {
-
     let t = TestDb::new("expert-upsert");
     let r = registry(&t.bridge());
     let a = u(1);
@@ -179,7 +176,6 @@ fn soft_delete_then_recreate_same_id_succeeds_and_keeps_one_row() {
 
 #[test]
 fn data_survives_a_fresh_bridge_instance_simulating_process_restart() {
-
     let t = TestDb::new("expert-restart");
     {
         let r = registry(&t.bridge());
@@ -206,7 +202,6 @@ fn data_survives_a_fresh_bridge_instance_simulating_process_restart() {
 
 #[test]
 fn builtin_expert_is_shared_but_protected() {
-
     let t = TestDb::new("expert-builtin");
     let r = registry(&t.bridge());
     r.create_builtin_expert(new_expert("builtin-helper"))
@@ -242,7 +237,6 @@ fn builtin_expert_is_shared_but_protected() {
 
 #[test]
 fn list_owned_includes_soft_deleted_rows_while_roster_does_not() {
-
     let t = TestDb::new("expert-visibility-scopes");
     let r = registry(&t.bridge());
     let a = u(1);

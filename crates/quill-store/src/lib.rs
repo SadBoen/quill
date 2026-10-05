@@ -1,4 +1,3 @@
-
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::SqlitePool;
 use std::str::FromStr;
@@ -20,7 +19,6 @@ fn split_statements(sql: &str) -> Vec<String> {
 
     while let Some(c) = chars.next() {
         if in_line_comment {
-
             if c == '\n' {
                 in_line_comment = false;
                 cur.push(c);
@@ -137,7 +135,6 @@ mod tests {
 
     #[test]
     fn split_handles_comments_and_strings() {
-
         let s = "CREATE TABLE a(x); CREATE TABLE b(y);";
         assert_eq!(split_statements(s).len(), 2);
 
@@ -156,7 +153,6 @@ mod tests {
 
     #[tokio::test]
     async fn every_connection_has_foreign_keys_on() {
-
         let dir = std::env::temp_dir().join(format!(
             "quill-store-fk-{}-{:?}.db",
             std::process::id(),

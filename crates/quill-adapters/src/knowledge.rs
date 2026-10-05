@@ -1,10 +1,8 @@
-
 use crate::AdapterError;
 use crate::UserId;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct KnowledgeSource {
-
     pub rel_path: String,
 
     pub text: String,
@@ -12,7 +10,6 @@ pub struct KnowledgeSource {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct KnowledgePage {
-
     pub rel_path: String,
 
     pub content: String,
@@ -20,7 +17,6 @@ pub struct KnowledgePage {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct IndexDoc {
-
     pub rel_path: String,
 
     pub title: String,
@@ -30,7 +26,6 @@ pub struct IndexDoc {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct IndexReceipt {
-
     pub touched: Vec<String>,
 
     pub summary: String,
@@ -38,7 +33,6 @@ pub struct IndexReceipt {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct IngestContext {
-
     pub source: KnowledgeSource,
 
     pub index_text: String,
@@ -52,7 +46,6 @@ pub struct IngestContext {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct QueryContext {
-
     pub question: String,
 
     pub candidates: Vec<IndexDoc>,
@@ -64,7 +57,6 @@ pub struct QueryContext {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct QueryAnswer {
-
     pub answer: String,
 
     pub citations: Vec<String>,
@@ -74,14 +66,12 @@ pub struct QueryAnswer {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LintContext {
-
     pub report_text: String,
 
     pub pages: Vec<KnowledgePage>,
 }
 
 pub trait KnowledgeBackend: Send + Sync + 'static {
-
     fn plan_ingest(
         &self,
         user: UserId,
@@ -107,7 +97,6 @@ mod tests {
 
     #[test]
     fn index_receipt_keeps_every_touched_page() {
-
         let r = IndexReceipt {
             touched: (0..20).map(|i| format!("p{i}.md")).collect(),
             summary: String::new(),
@@ -117,7 +106,6 @@ mod tests {
 
     #[test]
     fn contexts_carry_no_path_or_fs_handle() {
-
         let c = IngestContext::default();
         let q = QueryContext::default();
         let l = LintContext::default();

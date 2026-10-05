@@ -1,4 +1,3 @@
-
 use std::collections::BTreeSet;
 
 use quill_adapters::{ExpertId, UserId};
@@ -11,7 +10,6 @@ pub const MAX_DISPLAY_NAME: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Visibility {
-
     DefaultVisible,
 
     ManualEnable,
@@ -22,7 +20,6 @@ pub enum Visibility {
 }
 
 impl Visibility {
-
     pub fn as_wire(&self) -> &'static str {
         match self {
             Self::DefaultVisible => "default_visible",
@@ -71,7 +68,6 @@ pub struct Expert {
 }
 
 impl Expert {
-
     pub fn user_authored(
         owner: UserId,
         id: ExpertId,
@@ -82,7 +78,6 @@ impl Expert {
         let description = description.into();
         check_display_name(&display_name)?;
         if owner == SYSTEM_OWNER {
-
             return Err(AgentError::ExpertBuiltinProtected { id });
         }
         Ok(Self {
@@ -264,7 +259,6 @@ fn check_display_name(raw: &str) -> Result<(), AgentError> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewExpert {
-
     pub id: ExpertId,
 
     pub display_name: String,
@@ -273,7 +267,6 @@ pub struct NewExpert {
 }
 
 pub trait ExpertRepository: Send + Sync + 'static {
-
     fn get(&self, owner: &UserId, id: &ExpertId) -> Result<Option<Expert>, AgentError>;
 
     fn list_owned(&self, owner: &UserId) -> Result<Vec<Expert>, AgentError>;
@@ -289,7 +282,6 @@ pub struct ExpertRegistry<R: ExpertRepository> {
 }
 
 impl<R: ExpertRepository> ExpertRegistry<R> {
-
     pub fn new(repo: R) -> Self {
         Self { repo }
     }
@@ -323,7 +315,6 @@ impl<R: ExpertRepository> ExpertRegistry<R> {
     }
 
     pub fn get_visible(&self, viewer: &UserId, id: &ExpertId) -> Result<Expert, AgentError> {
-
         if let Some(e) = self.repo.get(viewer, id)? {
             if e.is_visible_to(viewer) {
                 return Ok(e);
@@ -397,7 +388,6 @@ impl<R: ExpertRepository> ExpertRegistry<R> {
 
     pub fn delete(&self, actor: &UserId, id: &ExpertId) -> Result<bool, AgentError> {
         if let Some(e) = self.repo.get(actor, id)? {
-
             if e.builtin {
                 return Err(AgentError::ExpertBuiltinProtected { id: id.clone() });
             }
@@ -423,7 +413,6 @@ impl<R: ExpertRepository> ExpertRegistry<R> {
 
     fn must_get_owned(&self, actor: &UserId, id: &ExpertId) -> Result<Expert, AgentError> {
         if let Some(e) = self.repo.get(actor, id)? {
-
             if e.builtin {
                 return Err(AgentError::ExpertBuiltinProtected { id: id.clone() });
             }
@@ -487,7 +476,6 @@ mod tests {
         }
 
         fn put(&self, expert: &Expert) -> Result<(), AgentError> {
-
             let key = (expert.owner(), expert.id().as_str().to_string());
             self.rows
                 .lock()
@@ -536,7 +524,6 @@ mod tests {
 
     #[test]
     fn duplicate_expert_id_under_same_owner_is_rejected() {
-
         let r = registry();
         r.create_user_expert(u(1), new("cost-analyst"))
             .expect("首次应成功");
@@ -550,7 +537,6 @@ mod tests {
 
     #[test]
     fn same_expert_id_under_different_owners_is_allowed() {
-
         let r = registry();
         r.create_user_expert(u(1), new("cost-analyst"))
             .expect("A 应成功");
@@ -590,7 +576,6 @@ mod tests {
 
     #[test]
     fn sixty_four_chinese_chars_are_accepted() {
-
         let r = registry();
         let mut n = new("cost-analyst");
         n.display_name = "成".repeat(64);
@@ -624,7 +609,6 @@ mod tests {
 
     #[test]
     fn builtin_expert_cannot_be_disabled() {
-
         let r = registry();
         r.create_builtin_expert(new("builtin-helper"))
             .expect("应创建");
@@ -641,7 +625,6 @@ mod tests {
 
     #[test]
     fn user_cannot_claim_the_system_owner_identity() {
-
         let got = Expert::user_authored(SYSTEM_OWNER, e("fake"), "假内置", "描述");
         assert_eq!(
             got.unwrap_err(),
@@ -651,7 +634,6 @@ mod tests {
 
     #[test]
     fn cross_invariant_holds_for_both_construction_paths_and_detects_tampering() {
-
         Expert::builtin(e("b"), "b", "d")
             .expect("内置应自洽")
             .check_cross_invariant()
@@ -704,7 +686,6 @@ mod tests {
 
     #[test]
     fn invisible_expert_reports_not_found_not_forbidden() {
-
         let r = registry();
         r.create_user_expert(u(1), new("secret-expert"))
             .expect("应创建");
@@ -745,7 +726,6 @@ mod tests {
 
     #[test]
     fn user_expert_shadowing_a_builtin_name_appears_once() {
-
         let r = registry();
         r.create_builtin_expert(new("helper")).expect("应创建");
         r.create_user_expert(u(1), new("helper")).expect("应创建");
@@ -760,7 +740,6 @@ mod tests {
 
     #[test]
     fn roster_matches_list_visible_scope() {
-
         let r = registry();
         r.create_user_expert(u(1), new("mine")).expect("应创建");
         r.create_user_expert(u(2), new("theirs")).expect("应创建");
@@ -795,7 +774,6 @@ mod tests {
 
     #[test]
     fn non_owner_rename_reports_not_found_not_modifiable() {
-
         let r = registry();
         r.create_user_expert(u(1), new("cost-analyst"))
             .expect("应创建");
@@ -809,7 +787,6 @@ mod tests {
 
     #[test]
     fn builtin_expert_modification_is_reported_as_protected_not_not_found() {
-
         let r = registry();
         r.create_builtin_expert(new("builtin-helper"))
             .expect("应创建");
@@ -823,7 +800,6 @@ mod tests {
 
     #[test]
     fn renaming_to_blank_name_is_rejected_and_leaves_old_name_intact() {
-
         let r = registry();
         r.create_user_expert(u(1), new("cost-analyst"))
             .expect("应创建");
@@ -871,7 +847,6 @@ mod tests {
 
     #[test]
     fn delete_twice_is_idempotent() {
-
         let r = registry();
         r.create_user_expert(u(1), new("cost-analyst"))
             .expect("应创建");
@@ -932,7 +907,6 @@ mod tests {
 
     #[test]
     fn deleting_frees_the_name_for_recreation() {
-
         let r = registry();
         r.create_user_expert(u(1), new("cost-analyst"))
             .expect("首次应成功");
@@ -945,7 +919,6 @@ mod tests {
 
     #[test]
     fn visibility_wire_names_match_the_schema_check_list_exactly() {
-
         let want = [
             "default_visible",
             "manual_enable",
@@ -961,7 +934,6 @@ mod tests {
 
     #[test]
     fn unknown_wire_name_is_rejected_rather_than_defaulting() {
-
         for bad in ["", "public", "Default_Visible", "builtin"] {
             assert_eq!(Visibility::from_wire(bad), None, "{bad:?} 必须解析失败");
         }

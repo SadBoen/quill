@@ -1,4 +1,3 @@
-
 use quill_adapters::{ExpertId, MemberId, ProviderId, SessionId, UserId};
 
 #[test]
@@ -20,7 +19,6 @@ fn all_four_identity_types_accept_their_own_constructor() {
 
 #[test]
 fn same_payload_in_different_types_produces_different_representations() {
-
     let a = UserId::from_bytes([0xab; 16]);
     let b = SessionId::from_bytes([0xab; 16]);
 
@@ -37,17 +35,14 @@ fn same_payload_in_different_types_produces_different_representations() {
 
 #[test]
 fn member_id_and_expert_id_are_different_types_with_different_constructors() {
-
     let e = ExpertId::parse("cost-analyst").expect("应合法");
     let m = MemberId::for_expert(&e, 3).expect("应合法");
     assert_eq!(e.as_str(), "cost-analyst");
     assert_eq!(m.as_str(), "cost-analyst-3");
-
 }
 
 #[test]
 fn explicit_conversion_via_string_is_possible_but_not_implicit() {
-
     let e = ExpertId::parse("cost-analyst").expect("应合法");
     let m = MemberId::for_expert(&e, 1).expect("应合法");
 

@@ -1,10 +1,8 @@
-
 use crate::canary::TestUser;
 use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LeakHit {
-
     pub location: String,
 
     pub marker: String,
@@ -27,7 +25,6 @@ pub struct LeakScan {
 }
 
 impl LeakScan {
-
     pub fn new() -> Self {
         Self { hits: Vec::new() }
     }
@@ -97,7 +94,6 @@ impl LeakScan {
     }
 
     pub fn assert_resource_isolation(&mut self, haystack: &str, victim: &TestUser) {
-
         self.assert_no_cross_user_leak(haystack, victim)
     }
 
@@ -152,19 +148,14 @@ mod tests {
 
     #[test]
     fn clean_haystack_passes() {
-
         let b = test_user("u2");
         let mut s = LeakScan::new();
-        s.assert_no_cross_user_leak(
-            "会话 ZZQUILLTESTCANARY-u1-sess-x",
-            &b,
-        );
+        s.assert_no_cross_user_leak("会话 ZZQUILLTESTCANARY-u1-sess-x", &b);
         assert!(!s.has_leak(), "A 上下文里出现的是 A 自己的标记，不算泄漏");
     }
 
     #[test]
     fn scanning_own_marks_always_hits() {
-
         let a = test_user("u1");
         let mut s = LeakScan::new();
         s.assert_no_cross_user_leak("ZZQUILLTESTCANARY-u1-sess-x", &a);
@@ -172,7 +163,6 @@ mod tests {
     }
     #[test]
     fn detects_leak_in_plain_string() {
-
         let victim = test_user("u2");
         let mut s = LeakScan::new();
         s.scan_str(
@@ -186,7 +176,6 @@ mod tests {
 
     #[test]
     fn detects_all_nine_resource_kinds() {
-
         let victim = test_user("u9");
         for kind in [
             "sess", "msg", "soul", "wiki", "raw", "key", "mcp", "team", "mem",
@@ -216,17 +205,14 @@ mod tests {
 
     #[test]
     fn multibyte_boundary_does_not_panic() {
-
         let mut s = LeakScan::new();
         let victim = test_user("u2");
         let haystack = format!("中文中文中文{}后文", victim.canary());
         s.scan_str(&haystack, "x", &victim);
-
     }
 
     #[test]
     fn both_apis_detect_data_leak() {
-
         let victim = test_user("u2");
         let hay = "泄漏: ZZQUILLTESTCANARY-u2-key-abc";
 
@@ -241,7 +227,6 @@ mod tests {
 
     #[test]
     fn resource_isolation_tolerates_queueing() {
-
         let b = test_user("u2");
         let mut s = LeakScan::new();
 
@@ -251,7 +236,6 @@ mod tests {
 
     #[test]
     fn queueing_must_not_be_asserted_as_isolation_failure() {
-
         let b = test_user("u2");
         let mut s = LeakScan::new();
         for status in ["queued", "running", "done"] {

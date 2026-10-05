@@ -1,4 +1,3 @@
-
 use std::fmt;
 
 use quill_adapters::{AdapterError, ExpertId, MemberId};
@@ -8,60 +7,49 @@ pub const DOCTOR_CMD: &str = "quill doctor";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentError {
-
     ExpertNotFound {
-
         id: ExpertId,
     },
 
     ExpertExists {
-
         id: ExpertId,
     },
 
     ExpertDisplayNameInvalid {
-
         raw: String,
 
         reason: &'static str,
     },
 
     ExpertBuiltinProtected {
-
         id: ExpertId,
     },
 
     ExpertNotModifiable {
-
         id: ExpertId,
     },
 
     ExpertDeleted {
-
         id: ExpertId,
     },
 
     ChainCycle {
-
         node: String,
 
         first_at: usize,
     },
 
     ChainTooDeep {
-
         depth: usize,
 
         max: usize,
     },
 
     DispatchIllegalTransition {
-
         detail: String,
     },
 
     MemberRejected {
-
         member: MemberId,
 
         kind: MemberRejectKind,
@@ -74,24 +62,20 @@ pub enum AgentError {
     TeamInvalid(TeamError),
 
     DispatchRequestInvalid {
-
         reason: String,
     },
 
     Storage {
-
         detail: String,
     },
 
     InvariantBroken {
-
         detail: String,
     },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MemberRejectKind {
-
     Rejected,
 
     Unauthorized,
@@ -102,7 +86,6 @@ pub enum MemberRejectKind {
 }
 
 impl MemberRejectKind {
-
     pub fn as_wire(&self) -> &'static str {
         match self {
             Self::Rejected => "member_rejected",
@@ -114,7 +97,6 @@ impl MemberRejectKind {
 }
 
 impl AgentError {
-
     pub fn code(&self) -> &'static str {
         match self {
             Self::ExpertNotFound { .. } => "expert_not_found",
@@ -174,7 +156,6 @@ fn tail(f: &mut fmt::Formatter<'_>, e: &AgentError) -> fmt::Result {
 
 impl fmt::Display for AgentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-
         match self {
             Self::ExpertNotFound { id } => {
                 write!(f, "专家「{id}」不存在，或你没有查看它的权限")?;
@@ -265,7 +246,6 @@ impl fmt::Display for AgentError {
 impl std::error::Error for AgentError {}
 
 impl AgentError {
-
     pub fn from_member_error(member: &MemberId, e: AdapterError) -> Self {
         let retryable = e.is_retryable();
         let detail = e.detail().to_string();
@@ -306,7 +286,6 @@ pub fn chain_check_error(check: quill_adapters::ChainCheck) -> Option<AgentError
 
 impl From<AgentError> for AdapterError {
     fn from(e: AgentError) -> Self {
-
         let code = e.code();
         match e {
             AgentError::ExpertNotFound { .. } | AgentError::ExpertDeleted { .. } => {
@@ -418,7 +397,6 @@ mod tests {
 
     #[test]
     fn every_error_display_points_at_the_same_command() {
-
         for e in one_of_each() {
             let msg = e.to_string();
             assert!(
@@ -431,7 +409,6 @@ mod tests {
 
     #[test]
     fn error_codes_are_unique() {
-
         let mut seen = std::collections::BTreeSet::new();
         for e in one_of_each() {
             assert!(seen.insert(e.code()), "错误码重复：{}", e.code());
@@ -441,7 +418,6 @@ mod tests {
 
     #[test]
     fn display_is_chinese_and_carries_the_offending_identity() {
-
         let msg = AgentError::ChainCycle {
             node: "node-a".into(),
             first_at: 2,
@@ -466,7 +442,6 @@ mod tests {
 
     #[test]
     fn only_member_rejected_carries_retryable_and_it_comes_from_the_adapter() {
-
         let m = member("cost-analyst-1");
         let timeout = AgentError::from_member_error(&m, AdapterError::Provider("成员超时".into()));
         assert!(timeout.is_retryable(), "Provider 类应可重试：{timeout}");
@@ -490,7 +465,6 @@ mod tests {
 
     #[test]
     fn member_error_keeps_the_caller_supplied_member_not_a_placeholder() {
-
         let m = member("risk-reviewer-7");
         for e in [
             AdapterError::Provider("x".into()),
@@ -513,7 +487,6 @@ mod tests {
 
     #[test]
     fn adapter_storage_and_internal_do_not_become_member_rejection() {
-
         let m = member("cost-analyst-1");
         let e = AgentError::from_member_error(
             &m,
@@ -533,7 +506,6 @@ mod tests {
 
     #[test]
     fn adapter_unauthorized_gets_its_own_code() {
-
         let m = member("cost-analyst-1");
         let e = AgentError::from_member_error(&m, AdapterError::Unauthorized("key 被撤销".into()));
         match e {
@@ -547,7 +519,6 @@ mod tests {
 
     #[test]
     fn member_reject_kind_wire_names_are_distinct() {
-
         let all = [
             MemberRejectKind::Rejected,
             MemberRejectKind::Unauthorized,
@@ -563,7 +534,6 @@ mod tests {
 
     #[test]
     fn chain_check_conversion_returns_none_for_ok_and_maps_the_other_two() {
-
         assert_eq!(chain_check_error(ChainCheck::Ok { depth: 1 }), None);
         assert_eq!(chain_check_error(ChainCheck::Ok { depth: 4 }), None);
 
@@ -581,7 +551,6 @@ mod tests {
 
     #[test]
     fn agent_error_to_adapter_error_keeps_code_and_drops_chinese() {
-
         for e in one_of_each() {
             let a = AdapterError::from(e.clone());
             let payload = a.detail().to_string();

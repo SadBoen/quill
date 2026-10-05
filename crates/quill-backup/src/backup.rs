@@ -1,4 +1,3 @@
-
 use crate::digest::{sha256_bytes, sha256_file};
 use crate::error::{io_err, BackupError};
 use crate::manifest::{
@@ -17,7 +16,6 @@ const TMP_SUFFIX: &str = ".part";
 
 #[derive(Debug, Clone)]
 pub struct BackupSource {
-
     pub pool: SqlitePool,
 
     pub db_path: PathBuf,
@@ -26,7 +24,6 @@ pub struct BackupSource {
 }
 
 impl BackupSource {
-
     pub fn new(
         pool: SqlitePool,
         db_path: impl Into<PathBuf>,
@@ -54,7 +51,6 @@ impl BackupSource {
 
 #[derive(Debug, Clone)]
 pub struct BackupReport {
-
     pub dest: PathBuf,
 
     pub manifest: Manifest,
@@ -66,7 +62,6 @@ pub struct BackupReport {
 
 #[derive(Debug, Clone)]
 pub struct RestoreReport {
-
     pub data_root: PathBuf,
 
     pub db_path: PathBuf,
@@ -86,7 +81,6 @@ pub async fn create_backup(
         let mut has_any = false;
         let rd = std::fs::read_dir(dest).map_err(|e| io_err("读取备份目标目录", dest, e))?;
         for e in rd {
-
             let _ = e.map_err(|e| io_err("读取备份目标目录", dest, e))?;
             has_any = true;
         }
@@ -107,7 +101,6 @@ pub async fn create_backup(
     vacuum_into(&src.pool, &db_tmp).await?;
 
     if let Err(e) = verify_snapshot_database(&db_tmp).await {
-
         let _ = std::fs::remove_file(&db_tmp);
         return Err(e);
     }
@@ -163,7 +156,6 @@ async fn vacuum_into(pool: &SqlitePool, dest: &Path) -> Result<(), BackupError> 
 }
 
 async fn verify_snapshot_database(path: &Path) -> Result<(), BackupError> {
-
     let url = format!("sqlite:{}?mode=ro", path.to_string_lossy());
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(1)
@@ -213,7 +205,6 @@ fn copy_tree(
         let rel = child
             .strip_prefix(src_root)
             .map_err(|_| {
-
                 io_err(
                     "计算用户数据相对路径",
                     &child,
@@ -232,7 +223,6 @@ fn copy_tree(
             std::fs::symlink_metadata(&child).map_err(|e| io_err("读取文件属性", &child, e))?;
 
         if meta.is_symlink() {
-
             excluded.push(ExcludedEntry {
                 rel,
                 reason: "符号链接不进备份（链接目标可能在数据目录之外）".into(),
@@ -285,7 +275,6 @@ pub async fn restore_backup(
     db_path: &Path,
     data_root: &Path,
 ) -> Result<RestoreReport, BackupError> {
-
     let manifest_path = backup_dir.join(MANIFEST_NAME);
     let text = std::fs::read_to_string(&manifest_path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
@@ -344,7 +333,6 @@ pub async fn restore_backup(
     for f in &manifest.files {
         let target = data_root.join(&f.rel);
         if target.exists() {
-
             let existing = sha256_file(&target).unwrap_or_default();
             if existing != f.sha256 {
                 not_overwritten.push(f.rel.clone());
@@ -430,7 +418,6 @@ mod tests {
 
     #[test]
     fn sql_escaping_doubles_single_quotes() {
-
         let quoted = "a'b".replace('\'', "''");
         assert_eq!(quoted, "a''b");
     }

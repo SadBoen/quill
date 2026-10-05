@@ -1,4 +1,3 @@
-
 use std::any::Any;
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
@@ -50,7 +49,6 @@ where
     fn call(&mut self, req: Request<Body>) -> Self::Future {
         let mut inner = self.inner.clone();
         Box::pin(async move {
-
             std::future::poll_fn(|cx| inner.poll_ready(cx)).await?;
             let request_id = new_request_id();
             let tagged = attach_request_id(req, &request_id);
@@ -58,7 +56,6 @@ where
                 Ok(Ok(resp)) => Ok(with_request_id(resp, &request_id)),
                 Ok(Err(_)) => Ok(with_request_id(internal_response(&request_id), &request_id)),
                 Err(payload) => {
-
                     eprintln!(
                         "[panic] 请求 {request_id} 内部 panic：{}",
                         detail_of(&payload)
@@ -131,20 +128,17 @@ impl<F: Future> Future for CatchUnwind<F> {
     type Output = Result<F::Output, PanicPayload>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-
         let this = self.get_mut();
         if let Some(out) = this.output.take() {
             return Poll::Ready(*out);
         }
         let Some(mut inner) = this.inner.take() else {
-
             return Poll::Ready(Err(Box::new("future 已被重复 poll")));
         };
         let polled = std::panic::catch_unwind(AssertUnwindSafe(|| inner.as_mut().poll(cx)));
         match polled {
             Ok(Poll::Ready(v)) => Poll::Ready(Ok(v)),
             Ok(Poll::Pending) => {
-
                 this.inner = Some(inner);
                 Poll::Pending
             }
@@ -161,7 +155,6 @@ mod tests {
 
     #[test]
     fn request_id_header_name_is_a_legal_http_header_name() {
-
         let n = axum::http::HeaderName::from_static(REQUEST_ID_HEADER_NAME);
         assert_eq!(n.as_str(), "x-quill-request-id");
     }
@@ -176,7 +169,6 @@ mod tests {
 
     #[test]
     fn panic_detail_handles_both_payload_shapes_and_the_unknown_one() {
-
         let s: PanicPayload = Box::new("静态消息");
         assert_eq!(detail_of(&s), "静态消息");
         let owned: PanicPayload = Box::new(String::from("拥有所有权的消息"));

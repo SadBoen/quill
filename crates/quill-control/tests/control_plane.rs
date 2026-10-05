@@ -1,4 +1,3 @@
-
 use std::sync::Arc;
 
 use sqlx::{Row, SqlitePool};
@@ -46,7 +45,6 @@ impl Fixture {
             pool,
             Arc::clone(&clock) as Arc<dyn quill_control::Clock>,
             Arc::new(SeqSource::default()) as Arc<dyn SecretSource>,
-
             Pbkdf2Params::for_tests(),
             AuthPolicy::for_tests(),
         );
@@ -102,7 +100,6 @@ async fn first_owner_is_created_and_second_attempt_is_refused() {
 
 #[tokio::test]
 async fn first_owner_role_cannot_be_downgraded_by_the_caller() {
-
     let f = Fixture::new().await;
     let owner = f
         .plane
@@ -736,7 +733,6 @@ async fn change_password_rejects_a_weak_new_password() {
 
 #[tokio::test]
 async fn change_password_advances_the_credential_epoch() {
-
     let f = Fixture::new().await;
     let owner = f.owner("owner_a").await;
     let before = f
@@ -826,7 +822,6 @@ async fn owner_can_read_any_user_and_list_all() {
 
 #[tokio::test]
 async fn one_users_token_never_authenticates_as_another_user() {
-
     let f = Fixture::new().await;
     let owner = f.owner("owner_a").await;
     let a = f.member(&owner, "member_a").await;
@@ -1065,7 +1060,6 @@ async fn member_cannot_issue_or_list_invites() {
 
 #[tokio::test]
 async fn owner_cannot_revoke_another_owners_invite() {
-
     let f = Fixture::new().await;
     let a = f.owner("owner_a").await;
     let inv = f
@@ -1154,7 +1148,6 @@ async fn multi_use_invite_allows_exactly_max_uses_redeems() {
         f.plane
             .redeem_invite(
                 &inv.code,
-
                 &RegistrationRequest::new(format!("user{i}"), "用户", format!("user-{i}-pass-1")),
             )
             .await
@@ -1177,7 +1170,6 @@ async fn multi_use_invite_allows_exactly_max_uses_redeems() {
 
 #[tokio::test]
 async fn invite_redeem_with_duplicate_username_rolls_back_the_whole_transaction() {
-
     let f = Fixture::new().await;
     let owner = f.owner("owner_a").await;
     f.member(&owner, "taken_name").await;
@@ -1205,7 +1197,6 @@ async fn invite_redeem_with_duplicate_username_rolls_back_the_whole_transaction(
 
 #[tokio::test]
 async fn plaintext_password_is_never_written_to_the_database() {
-
     let f = Fixture::new().await;
     let owner = f.owner("owner_a").await;
     f.plane
@@ -1291,7 +1282,6 @@ async fn control_plane_debug_does_not_dump_pool_or_entropy() {
 
 #[tokio::test]
 async fn user_profile_has_no_password_fields_at_all() {
-
     let f = Fixture::new().await;
     let owner = f.owner("owner_a").await;
     let shown = format!("{:?}", owner);
@@ -1305,7 +1295,6 @@ async fn user_profile_has_no_password_fields_at_all() {
 
 #[tokio::test]
 async fn production_params_are_not_weakened_by_the_test_shortcut() {
-
     let prod = Pbkdf2Params::production();
     assert!(
         prod.iterations >= 600_000,

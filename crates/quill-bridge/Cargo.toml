@@ -5,13 +5,6 @@ edition = "2021"
 description = "实例间委派共享防护（SSRF / 路径白名单 / 头剥离）"
 license = "Apache-2.0"
 
-# ⚠️ 本 crate 是【M1 新增】，裁决依据见 DELIVERY_PLAN 十七章：
-#   「它是 M0 架构边界的自然产物 —— 一个不持用户态的 crate，
-#    在结构上无法被误用成『主进程里的用户态载体』」
-#
-# ⚠️ 依赖方向铁律（契约 §一）：
-#   本 crate 只依赖 quill-adapters / quill-domain，
-#   **禁止**依赖 quill-server（会形成环）。
 [dependencies]
 quill-adapters = { path = "../quill-adapters" }
 quill-domain = { path = "../quill-domain" }

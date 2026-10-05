@@ -1,4 +1,3 @@
-
 use sha2::{Digest, Sha256};
 
 use crate::error::ControlError;
@@ -16,12 +15,10 @@ pub const PBKDF2_ALGO_PREFIX: &str = "pbkdf2-hmac-sha256";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Pbkdf2Params {
-
     pub iterations: u32,
 }
 
 impl Pbkdf2Params {
-
     pub const fn production() -> Self {
         Self {
             iterations: 600_000,
@@ -72,7 +69,6 @@ impl Pbkdf2Params {
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct PasswordDigest {
-
     pub algo_tag: String,
 
     pub salt: [u8; SALT_BYTES],
@@ -81,7 +77,6 @@ pub struct PasswordDigest {
 }
 
 impl std::fmt::Debug for PasswordDigest {
-
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PasswordDigest")
             .field("algo_tag", &self.algo_tag)
@@ -112,7 +107,6 @@ pub fn validate_password(password: &str, username_norm: &str) -> Result<(), Cont
 }
 
 pub fn hmac_sha256(key: &[u8], msg: &[u8]) -> [u8; 32] {
-
     const BLOCK: usize = 64;
     let mut k = [0u8; BLOCK];
     if key.len() > BLOCK {
@@ -151,14 +145,12 @@ pub fn pbkdf2_sha256(password: &[u8], salt: &[u8], iterations: u32, dk_len: usiz
     let mut out = Vec::with_capacity(dk_len);
     let mut block_index: u32 = 1;
     while out.len() < dk_len {
-
         let mut first = Vec::with_capacity(salt.len() + 4);
         first.extend_from_slice(salt);
         first.extend_from_slice(&block_index.to_be_bytes());
         let mut u = hmac_sha256(password, &first);
         let mut t = u;
         for _ in 1..iterations {
-
             u = hmac_sha256(password, &u);
             for (acc, byte) in t.iter_mut().zip(u.iter()) {
                 *acc ^= *byte;
@@ -188,7 +180,6 @@ pub struct PasswordHasher {
 }
 
 impl PasswordHasher {
-
     pub fn new(params: Pbkdf2Params) -> Self {
         Self { params }
     }
@@ -259,7 +250,6 @@ mod tests {
 
     #[test]
     fn hmac_matches_published_vectors() {
-
         let cases: [(&[u8], &[u8], &str); 3] = [
             (
                 &[0x0b; 20],
@@ -288,7 +278,6 @@ mod tests {
 
     #[test]
     fn hmac_handles_keys_longer_than_the_block_size() {
-
         let key = [0xaau8; 131];
         assert_eq!(key.len(), 131);
         let got = hex_encode(&hmac_sha256(
@@ -311,7 +300,6 @@ mod tests {
 
     #[test]
     fn pbkdf2_matches_published_vectors() {
-
         let cases = [
             Pbkdf2Vector {
                 pw: b"password",
@@ -367,7 +355,6 @@ mod tests {
 
     #[test]
     fn pbkdf2_multi_block_matches_reference() {
-
         let short = pbkdf2_sha256(b"password", b"salt", 2, 40);
         let long = pbkdf2_sha256(b"password", b"salt", 2, 100);
         assert_eq!(short.len(), 40);
@@ -407,7 +394,6 @@ mod tests {
 
     #[test]
     fn parse_algo_rejects_weakened_or_foreign_tags_loudly() {
-
         for bad in [
             "argon2id",
             "",
@@ -460,7 +446,6 @@ mod tests {
 
     #[test]
     fn same_password_twice_yields_different_digest() {
-
         let hasher = PasswordHasher::new(Pbkdf2Params::for_tests());
         let e = NonCsprngEntropySource::new();
         let a = hasher.hash(&e, "correct-horse-battery");
@@ -475,7 +460,6 @@ mod tests {
 
     #[test]
     fn verify_refuses_rows_whose_algo_tag_is_not_understood() {
-
         let hasher = PasswordHasher::new(Pbkdf2Params::for_tests());
         let stored = PasswordDigest {
             algo_tag: "argon2id".to_string(),
@@ -487,7 +471,6 @@ mod tests {
 
     #[test]
     fn verify_uses_the_params_stored_in_the_row_not_current_config() {
-
         let weak = PasswordHasher::new(Pbkdf2Params::for_tests());
         let salt = FixedSalt;
         let legacy = weak.hash(&salt, "correct-horse-battery");
@@ -503,7 +486,6 @@ mod tests {
 
     #[test]
     fn digest_debug_does_not_leak_material() {
-
         let hasher = PasswordHasher::new(Pbkdf2Params::for_tests());
         let d = hasher.hash(&FixedSalt, "correct-horse-battery");
         let salt_hex = hex_encode(&d.salt);
@@ -533,7 +515,6 @@ mod tests {
 
     #[test]
     fn password_policy_bounds_and_username_collision() {
-
         assert!(validate_password("correct-horse-battery", "zhang_wei").is_ok());
         assert_eq!(
             validate_password("short", "zhang_wei"),

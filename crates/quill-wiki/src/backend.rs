@@ -1,4 +1,3 @@
-
 use quill_adapters::{
     IndexDoc, IndexReceipt, IngestContext, KnowledgePage, KnowledgeSource, LintContext,
 };
@@ -113,7 +112,6 @@ mod tests {
 
     #[test]
     fn wire_types_carry_no_path_handles() {
-
         let p = KnowledgePage {
             rel_path: "a.md".into(),
             content: "b".into(),
@@ -145,7 +143,6 @@ mod tests {
 
     #[test]
     fn page_from_wire_rejects_unparsable_content_instead_of_defaulting() {
-
         assert!(
             page_from_wire(&KnowledgePage {
                 rel_path: "a.md".into(),

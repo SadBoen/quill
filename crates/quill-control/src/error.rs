@@ -1,4 +1,3 @@
-
 use std::fmt;
 
 use quill_adapters::AdapterError;
@@ -7,35 +6,29 @@ pub const DOCTOR_CMD: &str = "quill doctor";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControlError {
-
     UsernameInvalid {
-
         raw: String,
 
         reason: &'static str,
     },
 
     UsernameTaken {
-
         username_norm: String,
     },
 
     DisplayNameInvalid {
-
         raw: String,
 
         reason: &'static str,
     },
 
     PasswordTooShort {
-
         len: usize,
 
         min: usize,
     },
 
     PasswordTooLong {
-
         len: usize,
 
         max: usize,
@@ -46,19 +39,16 @@ pub enum ControlError {
     CredentialsRejected,
 
     AccountDisabled {
-
         username_norm: String,
     },
 
     AccountLocked {
-
         username_norm: String,
 
         until_ms: i64,
     },
 
     NotAnOwner {
-
         operation: &'static str,
     },
 
@@ -69,17 +59,14 @@ pub enum ControlError {
     SessionUnknown,
 
     SessionExpired {
-
         expired_at_ms: i64,
     },
 
     SessionRevoked {
-
         reason: String,
     },
 
     SessionReuseDetected {
-
         family: String,
     },
 
@@ -88,12 +75,10 @@ pub enum ControlError {
     InviteUnknown,
 
     InviteExpired {
-
         expired_at_ms: i64,
     },
 
     InviteExhausted {
-
         max_uses: i32,
     },
 
@@ -104,25 +89,21 @@ pub enum ControlError {
     SelfDisableForbidden,
 
     InviteUsesOutOfRange {
-
         got: i32,
 
         max: i32,
     },
 
     InvariantBroken {
-
         detail: String,
     },
 
     Storage {
-
         detail: String,
     },
 }
 
 impl ControlError {
-
     pub fn code(&self) -> &'static str {
         match self {
             Self::UsernameInvalid { .. } => "username_invalid",
@@ -204,7 +185,6 @@ fn tail(f: &mut fmt::Formatter<'_>, cmd: &str) -> fmt::Result {
 
 impl fmt::Display for ControlError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-
         let cmd = self.fix_command();
         let tail = |f: &mut fmt::Formatter<'_>| tail(f, &cmd);
         match self {
@@ -365,9 +345,7 @@ impl fmt::Display for ControlError {
 impl std::error::Error for ControlError {}
 
 impl From<ControlError> for AdapterError {
-
     fn from(e: ControlError) -> Self {
-
         let code = e.code();
         match e {
             ControlError::CredentialsRejected
@@ -465,7 +443,6 @@ mod tests {
 
     #[test]
     fn every_error_carries_a_copyable_command() {
-
         let all = one_of_each();
         assert_eq!(all.len(), 26, "变体数变了，请同步本测试的样本清单");
         for e in &all {
@@ -491,7 +468,6 @@ mod tests {
 
     #[test]
     fn every_error_display_points_at_the_same_command() {
-
         for e in one_of_each() {
             let msg = e.to_string();
             assert!(
@@ -510,7 +486,6 @@ mod tests {
 
     #[test]
     fn errors_never_echo_secrets() {
-
         let secretish = "hunter2-correct-horse";
         let tokenish = "a".repeat(64);
         let cases = [
@@ -557,7 +532,6 @@ mod tests {
 
     #[test]
     fn adapter_error_carries_code_not_prose() {
-
         let a: AdapterError = ControlError::CredentialsRejected.into();
         match a {
             AdapterError::Unauthorized(payload) => {

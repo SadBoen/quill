@@ -1,4 +1,3 @@
-
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
@@ -19,7 +18,6 @@ pub struct DispatchKey {
 }
 
 impl DispatchKey {
-
     pub fn new(
         owner: UserId,
         room_id: impl Into<String>,
@@ -69,7 +67,6 @@ impl std::fmt::Display for DispatchKey {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DispatchState {
-
     Pending,
 
     Running,
@@ -84,7 +81,6 @@ pub enum DispatchState {
 }
 
 impl DispatchState {
-
     pub fn as_wire(&self) -> &'static str {
         match self {
             Self::Pending => "PENDING",
@@ -135,7 +131,6 @@ pub struct DispatchRecord {
 }
 
 impl DispatchRecord {
-
     pub fn pending(key: DispatchKey, member: MemberId) -> Self {
         Self {
             key,
@@ -177,7 +172,6 @@ impl DispatchRecord {
 
     pub fn mark_asking(&mut self, depth: u32) -> Result<(), AgentError> {
         if depth == 0 {
-
             return Err(AgentError::DispatchIllegalTransition {
                 detail: format!("跃迁到 ASKING 时 ask_depth 必须 > 0，实际给了 {depth}"),
             });
@@ -192,7 +186,6 @@ impl DispatchRecord {
 
     pub fn settle_done(&mut self, outcome: MemberOutcome) -> Result<(), AgentError> {
         if !outcome.status().is_deliverable() {
-
             return Err(AgentError::DispatchIllegalTransition {
                 detail: format!(
                     "不能用状态 {} 的结果结算为 DONE（无产出正文）",
@@ -256,16 +249,13 @@ impl DispatchRecord {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MemberResult {
-
     Delivered {
-
         member: MemberId,
 
         outcome: MemberOutcome,
     },
 
     Failed {
-
         member: MemberId,
 
         error: AgentError,
@@ -273,7 +263,6 @@ pub enum MemberResult {
 }
 
 impl MemberResult {
-
     pub fn member(&self) -> &MemberId {
         match self {
             Self::Delivered { member, .. } | Self::Failed { member, .. } => member,
@@ -294,14 +283,12 @@ impl MemberResult {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BeginOutcome {
-
     Created(DispatchRecord),
 
     Existed(DispatchRecord),
 }
 
 impl BeginOutcome {
-
     pub fn record(&self) -> &DispatchRecord {
         match self {
             Self::Created(r) | Self::Existed(r) => r,
@@ -314,7 +301,6 @@ impl BeginOutcome {
 }
 
 pub trait DispatchLedger: Send + Sync + 'static {
-
     fn begin(&self, record: &DispatchRecord) -> Result<BeginOutcome, AgentError>;
 
     fn put(&self, record: &DispatchRecord) -> Result<(), AgentError>;
@@ -328,7 +314,6 @@ pub trait DispatchLedger: Send + Sync + 'static {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RoundPrefix {
-
     pub owner: UserId,
 
     pub room_id: String,
@@ -338,7 +323,6 @@ pub struct RoundPrefix {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DispatchTask {
-
     pub expert: ExpertId,
 
     pub member: MemberId,
@@ -349,7 +333,6 @@ pub struct DispatchTask {
 }
 
 impl DispatchTask {
-
     pub fn new(
         expert: ExpertId,
         member: MemberId,
@@ -394,7 +377,6 @@ impl DispatchTask {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DispatchReport {
-
     pub room_id: String,
 
     pub round: u32,
@@ -407,7 +389,6 @@ pub struct DispatchReport {
 }
 
 impl DispatchReport {
-
     pub fn delivered_count(&self) -> usize {
         self.results.iter().filter(|r| r.is_delivered()).count()
     }
@@ -444,7 +425,6 @@ impl DispatchReport {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoundRequest<'a> {
-
     pub owner: UserId,
 
     pub session: SessionId,
@@ -467,7 +447,6 @@ pub struct Dispatcher<E: MemberExecutor, L: DispatchLedger> {
 }
 
 impl<E: MemberExecutor, L: DispatchLedger> Dispatcher<E, L> {
-
     pub fn new(executor: E, ledger: L) -> Self {
         Self { executor, ledger }
     }
@@ -491,9 +470,7 @@ impl<E: MemberExecutor, L: DispatchLedger> Dispatcher<E, L> {
         let mut recovered = Vec::new();
 
         for task in tasks {
-
             if !team.has_member(&task.expert) && !team.is_leader(&task.expert) {
-
                 return Err(AgentError::TeamInvalid(
                     quill_domain::TeamError::UnknownExpert(task.expert.clone()),
                 ));
@@ -514,7 +491,6 @@ impl<E: MemberExecutor, L: DispatchLedger> Dispatcher<E, L> {
             match begun.record().state() {
                 DispatchState::Pending => {
                     if is_recovery {
-
                         recovered.push(key.clone());
                     }
                 }
@@ -523,7 +499,6 @@ impl<E: MemberExecutor, L: DispatchLedger> Dispatcher<E, L> {
                     continue;
                 }
                 _ => {
-
                     skipped.push(task.member.clone());
                     continue;
                 }
@@ -572,7 +547,6 @@ impl<E: MemberExecutor, L: DispatchLedger> Dispatcher<E, L> {
 
         let result = match started {
             Ok(outcome) => {
-
                 if outcome.status().is_deliverable() {
                     record.settle_done(outcome.clone())?;
                     self.ledger.put(&record)?;
@@ -604,7 +578,6 @@ impl<E: MemberExecutor, L: DispatchLedger> Dispatcher<E, L> {
                 }
             }
             Err(adapter_err) => {
-
                 let err = AgentError::from_member_error(&task.member, adapter_err);
                 record.settle_failed(err.clone())?;
                 self.ledger.put(&record)?;
@@ -650,7 +623,6 @@ impl<E: MemberExecutor, L: DispatchLedger> Dispatcher<E, L> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveryReport {
-
     pub checked: usize,
 
     pub safe_to_retry: Vec<DispatchKey>,
@@ -659,7 +631,6 @@ pub struct RecoveryReport {
 }
 
 impl RecoveryReport {
-
     pub fn summary(&self) -> String {
         format!(
             "崩溃恢复：已检查 {} 条在途派工，可安全重派 {} 条，需人工确认 {} 条。\
@@ -681,7 +652,6 @@ pub struct MemDispatchLedger {
 }
 
 impl MemDispatchLedger {
-
     pub fn new() -> Self {
         Self::default()
     }
@@ -699,7 +669,6 @@ impl DispatchLedger for MemDispatchLedger {
     fn begin(&self, record: &DispatchRecord) -> Result<BeginOutcome, AgentError> {
         let mut g = self.rows.lock().expect("账本锁不应被毒化");
         if let Some(existing) = g.get(record.key()) {
-
             return Ok(BeginOutcome::Existed(existing.clone()));
         }
         g.insert(record.key().clone(), record.clone());
@@ -758,7 +727,6 @@ pub struct SharedExecutor<E: MemberExecutor> {
 }
 
 impl<E: MemberExecutor> SharedExecutor<E> {
-
     pub fn new(inner: std::sync::Arc<E>) -> Self {
         Self { inner }
     }

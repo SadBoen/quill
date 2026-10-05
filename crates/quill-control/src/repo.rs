@@ -1,4 +1,3 @@
-
 use sqlx::error::ErrorKind;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, Sqlite, SqlitePool, Transaction};
@@ -27,7 +26,6 @@ pub(crate) fn map_db_error(e: sqlx::Error, what: &str) -> ControlError {
             detail: format!("{what}：NOT NULL 约束不满足"),
         },
         _ => ControlError::Storage {
-
             detail: format!("{what}：{e}"),
         },
     }
@@ -96,7 +94,6 @@ fn profile_from_row(row: &SqliteRow) -> Result<UserProfile, ControlError> {
 
 #[derive(Debug, Clone)]
 pub(crate) struct UserCredentials {
-
     pub id: UserId,
 
     pub digest: PasswordDigest,
@@ -245,7 +242,6 @@ pub(crate) async fn find_credentials(
 }
 
 fn salt16(row: &SqliteRow) -> Result<[u8; 16], ControlError> {
-
     let v: Vec<u8> = row
         .try_get("password_salt")
         .map_err(invariant("password_salt"))?;
@@ -369,7 +365,6 @@ pub(crate) async fn set_status(
 
 #[derive(Debug, Clone)]
 pub(crate) struct SessionRow {
-
     pub id: SessionId,
 
     pub user_id: UserId,
@@ -533,7 +528,6 @@ pub(crate) async fn revoke_user_sessions(
 
 #[derive(Debug, Clone)]
 pub(crate) struct InviteRow {
-
     pub id: UuidBytes,
 
     pub created_by: UserId,

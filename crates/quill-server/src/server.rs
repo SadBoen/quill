@@ -1,4 +1,3 @@
-
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,7 +18,6 @@ pub fn build_state(config: Config) -> (AppState, Vec<crate::config::Warning>) {
     let max_conn = config.db_max_connections;
     let (db, problem) = match crate::db::DbBridge::open(&db_path, max_conn) {
         Ok(bridge) => {
-
             match bridge.missing_tables() {
                 Ok(missing) if missing.is_empty() => {}
                 Ok(missing) => all.push(crate::config::Warning {
@@ -139,7 +137,6 @@ async fn shutdown_signal() {
     }
     #[cfg(not(unix))]
     {
-
         let _ = tokio::signal::ctrl_c().await;
     }
 }
@@ -159,10 +156,8 @@ mod tests {
 
     #[tokio::test]
     async fn bind_failure_returns_chinese_actionable_message_not_panic() {
-
         let first = bind("127.0.0.1:0".parse().expect("合法地址")).await;
         let Ok(listener) = first else {
-
             eprintln!("本环境无法绑定回环端口，跳过占用冲突用例");
             return;
         };
@@ -174,14 +169,12 @@ mod tests {
 
     #[test]
     fn shutdown_timeout_falls_back_when_env_is_garbage() {
-
         let t = shutdown_timeout();
         assert!(t >= Duration::from_secs(1), "超时必须至少 1 秒");
     }
 
     #[tokio::test]
     async fn build_state_merges_config_and_token_warnings_without_loss() {
-
         let mut config = Config::from_env();
         config.warnings.push(crate::config::Warning {
             source: "QUILL_ADDR".to_string(),
