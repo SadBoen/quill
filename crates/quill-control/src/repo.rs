@@ -1,37 +1,3 @@
-//! 数据访问层：`users` / `sessions_auth` / `invites` 三张表的 SQL。
-//!
-//! # 为什么仓储放在本 crate 而不放 quill-store
-//!
-//! `crates/quill-store/src/lib.rs`（实测 283 行）**只提供连接层**：
-//! `configure_pool` / `run_migration` / `in_memory` / `user_dir_name`。
-//! 它**没有任何仓储方法** —— 它的文档自己写着「不做业务逻辑、不做 SQL 拼装」。
-//! 所以控制面必须自己发 SQL，这也是本 crate 直接依赖 `sqlx` 的原因。
-//!
-//! # 三条必须守住的口径
-//!
-//! 1. **时间一律 `INTEGER` 毫秒**，与本 crate [`Clock`](crate::Clock) 的单位一致。
-//! 2. **BLOB(16) 与 `UserId` / `SessionId` / `UuidBytes` 直连**：走
-//!    `as_bytes()` / `from_bytes()`，不经过字符串（经字符串会引入 hex 解析差异）。
-//! 3. **错误映射按语义类别**：唯一约束冲突 → 业务错误，
-//!    其余 → `Storage`（附中文 + `quill doctor`）。绝不把 `sqlx::Error` 原样抛给调用方。
-//!
-//! # 判定用语义码而不是错误文本
-//!
-//! 唯一约束冲突的识别用 `sqlx::error::ErrorKind::UniqueViolation`
-//! （SQLite 扩展码 → 语义枚举），**不**匹配错误字符串 ——
-//! 后者会随 sqlx 版本漂移，而漂移的表现是「用户名重复时不再报重复」，
-//! 变成一条能写进库的重复账号。
-//!
-//! # 事务边界
-//!
-//! 需要原子性的写路径（邀请码兑换：查邀请码 → 建用户 → 记账）走
-//! [`insert_user_tx`] / [`find_invite_tx`] / [`consume_invite_tx`]，
-//! 它们接收 `&mut Transaction`。
-//!
-//! ⚠️ **不要在事务里用 `&SqlitePool`**：本项目的池 `max_connections=1`
-//! （`quill_store::in_memory` 与 `configure_pool` 的用法），
-//! 事务已占住唯一连接，事务内再向池要连接会**死锁**。
-//! 这不是理论风险 —— 集成测试用的正是单连接内存池。
 
 use sqlx::error::ErrorKind;
 use sqlx::sqlite::SqliteRow;
@@ -43,10 +9,8 @@ use crate::error::ControlError;
 use crate::password::PasswordDigest;
 use crate::user::{UserProfile, UserRole, UserStatus};
 
-/// 本 crate 内部用的事务类型别名。
 pub(crate) type Tx<'a> = Transaction<'a, Sqlite>;
 
-/// 数据库错误 → 领域错误。
 pub(crate) fn map_db_error(e: sqlx::Error, what: &str) -> ControlError {
     let kind = e.as_database_error().map(|d| d.kind());
     match kind {
@@ -63,31 +27,21 @@ pub(crate) fn map_db_error(e: sqlx::Error, what: &str) -> ControlError {
             detail: format!("{what}：NOT NULL 约束不满足"),
         },
         _ => ControlError::Storage {
-            // ⚠️ 这里**必须**带上 sqlx 的原始消息：`ErrorKind::Other` 是个空壳
-            //    （实测踩过：只打 kind 会得到毫无信息量的「（Some(Other)）」，
-            //    让人以为是随机故障）。sqlx 的解码/列缺失类消息只含**列名与类型**，
-            //    不含行数据，因此不构成凭据泄漏。
-            //    反过来，约束类错误走上面的分支，它们不携带任何值。
+
             detail: format!("{what}：{e}"),
         },
     }
 }
 
-/// 判定是否「唯一索引冲突」。
-///
-/// 抽成函数是为了让判定只有一份 —— 复制两份判定就是将来两份判定漂移的起点。
 pub(crate) fn is_unique_violation(e: &sqlx::Error) -> bool {
     e.as_database_error().map(|d| d.kind()) == Some(ErrorKind::UniqueViolation)
 }
 
-/// 「读列失败」的错误构造器。
 fn invariant(col: &str) -> impl Fn(sqlx::Error) -> ControlError + '_ {
     move |e| ControlError::InvariantBroken {
         detail: format!("读列 {col} 失败：{e}"),
     }
 }
-
-// ═══════════════════════ 行 -> 领域类型 ═══════════════════════
 
 fn bytes16(row: &SqliteRow, col: &str) -> Result<[u8; 16], ControlError> {
     let v: Vec<u8> = row.try_get(col).map_err(invariant(col))?;
@@ -113,17 +67,9 @@ fn bytes32(row: &SqliteRow, col: &str) -> Result<[u8; 32], ControlError> {
     Ok(out)
 }
 
-/// 公开档案的列清单。
-///
-/// ⚠️ **刻意用真实换行而不是 `\` 续行**：Rust 的 `\` 续行会吃掉换行**和**下一行的
-/// 全部前导空白，于是 `"...u.pwd_changed_at\` + `     FROM ..."` 会被拼成
-/// `u.pwd_changed_atFROM` —— 一个语法错误，且**只在这条 SQL 被执行时**才暴露。
-/// 本文件实测踩过这个坑（症状是 `(code: 1) near "s": syntax error`）。
-/// 因此本 crate 的多行 SQL 一律用真实换行：SQL 不在乎换行，但在乎 token 之间有分隔。
 const PROFILE_COLS: &str = "id, username, username_norm, display_name, role, status,
      token_epoch, created_at, last_login_at";
 
-/// 从 `users` 行装配公开档案（**不含**任何密码字段）。
 fn profile_from_row(row: &SqliteRow) -> Result<UserProfile, ControlError> {
     let role_s: String = row.try_get("role").map_err(invariant("role"))?;
     let status_s: String = row.try_get("status").map_err(invariant("status"))?;
@@ -148,30 +94,22 @@ fn profile_from_row(row: &SqliteRow) -> Result<UserProfile, ControlError> {
     })
 }
 
-// ═══════════════════════ users ═══════════════════════
-
-/// 登录路径需要的**全部**凭据字段。
-///
-/// crate 内私有：它带密码材料，绝不能出现在返回给 HTTP 层的类型里。
 #[derive(Debug, Clone)]
 pub(crate) struct UserCredentials {
-    /// 用户标识。
+
     pub id: UserId,
-    /// 密码摘要。
+
     pub digest: PasswordDigest,
-    /// 账号状态。
+
     pub status: UserStatus,
-    /// 角色（直接取自被验证的那一行，不再二次查询 —— 避免「两次读到的角色不一致」）。
+
     pub role: UserRole,
-    /// 连续失败次数。
+
     pub login_fail_count: i32,
-    /// 锁定截止时刻；`None` = 未锁定。
+
     pub locked_until_ms: Option<i64>,
 }
 
-/// 插入用户的列与值（事务版与非事务版共用同一段 SQL）。
-///
-/// 见 [`PROFILE_COLS`] 关于「不用 `\` 续行」的说明。
 const INSERT_USER_SQL: &str = "INSERT INTO users(
     id, username, username_norm, display_name,
     password_hash, password_salt, password_algo, role,
@@ -179,11 +117,6 @@ const INSERT_USER_SQL: &str = "INSERT INTO users(
     pwd_changed_at, login_fail_count, created_at, updated_at
 ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, 1, '{}', ?, 0, ?, ?)";
 
-/// 一次用户插入的全部字段。
-///
-/// 打包成结构体的理由与 `service::NewSession` 相同：
-/// `username` 与 `username_norm` 是两个**相邻的 `&str`** 且语义只差规范化 ——
-/// 位置传参时传反是类型合法的，且会静默写错一列（登录从此查不到这个用户）。
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct NewUser<'a> {
     pub id: &'a UserId,
@@ -196,10 +129,6 @@ pub(crate) struct NewUser<'a> {
     pub now_ms: i64,
 }
 
-/// 插入用户（**在事务内**执行）。
-///
-/// 唯一索引冲突时**不直接**断定「用户名重复」——冲突也可能来自主键。
-/// 这里在同一事务里回查 `username_norm` 来区分，让报错指向真正的原因。
 pub(crate) async fn insert_user_tx(tx: &mut Tx<'_>, u: NewUser<'_>) -> Result<(), ControlError> {
     let NewUser {
         id,
@@ -246,7 +175,6 @@ pub(crate) async fn insert_user_tx(tx: &mut Tx<'_>, u: NewUser<'_>) -> Result<()
     }
 }
 
-/// 用户名是否已被占用（**在事务内**查询）。
 pub(crate) async fn username_exists_tx(
     tx: &mut Tx<'_>,
     username_norm: &str,
@@ -261,10 +189,6 @@ pub(crate) async fn username_exists_tx(
     Ok(n > 0)
 }
 
-/// 插入用户（自带事务：开事务 → 插入 → 提交）。
-///
-/// 之所以包一层事务而不是直接用池：让 `insert_user_tx` 成为**唯一**的插入实现，
-/// 避免「事务版与非事务版两份 SQL」将来漂移。
 pub(crate) async fn insert_user(pool: &SqlitePool, u: NewUser<'_>) -> Result<(), ControlError> {
     let mut tx = pool
         .begin()
@@ -276,13 +200,11 @@ pub(crate) async fn insert_user(pool: &SqlitePool, u: NewUser<'_>) -> Result<(),
             .commit()
             .await
             .map_err(|e| map_db_error(e, "提交建号事务")),
-        // ⚠️ 事务随 tx 析构回滚；这里**不**显式 rollback ——
-        //    显式 rollback 后再析构是重复动作，且在某些 sqlx 版本上会二次报错。
+
         Err(e) => Err(e),
     }
 }
 
-/// 按规范化用户名读登录所需的凭据。
 pub(crate) async fn find_credentials(
     pool: &SqlitePool,
     username_norm: &str,
@@ -323,8 +245,7 @@ pub(crate) async fn find_credentials(
 }
 
 fn salt16(row: &SqliteRow) -> Result<[u8; 16], ControlError> {
-    // 盐长度不对必须判失败：否则 PBKDF2 会拿着错误长度的盐
-    // 算出「一个能算出来但永远对不上」的摘要，表现为「所有人都登不上」且无报错。
+
     let v: Vec<u8> = row
         .try_get("password_salt")
         .map_err(invariant("password_salt"))?;
@@ -338,7 +259,6 @@ fn salt16(row: &SqliteRow) -> Result<[u8; 16], ControlError> {
     Ok(out)
 }
 
-/// 读取一个用户的公开档案。
 pub(crate) async fn find_profile(
     pool: &SqlitePool,
     id: &UserId,
@@ -352,7 +272,6 @@ pub(crate) async fn find_profile(
     row.as_ref().map(profile_from_row).transpose()
 }
 
-/// 列出全部未删除用户。
 pub(crate) async fn list_profiles(pool: &SqlitePool) -> Result<Vec<UserProfile>, ControlError> {
     let sql = format!(
         "SELECT {PROFILE_COLS} FROM users WHERE deleted_at IS NULL
@@ -365,7 +284,6 @@ pub(crate) async fn list_profiles(pool: &SqlitePool) -> Result<Vec<UserProfile>,
     rows.iter().map(profile_from_row).collect()
 }
 
-/// 未删除用户数（`create_first_owner` 的前置条件）。
 pub(crate) async fn count_users(pool: &SqlitePool) -> Result<i64, ControlError> {
     sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE deleted_at IS NULL")
         .fetch_one(pool)
@@ -373,7 +291,6 @@ pub(crate) async fn count_users(pool: &SqlitePool) -> Result<i64, ControlError> 
         .map_err(|e| map_db_error(e, "统计用户数"))
 }
 
-/// 记录一次登录成功：清零失败计数、写 `last_login_at`、解锁。
 pub(crate) async fn record_login_success(
     pool: &SqlitePool,
     id: &UserId,
@@ -392,9 +309,6 @@ pub(crate) async fn record_login_success(
     Ok(())
 }
 
-/// 记录一次登录失败并更新锁定时刻。
-///
-/// `locked_until` 为 `None` 表示不加锁。
 pub(crate) async fn record_login_failure(
     pool: &SqlitePool,
     id: &UserId,
@@ -413,12 +327,6 @@ pub(crate) async fn record_login_failure(
     Ok(())
 }
 
-/// 改密码：写新摘要、推进 `pwd_changed_at`、代次 +1、清零失败计数。
-///
-/// ⚠️ `token_epoch` **不参与**会话校验（`sessions_auth` 没有存它的列）。
-/// 它是「凭据代次」计数器，v1 里由 [`UserProfile::token_epoch`] 暴露，
-/// 供将来「把 epoch 快照写进 sessions_auth」的 expand-only 迁移使用。
-/// 今天真正强制「改密即失效」的是 `pwd_changed_at` + 显式撤销全部会话（两处都有断言）。
 pub(crate) async fn replace_password(
     pool: &SqlitePool,
     id: &UserId,
@@ -443,7 +351,6 @@ pub(crate) async fn replace_password(
     Ok(())
 }
 
-/// 改账号状态（启用 / 禁用）。
 pub(crate) async fn set_status(
     pool: &SqlitePool,
     id: &UserId,
@@ -460,28 +367,25 @@ pub(crate) async fn set_status(
     Ok(())
 }
 
-// ═══════════════════════ sessions_auth ═══════════════════════
-
-/// 一个会话行 + 它所属用户的必要字段。
 #[derive(Debug, Clone)]
 pub(crate) struct SessionRow {
-    /// 会话标识。
+
     pub id: SessionId,
-    /// 所属用户。
+
     pub user_id: UserId,
-    /// 令牌家族（轮换链的根）。
+
     pub family_id: SessionId,
-    /// 签发时刻。
+
     pub issued_at_ms: i64,
-    /// 过期时刻。
+
     pub expires_at_ms: i64,
-    /// 撤销时刻；`None` = 未撤销。
+
     pub revoked_at_ms: Option<i64>,
-    /// 撤销原因。
+
     pub revoked_reason: Option<String>,
-    /// 所属用户的状态（禁用要立即让会话失效）。
+
     pub user_status: UserStatus,
-    /// 所属用户改密时刻（会话必须不早于它）。
+
     pub pwd_changed_at_ms: i64,
 }
 
@@ -490,7 +394,6 @@ const SESSION_SELECT: &str = "SELECT s.id, s.user_id, s.family_id, s.issued_at, 
      FROM sessions_auth s JOIN users u ON u.id = s.user_id
      WHERE s.token_hash = ? AND u.deleted_at IS NULL";
 
-/// 按令牌摘要查会话。
 pub(crate) async fn find_session_by_digest(
     pool: &SqlitePool,
     digest: &[u8; 32],
@@ -522,10 +425,6 @@ fn session_from_row(row: &SqliteRow) -> Result<SessionRow, ControlError> {
     })
 }
 
-/// 一次会话插入的全部字段。
-///
-/// 打包理由同 [`NewUser`]：`user_agent` 与 `peer_addr` 是两个相邻的
-/// `Option<&str>`，位置传参时传反在类型上完全合法。
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct NewSession<'a> {
     pub id: &'a SessionId,
@@ -539,7 +438,6 @@ pub(crate) struct NewSession<'a> {
     pub peer_addr: Option<&'a str>,
 }
 
-/// 插入会话。
 pub(crate) async fn insert_session(
     pool: &SqlitePool,
     s: NewSession<'_>,
@@ -576,7 +474,6 @@ pub(crate) async fn insert_session(
     Ok(())
 }
 
-/// 撤销单个会话，返回受影响的行数（0 = 已经处于撤销态）。
 pub(crate) async fn revoke_session(
     pool: &SqlitePool,
     id: &SessionId,
@@ -596,7 +493,6 @@ pub(crate) async fn revoke_session(
     Ok(res.rows_affected())
 }
 
-/// 撤销整个令牌家族（检出重放时连坐）。
 pub(crate) async fn revoke_family(
     pool: &SqlitePool,
     family_id: &SessionId,
@@ -616,7 +512,6 @@ pub(crate) async fn revoke_family(
     Ok(res.rows_affected())
 }
 
-/// 撤销某用户的全部未撤销会话，返回受影响行数。
 pub(crate) async fn revoke_user_sessions(
     pool: &SqlitePool,
     user_id: &UserId,
@@ -636,26 +531,23 @@ pub(crate) async fn revoke_user_sessions(
     Ok(res.rows_affected())
 }
 
-// ═══════════════════════ invites ═══════════════════════
-
-/// 一个邀请码行。
 #[derive(Debug, Clone)]
 pub(crate) struct InviteRow {
-    /// 邀请码标识（128 位，`invites.id`）。
+
     pub id: UuidBytes,
-    /// 创建者。
+
     pub created_by: UserId,
-    /// 被邀请人将获得的角色。
+
     pub role: UserRole,
-    /// 最大使用次数。
+
     pub max_uses: i32,
-    /// 已使用次数。
+
     pub used_count: i32,
-    /// 过期时刻。
+
     pub expires_at_ms: i64,
-    /// 撤销时刻。
+
     pub revoked_at_ms: Option<i64>,
-    /// 创建时刻。
+
     pub created_at_ms: i64,
 }
 
@@ -675,7 +567,6 @@ fn invite_from_row(row: &SqliteRow) -> Result<InviteRow, ControlError> {
     })
 }
 
-/// 一次邀请码插入的全部字段。打包理由同 [`NewUser`]。
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct NewInvite<'a> {
     pub id: &'a UuidBytes,
@@ -687,7 +578,6 @@ pub(crate) struct NewInvite<'a> {
     pub created_at_ms: i64,
 }
 
-/// 插入邀请码。
 pub(crate) async fn insert_invite(pool: &SqlitePool, v: NewInvite<'_>) -> Result<(), ControlError> {
     let NewInvite {
         id,
@@ -715,7 +605,6 @@ pub(crate) async fn insert_invite(pool: &SqlitePool, v: NewInvite<'_>) -> Result
     Ok(())
 }
 
-/// 按邀请码摘要查邀请码（**在事务内**执行）。
 pub(crate) async fn find_invite_tx(
     tx: &mut Tx<'_>,
     digest: &[u8; 32],
@@ -729,11 +618,6 @@ pub(crate) async fn find_invite_tx(
     row.as_ref().map(invite_from_row).transpose()
 }
 
-/// 记一次邀请码使用（**在事务内**执行）。
-///
-/// ⚠️ 调用方必须**先**在同一事务里校验有效性。
-/// 本函数刻意**不再带任何条件**（如 `used_count < max_uses`）：
-/// 那样会把「校验」与「记账」分裂成两条语句，中间一旦插队就会超出 `max_uses` 发放。
 pub(crate) async fn consume_invite_tx(
     tx: &mut Tx<'_>,
     id: &UuidBytes,
@@ -760,12 +644,6 @@ pub(crate) async fn consume_invite_tx(
     Ok(())
 }
 
-/// 列出邀请码（全部，未删除的）。
-///
-/// ⚠️ **刻意不带 `WHERE created_by = ?`**：归属检查由调用方在**同一事务**里
-/// 用 `revoke_invite_owned` 的 `WHERE created_by=?` 完成。
-/// 若这里先按创建者过滤、别处再按 id 撤销，就会出现
-/// 「查的时候是我的，改的时候归属已变」的窗口。
 pub(crate) async fn list_invites(pool: &SqlitePool) -> Result<Vec<InviteRow>, ControlError> {
     let sql = format!("SELECT {INVITE_COLS} FROM invites ORDER BY created_at DESC");
     let rows = sqlx::query(&sql)
@@ -775,12 +653,6 @@ pub(crate) async fn list_invites(pool: &SqlitePool) -> Result<Vec<InviteRow>, Co
     rows.iter().map(invite_from_row).collect()
 }
 
-/// 撤销**属于 `created_by`** 的邀请码。
-///
-/// 归属条件写在 SQL 的 `WHERE` 里而不是先查后改：
-/// 后者存在「查的时候还是我的，改的时候归属已变」的窗口。
-/// 返回 `false` 表示「不存在 / 不属于你 / 已撤销」三种情况的合并 —— 对外都表现为
-/// [`ControlError::InviteUnknown`]，不泄露「这张码存在但不是你签的」。
 pub(crate) async fn revoke_invite_owned(
     pool: &SqlitePool,
     id: &UuidBytes,

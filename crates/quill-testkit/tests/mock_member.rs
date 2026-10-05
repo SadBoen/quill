@@ -1,13 +1,3 @@
-//! `MockMemberExecutor` 的行为测试。
-//!
-//! ⚠️ 测的是**真实行为**（脚本消费顺序、调用时序、故障→错误映射、
-//! 状态是否被误改），没有任何 `assert!(true)` 之类占位断言。
-//! 每个边界都有反向用例：合法脚本成功 / 脚本耗尽失败 / 状态不被误改。
-//!
-//! ⚠️ **为什么不用 `#[tokio::test]`**：给 `quill-testkit` 加 tokio 运行时
-//! 等于新增依赖（须主理人裁决）。这里的 future **不真正挂起**
-//! （mock 不 await 任何 IO），因此有界轮询足够；轮询超上限即 panic，
-//! 避免「永远 Pending」被当成成功。
 
 use std::sync::Arc;
 
@@ -17,13 +7,6 @@ use quill_adapters::{
 };
 use quill_testkit::mock_member::{chain, FaultKind, MockMemberExecutor, Step};
 
-/// 把 future 跑到完成。
-///
-/// ⚠️ `Waker::noop()`（Rust 1.85+ 稳定）是**安全**的 noop waker，
-/// 因此本文件不需要 `unsafe` —— 而 `quill-testkit` 是 `#![forbid(unsafe_code)]`。
-///
-/// 上限 10000 次：**必须有上限**。无上限的 `loop` 在 future 挂起时
-/// 会变成无限空转，把一个死锁伪装成「慢」。
 fn block_on<F: std::future::Future>(fut: F) -> F::Output {
     use std::task::{Context, Poll};
     let waker = std::task::Waker::noop();
@@ -86,8 +69,6 @@ fn abort(
     block_on(m.abort(&member(member_name), scope))
 }
 
-// ─────────────────────── 正常路径 ───────────────────────
-
 #[test]
 fn start_returns_scripted_outcome_and_records_call() {
     let m = Arc::new(MockMemberExecutor::new());
@@ -132,7 +113,7 @@ fn start_consumes_script_in_order() {
 
 #[test]
 fn steer_is_recorded_after_start_so_orchestration_can_assert_order() {
-    // 🔴 本 mock 的核心价值：编排层要断言「steer 在 start 之后」。
+
     let m = Arc::new(MockMemberExecutor::new());
     m.push_ok(member("cost-analyst-1"), "产出")
         .push_fault(FaultKind::LinkDropped);
@@ -169,7 +150,7 @@ fn abort_records_scope_and_room_scope_marks_member_halted() {
 
 #[test]
 fn stop_round_does_not_mark_member_as_halted() {
-    // 反向用例：契约七.2 —— 停主持人不得连带停成员。
+
     let m = Arc::new(MockMemberExecutor::new());
     abort(&m, "cost-analyst-1", AbortScope::StopRound).expect("应成功");
 
@@ -195,8 +176,6 @@ fn sequence_numbers_are_contiguous_across_methods() {
     let methods: Vec<&str> = m.calls().iter().map(|c| c.method()).collect();
     assert_eq!(methods, vec!["start", "steer", "abort"], "调用顺序须可还原");
 }
-
-// ─────────────────── 故障注入（docs/07 §4.2.1 六个码）───────────────────
 
 #[test]
 fn each_network_fault_maps_to_a_distinct_error() {
@@ -232,7 +211,7 @@ fn each_network_fault_maps_to_a_distinct_error() {
 
 #[test]
 fn rejected_maps_to_forbidden_while_network_faults_map_to_provider() {
-    // 反向用例：映射错误会让编排层降级链走错分支，故逐个断言变体。
+
     let m = Arc::new(MockMemberExecutor::new());
 
     m.push_fault(FaultKind::Rejected);
@@ -266,7 +245,7 @@ fn rejected_maps_to_forbidden_while_network_faults_map_to_provider() {
 
 #[test]
 fn provider_faults_are_retryable_and_policy_faults_are_not() {
-    // 编排层的降级链（docs/07 §4.3）依赖这个区分。
+
     let m = Arc::new(MockMemberExecutor::new());
 
     m.push_fault(FaultKind::Timeout);
@@ -287,7 +266,7 @@ fn provider_faults_are_retryable_and_policy_faults_are_not() {
 
 #[test]
 fn steer_failure_does_not_change_member_state() {
-    // 🔴 docs/07 §0.1.1 保留 G2：steer 失败不得导致成员失败。
+
     let m = Arc::new(MockMemberExecutor::new());
     m.push_fault(FaultKind::LinkDropped);
 
@@ -315,11 +294,9 @@ fn custom_member_fault_keeps_its_message() {
     assert_eq!(err.detail(), "模型上下文超长", "自定义文案须原样透出");
 }
 
-// ─────────────────── 反向用例：脚本耗尽必须判失败 ───────────────────
-
 #[test]
 fn start_with_empty_script_fails_instead_of_silently_succeeding() {
-    // 🔴 反向用例核心：未命中脚本**不得**悄悄成功 —— 那就是假闸门。
+
     let m = Arc::new(MockMemberExecutor::new());
     let err = start(&m, "cost-analyst", "cost-analyst-1").expect_err("必须失败");
     assert!(
@@ -345,9 +322,7 @@ fn steer_with_empty_script_fails_instead_of_silently_succeeding() {
 
 #[test]
 fn steer_hitting_a_start_success_step_reports_script_misalignment() {
-    // 反向用例：脚本错位必须**显式**报错。
-    // 若静默跳过，测试会因「第 2 次 start 拿到第 3 步内容」而产生
-    // 极难定位的假失败。
+
     let m = Arc::new(MockMemberExecutor::new());
     m.push_ok(member("cost-analyst-1"), "产出");
 
@@ -365,7 +340,7 @@ fn steer_hitting_a_start_success_step_reports_script_misalignment() {
 
 #[test]
 fn exhausted_script_error_reports_how_many_calls_were_checked() {
-    // 「0 与未检查必须可区分」：错误里带上已记录的调用数。
+
     let m = Arc::new(MockMemberExecutor::new());
     let err = start(&m, "cost-analyst", "cost-analyst-1").expect_err("必须失败");
     assert!(
@@ -376,8 +351,7 @@ fn exhausted_script_error_reports_how_many_calls_were_checked() {
 
 #[test]
 fn called_in_order_returns_false_when_one_side_never_happened() {
-    // 反向用例：「只调了 start」不能被算成「start 在 steer 之前」——
-    // 那是把「没检查」当「检查通过」。
+
     let m = Arc::new(MockMemberExecutor::new());
     m.push_ok(member("cost-analyst-1"), "产出");
     start(&m, "cost-analyst", "cost-analyst-1").expect("start 应成功");
@@ -415,7 +389,6 @@ fn clear_calls_resets_ledger_but_keeps_script() {
         "清空后无历史，不得声称存在时序关系"
     );
 
-    // 脚本未被消费：第二次 start 仍拿到第 2 步。
     let out = start(&m, "cost-analyst", "cost-analyst-2").expect("应成功");
     assert_eq!(out.output(), "产出二", "脚本不应被 clear_calls 影响");
     assert_eq!(m.call_count(), 1, "清空后重新计数为 1");
@@ -423,8 +396,7 @@ fn clear_calls_resets_ledger_but_keeps_script() {
 
 #[test]
 fn outcome_step_carries_partial_status() {
-    // mock 不只是「成功/失败」二值：partial 必须能脚本化，
-    // 否则编排层的部分成功分支永远测不到。
+
     let m = Arc::new(MockMemberExecutor::new());
     let partial = MemberOutcome::new(
         member("cost-analyst-1"),
@@ -460,8 +432,7 @@ fn outcome_step_carries_failed_status_with_scope_only() {
 
 #[test]
 fn chain_helper_builds_usable_hops_for_cycle_checks() {
-    // mock 与契约层的环防护可组合使用：这是「一个 trait、一个 mock」
-    // （docs/07 §0.0）的实际收益。
+
     let hops = chain(&[("node-a", "t-001"), ("node-b", "t-002")]);
     assert_eq!(hops.len(), 2, "已检查：应构造 2 跳");
     assert_eq!(hops[0].node(), "node-a");
@@ -480,8 +451,7 @@ fn chain_helper_builds_usable_hops_for_cycle_checks() {
 
 #[test]
 fn mock_is_usable_from_multiple_threads() {
-    // `MemberExecutor: Send + Sync` 是契约要求的；mock 若不满足，
-    // 编排层就无法把它放进 `Arc` 跨线程注入。
+
     let m = Arc::new(MockMemberExecutor::new());
     for i in 0..8 {
         m.push_ok(member(&format!("cost-analyst-{i}")), "产出");

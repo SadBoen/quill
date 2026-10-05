@@ -1,23 +1,3 @@
-//! 专家 CRUD 的真实 handler（契约 §5.1 的 5 条路由里实现 4 条）。
-//!
-//! # 这一层负责什么、不负责什么
-//!
-//! | 层 | 职责 |
-//! |---|---|
-//! | 本模块 | HTTP 形状：解析/校验入参、选状态码、渲染 JSON、把领域错误映射成可诊断响应 |
-//! | `quill_agent::ExpertRegistry` | 领域不变量：可见性、内置保护、软删幂等 |
-//! | `crate::experts_repo` | 存储：跨用户隔离的 SQL 与 upsert |
-//!
-//! # 身份从哪来
-//!
-//! `owner` **一律取自令牌解析出的 [`AuthContext`]**，绝取自请求体或路径。
-//! 少了这一条，`POST /api/experts` 就能替别人建专家 —— 提权。
-//!
-//! # 错误不外泄（铁律四 / 铁律七）
-//!
-//! [`map_agent_error`] 只把**已审阅的中文文案**发给客户端；
-//! `AgentError` 的完整内容（含底层 SQL 串）只进 stderr。
-//! 用户拿到的是「发生了什么 + 下一步执行什么」，运维在日志里拿到真实原因。
 
 use axum::extract::{Path, State};
 use axum::Json;
@@ -32,7 +12,6 @@ use crate::error::ApiError;
 use crate::experts_repo::SqlxExpertRepository;
 use crate::state::AppState;
 
-/// `GET /api/experts` —— 列出当前用户**可见**的专家。
 pub async fn list(State(state): State<AppState>, user: AuthUser) -> Result<Json<Value>, ApiError> {
     let registry = registry(&state)?;
     let experts = map_agent_error("列出专家", registry.list_visible(&user.0.user_id))?;
@@ -41,7 +20,6 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> Result<Json<
     })))
 }
 
-/// `POST /api/experts` —— 创建自建专家。
 pub async fn create(
     State(state): State<AppState>,
     user: AuthUser,
@@ -58,12 +36,11 @@ pub async fn create(
         description: need_str(&body, "description")?,
     };
     let registry = registry(&state)?;
-    // ⚠️ 属主来自令牌，不来自请求体。
+
     let expert = map_agent_error("创建专家", registry.create_user_expert(user.0.user_id, new))?;
     Ok((axum::http::StatusCode::CREATED, Json(expert_json(&expert))))
 }
 
-/// `GET /api/experts/{slug}` —— 取一个对该用户可见的专家。
 pub async fn get_one(
     State(state): State<AppState>,
     user: AuthUser,
@@ -75,12 +52,6 @@ pub async fn get_one(
     Ok(Json(expert_json(&expert)))
 }
 
-/// `PATCH /api/experts/{slug}` —— 改名 / 改描述 / 改默认启用。
-///
-/// ⚠️ 逐字段应用：任一字段失败时**前面的字段可能已落库**。这是刻意的取舍 ——
-/// 「要么全改要么不改」需要事务，而领域端口是单方法粒度的。
-/// 代价（部分生效）在响应里如实体现（返回的是最终值），
-/// 且每个字段的应用都经过领域层的归属校验，不会越权。
 pub async fn patch(
     State(state): State<AppState>,
     user: AuthUser,
@@ -116,7 +87,7 @@ pub async fn patch(
         touched = true;
     }
     if !touched {
-        // ⚠️ 空 PATCH 必须判红：返回 200 却什么都没改，等于「假成功」。
+
         return Err(ApiError::bad_request(
             "请求体里没有任何可改字段。\
              可改字段：display_name（字符串）、description（字符串）、default_enabled（布尔）。"
@@ -127,9 +98,6 @@ pub async fn patch(
     Ok(Json(expert_json(&expert)))
 }
 
-/// `DELETE /api/experts/{slug}` —— 软删除。
-///
-/// 返回体里的 `deleted` 区分「本次真的删了」与「本来就已删」（幂等重试）。
 pub async fn delete(
     State(state): State<AppState>,
     user: AuthUser,
@@ -148,8 +116,6 @@ pub async fn delete(
         }
     })))
 }
-
-// ─────────────────────────── 内部工具 ───────────────────────────
 
 fn registry(state: &AppState) -> Result<ExpertRegistry<SqlxExpertRepository>, ApiError> {
     let db = state.db()?;
@@ -216,10 +182,6 @@ fn opt_bool(body: &Value, key: &str) -> Result<Option<bool>, ApiError> {
     }
 }
 
-/// 拒绝未知字段。
-///
-/// ⚠️ 存在的理由：`{"displayName": "x"}` 这种驼峰拼写若被静默忽略，
-/// PATCH 会返回 200 却什么都没改 —— 用户以为改名成功了。
 pub(crate) fn only_keys(body: &Value, allowed: &[&str], route: &str) -> Result<(), ApiError> {
     let Some(map) = body.as_object() else {
         return Err(ApiError::bad_request(
@@ -254,14 +216,12 @@ fn type_name(v: &Value) -> &'static str {
     }
 }
 
-/// 领域结果 → HTTP 结果（`?` 位置直接可用）。
 pub fn map_agent_error<T>(op: &str, r: Result<T, AgentError>) -> Result<T, ApiError> {
     r.map_err(|e| agent_error_to_api(op, e))
 }
 
-/// 把领域错误转成对外错误（不返回 `Result`，便于在 `?` 位置使用）。
 pub fn agent_error_to_api(op: &str, e: AgentError) -> ApiError {
-    // ⚠️ 先落日志再映射：映射后的文案**不含**底层原因，日志是唯一的真实来源。
+
     eprintln!("[api] {op} 失败（错误码 {}）：{e}", e.code());
     match e {
         AgentError::ExpertNotFound { id } | AgentError::ExpertDeleted { id } => {
@@ -311,8 +271,7 @@ mod tests {
 
     #[test]
     fn storage_error_never_leaks_the_underlying_sql_text() {
-        // ⚠️ 这是铁律四/七的**机制**证明：错误里带明显的内部串，
-        //    但客户端拿到的文案必须不含它。
+
         let internal = "no such table: experts (code 1)";
         let err = agent_error_to_api(
             "列出专家",

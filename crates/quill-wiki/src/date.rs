@@ -1,20 +1,6 @@
-//! 最小日期类型（`YYYY-MM-DD`）。
-//!
-//! # 为什么自己写而不用 `chrono` / `time`
-//!
-//! **范围硬约束**：`crates/quill-wiki/Cargo.toml` **禁止新增外部 crate**
-//! （见派工约束「Cargo.lock 目前零新增外部 crate」）。
-//! 而 wiki 只需要 `YYYY-MM-DD` 一种形态 —— 不需要时区、不需要时刻、
-//! 不需要 Duration。为它引入一个时间库，是本项目反复被点名的
-//! 「过早优化」形态（`docs/V1_SCOPE_CONSTRAINTS.md` 约束 3 的同类推理）。
-//!
-//! ⚠️ **本类型只做存储与校验，不生成当前日期**：
-//! 「今天是哪天」必须由调用方（server 层）传入，
-//! 否则同一个 crate 在测试里与生产里会得到不同结果，且无法复现。
 
 use std::fmt;
 
-/// 日期。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Date {
     year: u16,
@@ -22,20 +8,19 @@ pub struct Date {
     day: u8,
 }
 
-/// 日期解析失败。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DateError {
-    /// 长度不是 10。
+
     BadLength { got: usize },
-    /// 分隔符位置不对（必须是 `YYYY-MM-DD`）。
+
     BadShape(String),
-    /// 某一段不是数字。
+
     NotNumeric { field: &'static str, value: String },
-    /// 月份越界（1~12）。
+
     MonthOutOfRange(u8),
-    /// 该月没有这一天（如 2 月 30 日）。
+
     DayOutOfRange { year: u16, month: u8, day: u8 },
-    /// 年份为 0。
+
     YearZero,
 }
 
@@ -58,9 +43,6 @@ impl fmt::Display for DateError {
 
 impl std::error::Error for DateError {}
 
-/// 闰年判定（公历）。
-///
-/// 公开是为了让测试能对拍——它本身是纯函数，不产生副作用。
 pub const fn is_leap_year(year: u16) -> bool {
     year.is_multiple_of(4) && !year.is_multiple_of(100) || year.is_multiple_of(400)
 }
@@ -76,13 +58,13 @@ fn days_in_month(year: u16, month: u8) -> u8 {
                 28
             }
         }
-        // 调用方已保证 month ∈ 1..=12；这里给一个不可能的分支而不是 panic。
+
         _ => 0,
     }
 }
 
 impl Date {
-    /// 构造并校验。
+
     pub fn new(year: u16, month: u8, day: u8) -> Result<Self, DateError> {
         if year == 0 {
             return Err(DateError::YearZero);
@@ -96,7 +78,6 @@ impl Date {
         Ok(Self { year, month, day })
     }
 
-    /// 解析 `YYYY-MM-DD`。
     pub fn parse(s: &str) -> Result<Self, DateError> {
         if s.len() != 10 {
             return Err(DateError::BadLength { got: s.len() });
@@ -115,22 +96,18 @@ impl Date {
         let year = num(0, 4, "year")?;
         let month = num(5, 7, "month")?;
         let day = num(8, 10, "day")?;
-        // 年份 4 位上限 9999，u16 装得下；月/日都是 2 位，u8 也装得下。
-        // 越界判定全部交给 new —— 单一判据，避免两处各判一半。
+
         Self::new(year as u16, month as u8, day as u8)
     }
 
-    /// 年。
     pub fn year(&self) -> u16 {
         self.year
     }
 
-    /// 月（1~12）。
     pub fn month(&self) -> u8 {
         self.month
     }
 
-    /// 日（1~31）。
     pub fn day(&self) -> u8 {
         self.day
     }
@@ -200,7 +177,7 @@ mod tests {
         assert!(!is_leap_year(2026));
         assert!(!is_leap_year(1900));
         assert!(is_leap_year(2000));
-        // 2 月 29 日只在闰年合法 —— 这是本函数存在的唯一理由。
+
         assert!(Date::parse("2024-02-29").is_ok());
         assert!(Date::parse("2026-02-29").is_err());
     }

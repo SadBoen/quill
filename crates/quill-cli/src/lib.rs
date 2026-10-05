@@ -1,8 +1,4 @@
-﻿//! `quill-cli` 的库入口：把各子命令暴露出来，便于集成测试直接调用。
-//!
-//! ⚠️ 二进制 `main.rs` 只做「参数 → 命令」的路由，逻辑全在这里。
-//!    理由：`tests/` 下的集成测试**够不到 bin crate 的内部**，
-//!    而"读操作不得静默建号"这类性质恰恰只能从外部验。
+﻿
 
 pub mod cmd_backup;
 pub mod cmd_doctor;
@@ -12,14 +8,6 @@ pub mod store;
 
 use std::fmt;
 
-/// 一条命令的执行结果。
-///
-/// 🔴 退出码是**对外契约**，不是"日志"：
-/// · `0` 成功
-/// · `1` 业务失败（东西不对：没登录、找不到、校验不过）
-/// · `2` **无法判定**（环境不对：库打不开、目录不存在、文件被篡改）
-///
-/// `2` 单独一档且措辞带 `▲`，是为了让"查不出来"和"没问题"在屏幕上可区分。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Outcome {
     pub code: u8,
@@ -33,14 +21,14 @@ impl Outcome {
             message: msg.into(),
         }
     }
-    /// 业务失败：东西不对。
+
     pub fn fail(msg: impl Into<String>) -> Self {
         Self {
             code: 1,
             message: msg.into(),
         }
     }
-    /// 无法判定：环境不对，**不是**"通过"。
+
     pub fn undet(msg: impl Into<String>) -> Self {
         Self {
             code: 2,
@@ -88,21 +76,18 @@ pub const USAGE: &str = r#"quill —— Quill 个人/团队 Agent 平台
   quill backup ./backup-2026-10-05
 "#;
 
-/// 全局选项（各子命令共用）。
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Opts {
     pub user: String,
     pub db: String,
     pub root: String,
     pub yes: bool,
-    /// 子命令自己的参数（已剥掉全局选项）。
+
     pub rest: Vec<String>,
 }
 
 impl Opts {
-    /// 解析全局选项。**未识别的 `--x` 直接判失败**，不静默忽略 ——
-    /// 拼错 `--as` 成 `--asa` 然后以默认用户身份执行，是最危险的一类
-    /// "静默按错的参数干活"。
+
     pub fn parse(args: &[String]) -> Result<Self, Outcome> {
         let mut o = Opts {
             user: "alice".into(),
@@ -155,10 +140,6 @@ fn default_db() -> String {
     format!("{}/quill.db", default_root())
 }
 
-/// 从参数里挑出命令名与剩余参数。
-///
-/// 🔴 命令名**允许出现在任何位置**：`quill --root X doctor` 是最自然的写法，
-/// 只认 `args[0]` 会报「不认识的命令 --root」。第一版就是这么错的。
 pub fn split_command(args: &[String]) -> Result<Option<&str>, Outcome> {
     let mut cmd: Option<&str> = None;
     let mut rest: Vec<String> = Vec::new();
@@ -170,7 +151,7 @@ pub fn split_command(args: &[String]) -> Result<Option<&str>, Outcome> {
             i += 1;
             continue;
         }
-        // 带值的选项，其值不能被当成命令名
+
         if cmd.is_none() && matches!(a.as_str(), "--as" | "--db" | "--root") {
             rest.push(a.clone());
             if let Some(v) = args.get(i + 1) {
@@ -186,7 +167,6 @@ pub fn split_command(args: &[String]) -> Result<Option<&str>, Outcome> {
     Ok(cmd)
 }
 
-/// 完整路由。
 pub async fn dispatch(args: &[String]) -> Outcome {
     let Some(cmd) = split_command(args).unwrap_or(None) else {
         return Outcome::fail(String::from(
@@ -194,7 +174,6 @@ pub async fn dispatch(args: &[String]) -> Outcome {
         ));
     };
 
-    // 重新收集剩余参数：命令名之前的 `--x val` 与之后的所有非选项词
     let mut rest: Vec<String> = Vec::new();
     let mut seen_cmd = false;
     let mut i = 0;

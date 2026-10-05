@@ -1,21 +1,3 @@
-//! `DispatchLedger` 的**真库**集成测试（临时 SQLite 文件）。
-//!
-//! 覆盖任务要求的四项中与派工相关的两条，外加两条它必须自证的：
-//!
-//! | 用例 | 验的是 |
-//! |---|---|
-//! | `begin_twice_…` | 幂等：第二次必须 `Existed`（`BeginOutcome` 判别力） |
-//! | `begin_does_not_overwrite_…` | 命中键时**不覆盖**既有记录 |
-//! | `same_key_of_another_user_is_independent` | 🔴 跨用户隔离：同键不同用户互不干扰 |
-//! | `state_transitions_survive_…` | 状态机 + `ask_depth` + 结算结果的往返 |
-//! | `dispatch_row_really_lands_in_the_table` | 「行真的落库了」而不是只在内存里转 |
-//! | `missing_member_session_…` | 前提缺失时**判红且不写库** |
-//!
-//! # 为什么必须打真库
-//!
-//! `BeginOutcome` 的判别力完全依赖 `ON CONFLICT DO NOTHING RETURNING`
-//! 这一条 SQL 语义。内存实现（`MemDispatchLedger`）用 `BTreeMap` 查一次，
-//! 它的行为**证明不了**真库那句语句是否真的区分了「本次插入」与「早已存在」。
 
 mod common;
 mod dispatch_seed;
@@ -50,10 +32,6 @@ fn key(owner: UserId, room: &str, round: u32, expert: &str) -> DispatchKey {
     DispatchKey::new(owner, room, round, e(expert)).expect("派工键应合法")
 }
 
-/// 建「库 + 外键前提 + 账本 + 房间名」四件套。
-///
-/// ⚠️ 房间名**从夹具取**而不是在用例里另写一个：房间是 `task_dispatches`
-/// 幂等键的组成部分，用例与夹具各写一份就等于两份真相源。
 fn fixture(
     label: &str,
     owner: u8,
@@ -64,7 +42,7 @@ fn fixture(
     let f = seed(&t.bridge(), u(owner), team_seed, members);
     let mut map: BTreeMap<ExpertId, SessionId> = BTreeMap::new();
     for m in members {
-        // ⚠️ 派生规则**只有一份**：在 dispatch_seed 里。
+
         map.insert(e(m), member_session(team_seed, &e(m)));
     }
     let ledger = SqlxDispatchLedger::new(
@@ -77,7 +55,7 @@ fn fixture(
 
 #[test]
 fn begin_twice_returns_created_then_existed() {
-    // 🔴 幂等判别（`BeginOutcome` 存在的全部理由）。
+
     let (t, ledger, room) = fixture("dispatch-idempotent", 1, 0x11, &["cost-analyst"]);
     let k = key(u(1), &room, 0, "cost-analyst");
 
@@ -106,9 +84,6 @@ fn begin_twice_returns_created_then_existed() {
         "Existed 必须返回既有记录本身"
     );
 
-    // ⚠️ 「判别不是靠先查后插」的可观察证据：库里**只有一行**。
-    //    若实现是「先 SELECT 再 INSERT」，第二次虽然也可能返回 Existed，
-    //    但行数会变成 2 —— 那说明唯一索引没兜住。
     assert_eq!(
         scalar_i64(
             &t.bridge(),
@@ -121,8 +96,7 @@ fn begin_twice_returns_created_then_existed() {
 
 #[test]
 fn begin_does_not_overwrite_an_existing_record() {
-    // 幂等的第二半：命中键时**不覆盖**。若 begin 顺手把状态改回 PENDING，
-    // 一个正在 RUNNING 的成员会被重派 —— 而它可能已经产生了副作用。
+
     let (_t, ledger, room) = fixture("dispatch-no-overwrite", 1, 0x12, &["cost-analyst"]);
     let k = key(u(1), &room, 0, "cost-analyst");
 
@@ -152,10 +126,9 @@ fn begin_does_not_overwrite_an_existing_record() {
 
 #[test]
 fn same_key_of_another_user_is_independent() {
-    // 🔴 跨用户隔离：同一 (room, round, expert) 在不同用户下必须是两条独立记录。
-    //    若某条语句漏了 user_id，B 就会「命中」A 的派工并读到 A 的成员会话。
+
     let t = TestDb::new("dispatch-isolation");
-    // 两个用户各要一套外键前提（teams/sessions 都带 user_id）
+
     seed(&t.bridge(), u(1), 0x13, &["cost-analyst"]);
     seed(&t.bridge(), u(2), 0x14, &["cost-analyst"]);
 
@@ -192,20 +165,15 @@ fn same_key_of_another_user_is_independent() {
     );
     assert_eq!(b_out.record().key().owner(), u(2));
 
-    // A 的记录仍在，且 B 看不到
     assert_eq!(la.inflight(&u(1)).expect("A 列在途应成功").len(), 1);
     assert_eq!(lb.inflight(&u(2)).expect("B 列在途应成功").len(), 1);
-    // ⚠️ 归属由**键里的 owner** 决定，不由账本实例决定：
-    //    用 A 的账本对象按 B 的键去查，返回的必须是 B 的行（这才是正确的隔离），
-    //    若它返回 A 的行，说明查询条件丢掉了 user_id。
+
     let via_a = la
         .get(&kb)
         .expect("按 B 的键查应成功")
         .expect("B 的行必须存在");
     assert_eq!(via_a.key().owner(), u(2), "查到的必须是 B 自己的行");
-    // 🔴 真正的隔离断言：两行的成员会话**互不相同**。
-    //    若某条语句漏了 user_id，B 的插入会覆盖 A 的行（复合主键不同则更糟：
-    //    幂等键相同但用户不同，本该是两条独立记录）。
+
     let a_sess = text_of(
         &t.bridge(),
         "SELECT hex(member_session_id) AS v FROM task_dispatches WHERE user_id = x'01010101010101010101010101010101'",
@@ -232,10 +200,7 @@ fn same_key_of_another_user_is_independent() {
 
 #[test]
 fn state_transitions_and_settlement_survive_a_real_roundtrip() {
-    // 状态机 + ask_depth + 结算结果的往返。schema 上有两条硬 CHECK：
-    //   CHECK ((state = 'ASKING') = (ask_depth > 0))
-    //   CHECK ((state IN ('DONE','FAILED','CANCELLED')) = (settled_at IS NOT NULL))
-    // 它们在真库上会真的拒绝非法写入，因此这条用例同时验了「写进去的东西合法」。
+
     let (t, ledger, room) = fixture(
         "dispatch-transitions",
         1,
@@ -251,7 +216,6 @@ fn state_transitions_and_settlement_survive_a_real_roundtrip() {
         ))
         .expect("记账应成功");
 
-    // PENDING → RUNNING
     let mut r = DispatchRecord::pending(k.clone(), member("cost-analyst", 1));
     r.mark_running().expect("RUNNING 应成功");
     ledger.put(&r).expect("写 RUNNING 应成功");
@@ -263,7 +227,6 @@ fn state_transitions_and_settlement_survive_a_real_roundtrip() {
         "成员名必须往返保住"
     );
 
-    // RUNNING → ASKING（ask_depth = 2）
     let mut asking = DispatchRecord::pending(k.clone(), member("cost-analyst", 1));
     asking.mark_running().expect("RUNNING 应成功");
     asking.mark_asking(2).expect("ASKING 应成功");
@@ -276,7 +239,6 @@ fn state_transitions_and_settlement_survive_a_real_roundtrip() {
         "ask_depth 必须往返保住（表上有对应 CHECK）"
     );
 
-    // → DONE（带产出正文）
     let outcome = MemberOutcome::new(
         member("cost-analyst", 1),
         MemberStatus::Partial,
@@ -303,7 +265,6 @@ fn state_transitions_and_settlement_survive_a_real_roundtrip() {
         "🔴 状态必须真的落库，而不是只在内存里转"
     );
 
-    // 另一名成员 → FAILED（错误码必须往返，前端据此分支）
     let k2 = key(u(1), &room, 2, "risk-checker");
     let mut failed = DispatchRecord::pending(k2.clone(), member("risk-checker", 1));
     let err = AgentError::MemberRejected {
@@ -331,7 +292,7 @@ fn inflight_lists_only_inflight_and_list_round_is_sorted() {
             .begin(&DispatchRecord::pending(k, member(expert, 1)))
             .unwrap_or_else(|err| panic!("{expert}/round-{round} 记账失败：{err}"));
     }
-    // 把 alpha/0 结算掉 → 它不该再出现在 inflight 里
+
     let k = key(u(1), &room, 0, "alpha");
     let mut done = DispatchRecord::pending(k.clone(), member("alpha", 1));
     done.settle_done(
@@ -369,11 +330,10 @@ fn inflight_lists_only_inflight_and_list_round_is_sorted() {
 
 #[test]
 fn missing_member_session_is_reported_and_writes_nothing() {
-    // 🔴 反向用例：前提缺失必须**响亮地失败**且**不写库**。
-    //    若默默填全零，会写出一条跨用户错配的脏行（或在 FK 被关时直接落库）。
+
     let t = TestDb::new("dispatch-missing-session");
     seed(&t.bridge(), u(1), 0x17, &["cost-analyst"]);
-    // scope 里**故意不给**任何成员会话
+
     let ledger = SqlxDispatchLedger::new(
         t.bridge(),
         DispatchScope::new(
@@ -404,14 +364,9 @@ fn missing_member_session_is_reported_and_writes_nothing() {
 
 #[test]
 fn dispatcher_agrees_with_the_ledger_on_replay() {
-    // 用领域层 `Dispatcher` 的真实判别路径复核一遍：
-    // 同一轮重放必须「跳过」（不重复调用执行器）。
-    // 这里用一个只记账、不执行的极简执行器来验 —— 本用例关注的是
-    // 「账本把 Existed 判对了」，而不是执行器行为。
+
     use std::sync::Mutex;
 
-    /// 计数执行器：内部自己持 `Arc`，这样派工器可以按值持有它，
-    /// 而用例仍能通过另一个 `Arc` 句柄断言调用次数。
     #[derive(Debug, Clone, Default)]
     struct CountingExecutor {
         started: Arc<Mutex<Vec<MemberId>>>,
@@ -455,10 +410,7 @@ fn dispatcher_agrees_with_the_ledger_on_replay() {
 
     let task = DispatchTask::with_seq(e("cost-analyst"), 1, "算成本", "把本月成本算清楚")
         .expect("派工单应合法");
-    // ⚠️ 被派的专家就是**主持人**：这样无需往 Team 里加成员
-    //    （`add_member` 要求传入名册，而名册来自专家仓储，
-    //    在本用例里那会引入一个与主题无关的前置条件）。
-    //    `dispatch_round` 允许派给 leader（`has_member || is_leader`）。
+
     let team = quill_domain::Team::new(
         quill_domain::TeamId::parse("team-24").expect("团队名应合法"),
         "成本核算团",
@@ -500,7 +452,7 @@ fn dispatcher_agrees_with_the_ledger_on_replay() {
 
 #[test]
 fn a_fresh_bridge_sees_the_dispatches_written_by_the_previous_one() {
-    // 「重启即失」在派工侧的同类验证。
+
     let t = TestDb::new("dispatch-restart");
     let path = t.path();
     {
@@ -517,7 +469,7 @@ fn a_fresh_bridge_sees_the_dispatches_written_by_the_previous_one() {
             .expect("记账应成功");
     }
     let fresh = Arc::new(DbBridge::open(&path, 2).expect("重开库应成功"));
-    // 读路径不需要 scope
+
     let ledger = SqlxDispatchLedger::new(
         fresh,
         DispatchScope::new([0u8; 16], SessionId::from_bytes([0u8; 16]), BTreeMap::new()),

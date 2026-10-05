@@ -1,39 +1,3 @@
-//! 派工的真实 handler（**额外**路由：契约 §5.1 没有派工条目，见下）。
-//!
-//! # 为什么派工路由不在契约 §5.1 里
-//!
-//! `docs/PHASE2_CONTRACT.md` §5.1 的路由表只列到 `/api/teams/{id}`（团队的增删改查），
-//! 派工本身被归类为 **agent 域的内部状态**（同文件的数据表清单：
-//! `task_dispatches` = 「派工记录（状态机持久化）」）。
-//! 也就是说：**HTTP 上没有「请帮我派工」这个动作** ——
-//! 派工由主持人会话在编排层发起，HTTP 只提供「看账本」的只读视图。
-//!
-//! 因此本模块注册的是两条**契约外**路由，并按 `routes::EXTRA_ROUTES`
-//! 的既有机制显式登记（豁免必须登记，不能默默多）：
-//!
-//! | 路由 | 作用 |
-//! |---|---|
-//! | `GET /api/teams/{id}/dispatch?room_id=&round=` | 某房间某轮的派工账本（只读） |
-//! | `POST /api/teams/{id}/dispatch` | **预记账**：写入 `PENDING` 记录并回报幂等判定 |
-//!
-//! # POST 为什么只记账、不执行
-//!
-//! 真正执行成员需要 `quill_adapters::MemberExecutor` 的**生产实现**
-//! （隧道 / agentd 侧），当前仓库里只有 `quill-testkit` 的 mock。
-//! 若 HTTP 路由「记账并假装执行成功」，用户会看到 200 而成员从未跑过 ——
-//! 这是最贵的一类假成功。
-//!
-//! 若 HTTP 路由「只记账不执行」，语义是**诚实**的：`PENDING` 在
-//! `Dispatcher::recover` 的口径里正是「成员从未被调用，可安全重派」。
-//! 执行器落地后，同一键的重放会走到 `BeginOutcome::Existed` + `PENDING`
-//! 分支并真正执行。响应里 `executed: false` 与 `note` 明确写出这一点。
-//!
-//! # 身份与隔离
-//!
-//! - 属主取自令牌（[`AuthUser`]），**不取自请求体**；
-//! - 团队标识取自路径 `{id}`，成员会话取自请求体（它们是**调用方掌握的事实**，
-//!   见 `dispatch_ledger::DispatchScope` 的说明）；
-//! - 账本的每条语句都带 `user_id`（见该文件的模块注释）。
 
 use std::collections::BTreeMap;
 
@@ -51,7 +15,6 @@ use crate::dispatch_ledger::{DispatchScope, SqlxDispatchLedger};
 use crate::error::ApiError;
 use crate::state::AppState;
 
-/// `GET /api/teams/{id}/dispatch?room_id=…&round=…` —— 某轮派工账本。
 pub async fn list_round(
     State(state): State<AppState>,
     user: AuthUser,
@@ -74,7 +37,6 @@ pub async fn list_round(
     })))
 }
 
-/// `POST /api/teams/{id}/dispatch` —— 预记账（不执行，见模块注释）。
 pub async fn book(
     State(state): State<AppState>,
     user: AuthUser,
@@ -106,7 +68,7 @@ pub async fn book(
             )
         })?;
     if members.is_empty() {
-        // ⚠️ 空数组记账等于什么都没做却返回 200 —— 直接判红。
+
         return Err(ApiError::bad_request(
             "members 为空：没有任何成员要派，记账不会产生任何记录。".to_string(),
         ));
@@ -119,9 +81,7 @@ pub async fn book(
             .map_err(|e| ApiError::bad_request(format!("members[{i}].expert 非法（{e}）。")))?;
         let member = MemberId::parse(&need_str(m, "member")?)
             .map_err(|e| ApiError::bad_request(format!("members[{i}].member 非法（{e}）。")))?;
-        // ⚠️ 契约要求成员实例标识以「专家名 + -」开头。不校验的话，
-        //    账本里会出现 `member=coder-1` 却挂在 `expert=cost-analyst` 下的行，
-        //    读回时看起来完全正常 —— 一类静默错配。
+
         if !member.as_str().starts_with(&format!("{expert}-")) {
             return Err(ApiError::bad_request(format!(
                 "members[{i}].member = {:?} 必须以 \"{expert}-\" 开头（成员实例标识由专家名派生）。",
@@ -180,11 +140,6 @@ pub async fn book(
     ))
 }
 
-/// `GET /api/dispatch/inflight` —— 当前用户的在途派工。
-///
-/// ⚠️ **刻意不做「可重派 / 需人工确认」分档**：那份口径由领域层的
-/// `Dispatcher::recover` 给出（它需要执行器实例）。在这里复制一份就是
-/// 第二份真相源 —— 两份一旦漂移，用户看到的处置建议就会与实际行为不符。
 pub async fn inflight(
     State(state): State<AppState>,
     user: AuthUser,
@@ -199,13 +154,6 @@ pub async fn inflight(
     })))
 }
 
-// ─────────────────────────── 内部工具 ───────────────────────────
-
-/// 只读账本：读路径不使用 [`DispatchScope`] 的三个外键列。
-///
-/// ⚠️ 传入的是**空 scope**。它对 `get` / `list_round` / `inflight` 完全没有影响
-/// （这三个方法不读 scope），而写路径若误用这个账本，会因为 `team_id` 为全零
-/// 而被外键当场拒绝 —— 是响亮的失败，不是静默写脏数据。
 fn read_only_ledger(state: &AppState) -> Result<SqlxDispatchLedger, ApiError> {
     Ok(SqlxDispatchLedger::new(
         std::sync::Arc::clone(state.db()?),
@@ -248,8 +196,7 @@ fn parse_room_round(query: Option<&str>) -> Result<(String, u32), ApiError> {
                 "查询串 {pair:?} 缺少 `=`（应为 room_id=…&round=…）。"
             ))
         })?;
-        // ⚠️ 只做最小解码：房间名允许中文与空格，不引入百分号全解码
-        // （没有解码依赖；无法解码的字符原样保留，不会静默丢数据）。
+
         let v = v.replace('+', " ");
         match k {
             "room_id" => room = Some(v),

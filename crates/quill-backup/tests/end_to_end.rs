@@ -1,13 +1,3 @@
-//! 端到端：**造数据 → 备份 → 破坏数据 → 恢复 → 断言与备份前完全一致**。
-//!
-//! 这是 M6「从备份完整恢复（自动化测试覆盖）」的验收面。
-//! 用例名即结论，见 `cargo test -p quill-backup --test end_to_end` 的输出。
-//!
-//! # 为什么必须用真实文件库而不是内存库
-//!
-//! `quill_store::in_memory()` 的 WAL 是 noop，而本测试的全部意义
-//! 恰恰在 WAL 语义下（「`cp` 会丢已提交数据」）。
-//! 用内存库测 = 测了个寂寞（`AGENTS.md` 自查表第 5 类「门槛打错目标」）。
 
 use quill_backup::{
     create_backup, restore_backup, BackupError, BackupSource, ExcludedEntry, Manifest,
@@ -17,7 +7,6 @@ use quill_store::configure_pool;
 use sqlx::SqlitePool;
 use std::path::{Path, PathBuf};
 
-/// 建一个隔离的测试工作区（每次调用一个独立目录，互不干扰）。
 fn workspace(tag: &str) -> PathBuf {
     let base = std::env::temp_dir().join(format!(
         "quill-backup-{tag}-{}-{:?}",
@@ -29,7 +18,6 @@ fn workspace(tag: &str) -> PathBuf {
     base
 }
 
-/// 在真实文件库上建一张最小表。
 async fn seeded_pool(db_path: &Path) -> SqlitePool {
     let pool = configure_pool(&db_path.to_string_lossy(), 1)
         .await
@@ -56,10 +44,7 @@ async fn seeded_pool(db_path: &Path) -> SqlitePool {
             .await
             .expect("写入笔记");
     }
-    // ⚠️ 显式落盘：默认 synchronous=NORMAL + WAL 下，
-    // 数据可能还在 page cache 里。VACUUM INTO 走的是 SQLite 自己的读路径，
-    // 所以其实不依赖落盘 —— 但显式 checkpoint 让「WAL 里有已提交数据」
-    // 这个前提在测试里可被观察，不靠运气。
+
     sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
         .execute(&pool)
         .await
@@ -67,7 +52,6 @@ async fn seeded_pool(db_path: &Path) -> SqlitePool {
     pool
 }
 
-/// 把用户数据目录造满：wiki / 会话 / 凭据密文 / **一个密钥文件**。
 fn seed_data_root(root: &Path) {
     let u1 = root.join("user-a");
     std::fs::create_dir_all(u1.join("wiki/wiki")).expect("建 wiki 目录");
@@ -83,33 +67,21 @@ fn seed_data_root(root: &Path) {
     std::fs::write(u1.join("wiki/wiki/b.md"), "# 条目二\n\n另一段正文。\n").expect("写 b.md");
     std::fs::write(u1.join("wiki/raw/paper.pdf"), b"%PDF-1.4\nfake\n").expect("写 raw 文件");
 
-    // 二进制文件：验证字节级往返不经任何文本转换。
     let bin: Vec<u8> = (0..5000u32).map(|i| (i % 256) as u8).collect();
     std::fs::write(u1.join("sessions/s1/history.bin"), &bin).expect("写二进制会话");
 
-    // 凭据密文：R4 的关键对象 —— 必须是**密文原样搬运**。
     let enc: Vec<u8> = (0..1024u32)
         .map(|i| (i.wrapping_mul(7) % 256) as u8)
         .collect();
     std::fs::write(u1.join("secrets.enc"), &enc).expect("写凭据密文");
 
-    // 密钥材料：必须**不**进备份。
     std::fs::write(u1.join("master.key"), b"THIS-MUST-NEVER-BE-BACKED-UP").expect("写密钥文件");
 
-    // 空目录：空目录本身没有内容，但恢复后应当存在（否则上层会重新创建）。
     std::fs::create_dir_all(root.join("user-b/empty-dir")).expect("建空目录");
 
     std::fs::write(root.join("user-b/config.toml"), "name = \"b\"\n").expect("写配置");
 }
 
-/// 递归读出一个目录树的 `(相对路径 → 字节)` 映射。
-///
-/// `None` = 目录，`Some(bytes)` = 文件。
-///
-/// ⚠️ **目录必须与文件区分开**，不能拿「空 `Vec`」代表目录 ——
-/// 那会让「零字节文件」与「空目录」无法分辨。
-/// 本测试既要断言文件集合，也要断言空目录被保留，两者混在一起时
-/// 断言就得靠 `- 1` 这种算术去凑（而那个算术是本测试真实踩过的坑）。
 fn snapshot_tree(root: &Path) -> std::collections::BTreeMap<String, Option<Vec<u8>>> {
     let mut out = std::collections::BTreeMap::new();
     let mut stack = vec![root.to_path_buf()];
@@ -135,7 +107,6 @@ fn snapshot_tree(root: &Path) -> std::collections::BTreeMap<String, Option<Vec<u
     out
 }
 
-/// 只取文件条目（丢掉目录）。
 fn files_only(
     tree: &std::collections::BTreeMap<String, Option<Vec<u8>>>,
 ) -> std::collections::BTreeMap<String, Vec<u8>> {
@@ -144,7 +115,6 @@ fn files_only(
         .collect()
 }
 
-/// 目录条目集合。
 fn dirs_only(
     tree: &std::collections::BTreeMap<String, Option<Vec<u8>>>,
 ) -> std::collections::BTreeSet<String> {
@@ -154,10 +124,6 @@ fn dirs_only(
         .collect()
 }
 
-/// 备份后**应当**被恢复的文件集合：全部文件去掉密钥材料。
-///
-/// ⚠️ 与「备份前的树」刻意区分：这里从**文件**出发，
-/// 空目录天然不在其中 —— 目录由文件路径推导，而不是单独记录。
 fn expected_tree(
     files: &std::collections::BTreeMap<String, Vec<u8>>,
 ) -> std::collections::BTreeMap<String, Vec<u8>> {
@@ -168,7 +134,6 @@ fn expected_tree(
         .collect()
 }
 
-/// 读出库里全部笔记，按 id 排序。
 async fn read_notes(pool: &SqlitePool) -> Vec<(i64, String, i64)> {
     use sqlx::Row;
     let rows = sqlx::query("SELECT id, body, created_unix FROM notes ORDER BY id")
@@ -185,10 +150,6 @@ async fn read_notes(pool: &SqlitePool) -> Vec<(i64, String, i64)> {
         })
         .collect()
 }
-
-// ==============================================================================
-// ★ 核心用例：造数据 → 备份 → 破坏 → 恢复 → 完全一致
-// ==============================================================================
 
 #[tokio::test]
 async fn 造数据备份破坏恢复后数据与备份前完全一致() {
@@ -209,12 +170,9 @@ async fn 造数据备份破坏恢复后数据与备份前完全一致() {
         "造数据阶段必须真的放了密钥文件，否则「密钥被排除」这条断言是恒绿"
     );
 
-    // ── 备份 ───────────────────────────────────────────────────────────
     let src = BackupSource::new(pool.clone(), &db_path, &data_root).expect("构造备份源");
     let report = create_backup(&src, &backup_dir).await.expect("备份应成功");
 
-    // 只比**文件**数：目录不进清单（清单记的是文件，目录由文件路径隐含）。
-    // ⚠️ 拿「树全部条目数」去比会多出目录 → 断言要靠 -1 凑，那正是本测试踩过的坑。
     assert_eq!(
         report.manifest.files.len(),
         files_before.len() - 1,
@@ -226,8 +184,6 @@ async fn 造数据备份破坏恢复后数据与备份前完全一致() {
         "备份目录必须有清单文件"
     );
 
-    // ── 破坏：删库内容 + 删数据文件 + 塞垃圾 ──────────────────────────
-    // 三种破坏都做：只做一种的话，「恢复」可能只是「恰好没被破坏到」。
     sqlx::query("DELETE FROM notes")
         .execute(&pool)
         .await
@@ -242,7 +198,6 @@ async fn 造数据备份破坏恢复后数据与备份前完全一致() {
     assert_eq!(read_notes(&pool).await.len(), 1, "破坏未生效，测试失去意义");
     assert!(snapshot_tree(&data_root).is_empty(), "破坏未生效");
 
-    // ── 恢复 ───────────────────────────────────────────────────────────
     drop(pool);
     let restored_db = ws.join("restored/quill.db");
     let restored_root = ws.join("restored/data");
@@ -256,7 +211,6 @@ async fn 造数据备份破坏恢复后数据与备份前完全一致() {
     );
     assert_eq!(rr.restored.len(), report.manifest.files.len());
 
-    // ── 断言：与备份前完全一致 ─────────────────────────────────────────
     let pool2 = configure_pool(&restored_db.to_string_lossy(), 1)
         .await
         .expect("打开恢复后的库");
@@ -267,23 +221,14 @@ async fn 造数据备份破坏恢复后数据与备份前完全一致() {
     );
 
     let tree_after = snapshot_tree(&restored_root);
-    // 期望值 = 「备份前的文件」去掉 master.key，目录由这些文件的路径**推导**出来。
-    //
-    // ⚠️ 为什么不用「树减掉 master.key」当期望：备份前的树里有
-    //    `user-b/empty-dir` 这个**空目录**，而清单不记空目录（见 crate 文档
-    //    「已知边界」），恢复不会重建它。若期望值里留着它，
-    //    这条用例测的就不再是「备份恢复了什么」，
-    //    而是「空目录有没有被重建」—— 两件事混在一起，失败时无法定位。
+
     let expected = expected_tree(&files_before);
     assert_eq!(
         files_only(&tree_after),
         expected,
         "恢复后的用户文件与备份前不一致（目录键不应出现在文件集里）"
     );
-    // 目录集合单独断言：所有**含文件内容**的目录都必须重建。
-    // ⚠️ 循环体只 push **截断后**的路径；不 push `p` 本身 ——
-    //    `p` 本身是文件路径（`user-a/secrets.enc`），把它当目录塞进集合
-    //    会让「推导出的目录集合」凭空多出文件条目。
+
     let mut expected_dirs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for rel in expected.keys() {
         let mut p = rel.as_str();
@@ -299,7 +244,6 @@ async fn 造数据备份破坏恢复后数据与备份前完全一致() {
         "恢复后的目录集合与「文件路径推导出的目录集合」不一致"
     );
 
-    // 凭据密文逐字节一致 —— R4 关心的是这个
     let enc_before = tree_before
         .get("user-a/secrets.enc")
         .and_then(|v| v.as_ref())
@@ -316,10 +260,6 @@ async fn 造数据备份破坏恢复后数据与备份前完全一致() {
     pool2.close().await;
     let _ = std::fs::remove_dir_all(&ws);
 }
-
-// ==============================================================================
-// 幂等：同一份备份恢复两次
-// ==============================================================================
 
 #[tokio::test]
 async fn 同一份备份恢复两次结果完全相同() {
@@ -370,12 +310,7 @@ async fn 同一份备份恢复两次结果完全相同() {
 
 #[tokio::test]
 async fn 空目录不进清单恢复后不重建但有文件内容的目录都在() {
-    // 已知且**被钉住**的边界：清单记录的是**文件**，不记录空目录。
-    // 恢复只按文件路径重建其父目录 → 空目录（如 `user-b/empty-dir`）不会被重建。
-    //
-    // ⚠️ 之所以写成用例而不是留成「已知问题」：留成注释的边界会随时间
-    //    被人当成「本来就该这样」，而没人再回来确认它是否还成立。
-    //    钉住的边界一旦被改动，这条用例会红 —— 那正是我们要的信号。
+
     let ws = workspace("e2e-emptydir");
     let db_path = ws.join("quill.db");
     let data_root = ws.join("data");
@@ -398,8 +333,7 @@ async fn 空目录不进清单恢复后不重建但有文件内容的目录都�
         !dirs.contains("user-b/empty-dir"),
         "空目录被重建了 —— 若这是有意的改进，请同步更新本用例与 crate 文档"
     );
-    // 反向断言：**有文件内容的目录必须都在**，否则「空目录不保留」
-    // 就被误实现成「目录都不保留」。
+
     for must in [
         "user-a",
         "user-a/wiki",
@@ -416,7 +350,7 @@ async fn 空目录不进清单恢复后不重建但有文件内容的目录都�
 
 #[tokio::test]
 async fn 恢复到已有数据的目录时同内容覆盖而不同内容保留() {
-    // 「不静默丢数据」：目标已有同名但内容不同的文件 → 列入 not_overwritten。
+
     let ws = workspace("e2e-keep");
     let db_path = ws.join("quill.db");
     let data_root = ws.join("data");
@@ -428,7 +362,6 @@ async fn 恢复到已有数据的目录时同内容覆盖而不同内容保留()
     create_backup(&src, &backup_dir).await.expect("备份应成功");
     drop(pool);
 
-    // 目标目录：a.md 内容不同（应保留），index.md 内容相同（应覆盖，幂等）。
     let t = ws.join("target/data");
     std::fs::create_dir_all(t.join("user-a/wiki/wiki")).expect("建目标目录");
     std::fs::write(t.join("user-a/wiki/wiki/a.md"), "我自己后来写的内容\n").expect("写 a.md");
@@ -454,10 +387,6 @@ async fn 恢复到已有数据的目录时同内容覆盖而不同内容保留()
     let _ = std::fs::remove_dir_all(&ws);
 }
 
-// ==============================================================================
-// 失败不留半开状态
-// ==============================================================================
-
 #[tokio::test]
 async fn 备份文件被篡改时恢复拒绝且目标目录一个字节都没被改() {
     let ws = workspace("e2e-tamper");
@@ -471,13 +400,11 @@ async fn 备份文件被篡改时恢复拒绝且目标目录一个字节都没�
     create_backup(&src, &backup_dir).await.expect("备份应成功");
     drop(pool);
 
-    // 篡改备份里的一个文件（长度不变，只改字节 → 只有摘要能发现）
     let victim = backup_dir.join("data/user-a/wiki/wiki/a.md");
     let mut bytes = std::fs::read(&victim).expect("读被篡改文件");
     bytes[0] = b'X';
     std::fs::write(&victim, &bytes).expect("写回被篡改文件");
 
-    // 目标目录预置哨兵文件：若恢复动了目标，哨兵会被改。
     let t = ws.join("target/data");
     std::fs::create_dir_all(&t).expect("建目标目录");
     let sentinel = t.join("sentinel.txt");
@@ -523,10 +450,6 @@ async fn 缺少清单时恢复拒绝并给出可复制命令() {
     );
     let _ = std::fs::remove_dir_all(&ws);
 }
-
-// ==============================================================================
-// 幂等备份侧：同一份源连备两次
-// ==============================================================================
 
 #[tokio::test]
 async fn 同一份源连备两次得到相同的清单内容() {
@@ -587,10 +510,6 @@ async fn 目标目录非空时拒绝覆盖() {
     let _ = std::fs::remove_dir_all(&ws);
 }
 
-// ==============================================================================
-// 密钥卫生（R4）
-// ==============================================================================
-
 #[tokio::test]
 async fn 密钥材料不进备份而凭据密文进备份() {
     let ws = workspace("e2e-secret");
@@ -604,7 +523,6 @@ async fn 密钥材料不进备份而凭据密文进备份() {
     let src = BackupSource::new(pool.clone(), &db_path, &data_root).expect("构造备份源");
     let report = create_backup(&src, &backup_dir).await.expect("备份应成功");
 
-    // ① 备份里绝不能出现 master.key 的内容
     let backup_files = files_only(&snapshot_tree(&backup_dir));
     for (rel, bytes) in &backup_files {
         assert!(
@@ -616,7 +534,7 @@ async fn 密钥材料不进备份而凭据密文进备份() {
             "备份清单里出现了 master.key：{rel}"
         );
     }
-    // ② 排除项必须落进清单，且带中文原因
+
     let ex: Vec<&ExcludedEntry> = report.excluded.iter().collect();
     assert!(
         ex.iter()
@@ -624,7 +542,7 @@ async fn 密钥材料不进备份而凭据密文进备份() {
         "master.key 的排除必须记进清单并说明原因，实际 {:?}",
         report.excluded
     );
-    // ③ secrets.enc（密文）必须在备份里
+
     assert!(
         backup_dir.join("data/user-a/secrets.enc").is_file(),
         "凭据密文必须进备份，否则恢复出来的实例没有对端凭据"
@@ -648,8 +566,7 @@ async fn 清单如实记录被排除的条目且可被重新解析() {
     let back = Manifest::parse(&text).expect("自己写的清单必须能读回来");
     assert_eq!(back.excluded.len(), 1, "应恰有 1 个排除项（master.key）");
     assert!(back.excluded[0].rel.ends_with("master.key"));
-    // 7 个文件：wiki 3（index/a/b）+ raw 1 + 会话二进制 1 + secrets.enc 1 + config.toml 1。
-    // master.key 被排除，故不计入。
+
     let names: Vec<&str> = back.files.iter().map(|f| f.rel.as_str()).collect();
     assert_eq!(back.files.len(), 7, "收录文件应恰为 7 个，实际 {:?}", names);
     assert!(!names.iter().any(|n| n.contains("master.key")));

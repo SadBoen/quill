@@ -1,48 +1,3 @@
-//! `ExpertRepository` 的 sqlx 实现（表 `experts`）。
-//!
-//! # 跨用户隔离怎么在这一层保证
-//!
-//! `experts` 的主键是**复合键** `(owner_user_id, id)`，因此：
-//!
-//! - [`SqlxExpertRepository::get`] / `put` 的每条语句都带 `owner_user_id = ?`；
-//! - [`SqlxExpertRepository::list_owned`] 的 `WHERE` 只有 `owner_user_id = ?`；
-//! - [`SqlxExpertRepository::roster`] 是唯一「跨属主扫描」的方法，它的 `WHERE`
-//!   把可见性写进 SQL：`deleted_at IS NULL AND (visibility IN (…) OR owner_user_id = ?)`。
-//!
-//! ⚠️ **不存在「先查后判」**：可见性判定由 SQL 的 `WHERE` 完成，
-//! Rust 侧只对**已经取回的行**做领域判定。若改成「取全表再在 Rust 里过滤」，
-//! 一次疏忽就会把别人的私有专家名带进内存 —— 那正是本项目最贵的 bug 类型。
-//!
-//! # `put` 必须是 upsert（不是 insert）
-//!
-//! 软删除后再用同名重建，在复合主键上**是同一行**。纯 `INSERT` 会让
-//! 「删掉再重建」在写库那一刻失败，而领域层（`ExpertRegistry::create_user_expert`）
-//! 已经返回成功 —— 层间不一致且静默。故此处固定
-//! `INSERT … ON CONFLICT (owner_user_id, id) DO UPDATE`。
-//!
-//! # 读回一个 `Expert` 为什么不能「直接 new 出来」
-//!
-//! `Expert` 的字段是私有的，公开构造器只有 [`Expert::user_authored`] 与
-//! [`Expert::builtin`]，两者都给出**固定初始状态**。而库里的一行可能是
-//! 「自建 + 已停用 + 已软删」这样的组合。因此本实现按行状态**重放领域跃迁**
-//! （先 `set_default_enabled`、再 `soft_delete`）把值还原出来，
-//! 而不是绕过领域层直接造值 —— 后者会让「写库时的不变量」与「读库时的假设」
-//! 各成一份真相源。
-//!
-//! # 领域投影没覆盖的列
-//!
-//! `version` / `license` / `tool_policy_json` / `tags_json` / `asset_hash` /
-//! `persona_hash` / `skill_count` **不在** `Expert` 里，但表里是 `NOT NULL`。
-//! 处理口径（逐条写明，便于后人接手时知道哪些是临时的）：
-//!
-//! | 列 | 本实现写入 | 理由 |
-//! |---|---|---|
-//! | `version` | `0.1.0` | 领域投影无版本概念；资源包导入（`/api/experts/import`）落地后应由它覆盖 |
-//! | `license` | 空串 | 表上无 CHECK；空串表示「未声明」，由导入路径补齐 |
-//! | `tool_policy_json` | `{}` | 满足 `length >= 2`；工具白名单由 `quill-ext-hub` 侧管理 |
-//! | `tags_json` | `[]` | 同上 |
-//! | `asset_hash` / `persona_hash` | `digest32(标签, id)` 派生占位 | 🔴 **已知缺口**：真实值应由资源管线按内容计算。本实现派生一个**稳定**值（不是随机），保证重复写入不会让摘要漂移 |
-//! | `skill_count` | `0` | 领域投影无技能数 |
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -54,41 +9,31 @@ use sqlx::Row;
 
 use crate::db::{col, digest32, now_ms, storage_error, user_id_from_blob, DbBridge};
 
-/// 写入 `version` 列的常量值。
 pub const EXPERT_VERSION: &str = "0.1.0";
 
-/// 读列用的固定文案（错误里必须点名「读专家」而不是笼统的「查询失败」）。
 const OP_GET: &str = "读取专家";
 const OP_LIST: &str = "列出专家";
 const OP_PUT: &str = "写入专家";
 const OP_ROSTER: &str = "读取专家名册";
 
-/// `experts` 的读列清单。
-///
-/// ⚠️ 显式列清单而不是 `SELECT *`：表一改列顺序，投影就静默错位
-/// （比如把 `description` 读成 `role_summary`，编译期与运行期都不报错）。
 const COLUMNS: &str = "id, owner_user_id, display_name, description, visibility, \
                        default_enabled, is_builtin, deleted_at";
 
-/// `ExpertRepository` 的真库实现。
 #[derive(Debug, Clone)]
 pub struct SqlxExpertRepository {
     db: Arc<DbBridge>,
 }
 
 impl SqlxExpertRepository {
-    /// 组装仓库。
+
     pub fn new(db: Arc<DbBridge>) -> Self {
         Self { db }
     }
 
-    /// 便捷构造：直接给出注册表（HTTP 层的编排体）。
     pub fn registry(db: Arc<DbBridge>) -> ExpertRegistry<Self> {
         ExpertRegistry::new(Self::new(db))
     }
 }
-
-// ─────────────────────────── SQL ───────────────────────────
 
 async fn sql_get(
     pool: &sqlx::SqlitePool,
@@ -122,11 +67,6 @@ async fn sql_list_owned(pool: &sqlx::SqlitePool, owner: UserId) -> Result<Vec<Ex
     Ok(out)
 }
 
-/// `put` 用的 upsert 语句。
-///
-/// ⚠️ `ON CONFLICT (owner_user_id, id)`：冲突目标必须与表的主键**逐字**一致。
-/// DO UPDATE 段**刻意不更新** `is_builtin` / `owner_user_id` / `created_at`：
-/// 前两者是交叉不变量的一边（改了就是越权），第三者是原始创建时间。
 pub(crate) const PUT_SQL: &str = "INSERT INTO experts (\
      id, owner_user_id, display_name, version, description, role_summary, \
      visibility, tool_policy_json, tags_json, license, default_enabled, is_builtin, \
@@ -140,10 +80,6 @@ pub(crate) const PUT_SQL: &str = "INSERT INTO experts (\
      updated_at = excluded.updated_at, \
      deleted_at = excluded.deleted_at";
 
-/// `roster` 用的可见性查询。
-///
-/// ⚠️ 可见性写进 SQL：三个共享可见性值 + 「自己的」。
-/// 若改成「取全表在 Rust 里过滤」，别人的私有专家名就会进内存。
 pub(crate) const ROSTER_SQL: &str = "SELECT id FROM experts \
      WHERE deleted_at IS NULL \
        AND (visibility IN ('default_visible', 'manual_enable', 'builtin_system') \
@@ -195,8 +131,7 @@ async fn sql_roster(
                 out.insert(id);
             }
             Err(e) => {
-                // ⚠️ 库里出现非法 slug 时**不静默跳过**：表上有 GLOB CHECK 兜底，
-                //    走到这里说明 CHECK 被绕过（PRAGMA 或写入路径不对），必须报出来。
+
                 return Err(crate::db::invariant_broken(format!(
                     "experts 表里存在非法专家标识 {raw:?}（{e}）：\
                      表上的 CHECK 约束应已拦住它，请检查写入路径是否绕过了 STRICT/GLOB 约束"
@@ -206,8 +141,6 @@ async fn sql_roster(
     }
     Ok(out)
 }
-
-// ─────────────────────────── 行 → 领域值 ───────────────────────────
 
 fn row_into_expert(row: &SqliteRow) -> Result<Expert, AgentError> {
     let raw_id: String = col!(row, String, "id", OP_GET);
@@ -235,8 +168,7 @@ fn row_into_expert(row: &SqliteRow) -> Result<Expert, AgentError> {
     })?;
 
     let mut expert = if is_builtin == 1 {
-        // ⚠️ 内置行的三个状态都必须与「内置专家不可停用、不可删」这条领域不变量一致。
-        //    出现不一致说明有写入路径绕过了 `Expert::set_default_enabled`。
+
         if visibility != Visibility::BuiltinSystem {
             return Err(crate::db::invariant_broken(format!(
                 "专家 {id} 是内置专家（is_builtin=1）但 visibility = {visibility}，\
@@ -263,22 +195,18 @@ fn row_into_expert(row: &SqliteRow) -> Result<Expert, AgentError> {
         }
         let mut e = Expert::user_authored(owner, id.clone(), display_name, description)?;
         if default_enabled != 1 {
-            // ⚠️ 用领域方法而不是直接改字段：这样「自建专家可被停用」这条不变量
-            //    仍由 `Expert::set_default_enabled` 判定，读路径不会绕过它。
+
             e.set_default_enabled(&owner, false)?;
         }
         e
     };
 
     if deleted_at.is_some() {
-        // ⚠️ 只有非内置行能走到这里（内置行已在上方判红）。
-        //    `soft_delete` 幂等且要求 actor 是属主，actor 传 owner 天然满足。
+
         expert.soft_delete(&owner)?;
     }
     Ok(expert)
 }
-
-// ─────────────────────────── 端口实现 ───────────────────────────
 
 impl ExpertRepository for SqlxExpertRepository {
     fn get(&self, owner: &UserId, id: &ExpertId) -> Result<Option<Expert>, AgentError> {
@@ -311,9 +239,6 @@ impl ExpertRepository for SqlxExpertRepository {
 mod tests {
     use super::*;
 
-    /// 🔴 断言**生产代码真正使用的那条语句**（`ROSTER_SQL` 常量本身），
-    /// 而不是测试里另抄一份 —— 另抄一份的断言会在有人改实现时继续绿，
-    /// 那正是 AGENTS.md 说的第 7 类失效（恒绿）。
     #[test]
     fn roster_sql_keeps_visibility_and_owner_in_the_where_clause() {
         assert!(
@@ -330,7 +255,6 @@ mod tests {
         );
     }
 
-    /// 锁住 `put` 的两条关键形态：upsert 目标 + 不许覆盖的不变量列。
     #[test]
     fn put_sql_is_upsert_and_never_rewrites_the_builtin_invariant() {
         assert!(

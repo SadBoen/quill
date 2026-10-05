@@ -1,50 +1,28 @@
-//! 领域实体：`Team`（专家团）
-//!
-//! # 这个聚合存在的理由（不是"占位一下"）
-//!
-//! `docs/03_智能体编排设计.md` §2.12.2 的第 4 条论据：
-//! 上游 `run_subagent_task` 只有一次性 `session_id`，
-//! 而本项目要求「成员是**可同时加入多个团队的一等公民专家**」
-//! （Octop 规则 1）。这条要求只有在 `Team` 持有 **`ExpertId`**（可复用身份）
-//! 而不是 `MemberId`（一次性实例）时才表达得出来。
-//!
-//! 因此本模块的不变量是**可测的**，不是注释：
-//! - 同一 `ExpertId` 可出现在**多个** `Team` 的成员集合里；
-//! - 同一 `Team` 内同一 `ExpertId` 不得重复；
-//! - 成员数有上限（背压前置，`docs/03` §2.8）。
 
 use std::collections::BTreeSet;
 
 use crate::{ExpertId, TeamId};
 
-/// 单个团队成员数上限。
-///
-/// ⚠️ 取 8 与 `docs/03` §2.8 的 `GlobalSemaphore(8)` 对齐：
-/// 一个团队的成员数不可能超过全局并发上限，超过即意味着
-/// **这个团队永远有成员在排队** —— 上限即"可排他地服务"的前提。
-/// ⚠️ **本常量是设计值的占位**，真实值待 `quill-agent` 背压落地后由主理人确认。
 pub const MAX_TEAM_MEMBERS: usize = 8;
 
-/// 团队聚合的失败原因。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TeamError {
-    /// 团队标识为空。
+
     IdEmpty,
-    /// 团队标识非法。
+
     IdInvalid(String),
-    /// 团队无名称。
+
     EmptyName,
-    /// 同一专家重复加入本团队。
+
     DuplicateMember(ExpertId),
-    /// 成员数超上限。
+
     TooManyMembers {
-        /// 当前成员数。
+
         got: usize,
-        /// 上限。
+
         max: usize,
     },
-    /// 加入一个不在名册里的专家 —— 允许任意字符串注册会让
-    /// 「谁能进团」退化成字符串匹配，权限边界消失。
+
     UnknownExpert(ExpertId),
 }
 
@@ -65,10 +43,6 @@ impl std::fmt::Display for TeamError {
 
 impl std::error::Error for TeamError {}
 
-/// 专家团聚合根。
-///
-/// **持有 `ExpertId` 而非 `MemberId`**：成员集合里的每一项都是**可复用身份**，
-/// 因此同一个专家可以同时在多个 `Team` 里 —— 这正是 Octop 规则 1 的要求。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Team {
     id: TeamId,
@@ -78,12 +52,7 @@ pub struct Team {
 }
 
 impl Team {
-    /// 创建团队。成员集合初始为**空**（不是含 leader）。
-    ///
-    /// ⚠️ 为什么 leader 不自动入成员集合：自动加入会让
-    /// 「成员数上限为 8」在 `add_member` 时出现 off-by-one，
-    /// 且 `members()` 的语义从"成员"滑向"成员+主持人"。
-    /// leader 与 members 的关系由 [`Team::is_leader`] 表达。
+
     pub fn new(id: TeamId, name: impl Into<String>, leader: ExpertId) -> Result<Self, TeamError> {
         let name = name.into();
         if name.trim().is_empty() {
@@ -97,32 +66,22 @@ impl Team {
         })
     }
 
-    /// 团队标识。
     pub fn id(&self) -> &TeamId {
         &self.id
     }
 
-    /// 团队名称。
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    /// 主持人（leader）专家身份。
     pub fn leader(&self) -> &ExpertId {
         &self.leader
     }
 
-    /// 某专家是否为主持人。
     pub fn is_leader(&self, expert: &ExpertId) -> bool {
         &self.leader == expert
     }
 
-    /// 加入成员。
-    ///
-    /// 不变量（全部**有反向用例**，见本文件 `tests`）：
-    /// 1. 不得重复（同一专家在一个团队里只能有一个席位）；
-    /// 2. 成员数不得超 `MAX_TEAM_MEMBERS`；
-    /// 3. 专家必须在名册内（`roster`）。
     pub fn add_member(
         &mut self,
         expert: ExpertId,
@@ -144,39 +103,29 @@ impl Team {
         Ok(AddOutcome::Added)
     }
 
-    /// 移除成员。返回是否真的移除了。
-    ///
-    /// ⚠️ 移除一个不在成员集合里的专家返回 `false` 而**不是 Err**：
-    /// 「本来就不在」与「移除失败」是不同的语义，混成一个错误会让
-    /// 调用方无法区分幂等重试与真实故障。
     pub fn remove_member(&mut self, expert: &ExpertId) -> bool {
         self.members.remove(expert)
     }
 
-    /// 成员数。
     pub fn member_count(&self) -> usize {
         self.members.len()
     }
 
-    /// 是否含该专家（成员集合内，不含 leader 隐含身份）。
     pub fn has_member(&self, expert: &ExpertId) -> bool {
         self.members.contains(expert)
     }
 
-    /// 成员迭代（按 `ExpertId` 序，保证可复现）。
     pub fn members(&self) -> impl Iterator<Item = &ExpertId> {
         self.members.iter()
     }
 }
 
-/// `add_member` 的结果。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AddOutcome {
-    /// 已加入。
+
     Added,
 }
 
-/// 便捷构造：合法团队标识 + 名称 + leader。
 pub fn team_of(id: &str, name: &str, leader: &str) -> Result<Team, TeamError> {
     let tid = TeamId::parse(id).map_err(|e| match e {
         crate::TeamIdError::Empty => TeamError::IdEmpty,
@@ -187,7 +136,6 @@ pub fn team_of(id: &str, name: &str, leader: &str) -> Result<Team, TeamError> {
     Team::new(tid, name, lead)
 }
 
-/// 构造名册（专家注册表）。
 pub fn roster(ids: &[&str]) -> BTreeSet<ExpertId> {
     ids.iter()
         .map(|s| ExpertId::parse(s).expect("测试用专家名应合法"))
@@ -262,7 +210,7 @@ mod tests {
 
     #[test]
     fn add_member_rejects_duplicate_expert_in_same_team() {
-        // 反向用例：同一团队不得有两个相同专家席位。
+
         let mut t = team_of("growth-squad", "增长小队", "cost-analyst").expect("应合法");
         let r = roster3();
         let e = ExpertId::parse("cost-analyst").expect("应合法");
@@ -276,7 +224,7 @@ mod tests {
 
     #[test]
     fn add_member_rejects_expert_not_in_roster() {
-        // 反向用例：名册外的专家不得进团。
+
         let mut t = team_of("growth-squad", "增长小队", "cost-analyst").expect("应合法");
         let r = roster3();
         let stranger = ExpertId::parse("stranger").expect("应合法");
@@ -289,7 +237,7 @@ mod tests {
 
     #[test]
     fn add_member_enforces_cap_and_reports_got_and_max() {
-        // 反向用例：超上限判红，且错误里带实际值与上限（可诊断）。
+
         let mut t = team_of("big-team", "大团队", "cost-analyst").expect("应合法");
         let mut r: BTreeSet<ExpertId> = BTreeSet::new();
         for i in 0..=MAX_TEAM_MEMBERS {
@@ -319,8 +267,7 @@ mod tests {
 
     #[test]
     fn same_expert_can_join_multiple_teams() {
-        // 🔴 Octop 规则 1 的可执行证据：
-        // 一个专家身份同时存在于两个团队，且互不影响。
+
         let e = ExpertId::parse("cost-analyst").expect("应合法");
         let r = roster(&["cost-analyst"]);
         let mut t1 = team_of("team-a", "A 队", "growth-analyst").expect("应合法");
@@ -331,7 +278,6 @@ mod tests {
         assert_eq!(t2.member_count(), 1);
         assert!(t1.has_member(&e) && t2.has_member(&e));
 
-        // ⚠️ 但**执行实例**不可跨团队共享：从 t1 移除不影响 t2。
         assert!(t1.remove_member(&e));
         assert!(!t1.has_member(&e));
         assert!(t2.has_member(&e), "从 t1 移除成员不得影响 t2 的成员关系");
@@ -339,7 +285,7 @@ mod tests {
 
     #[test]
     fn remove_member_returns_false_for_non_member() {
-        // 幂等语义：移除非成员返回 false 而非 Err（区别于「移除失败」）。
+
         let mut t = team_of("t-1", "队", "cost-analyst").expect("应合法");
         let absent = ExpertId::parse("growth-analyst").expect("应合法");
         assert!(!t.remove_member(&absent), "移除非成员应返回 false");
@@ -375,7 +321,7 @@ mod tests {
 
     #[test]
     fn empty_roster_rejects_every_expert() {
-        // 反向用例：名册为空时任何专家都进不来。
+
         let mut t = team_of("t-1", "队", "cost-analyst").expect("应合法");
         let empty = BTreeSet::new();
         let e = ExpertId::parse("cost-analyst").expect("应合法");
@@ -388,7 +334,7 @@ mod tests {
 
     #[test]
     fn error_display_carries_the_offending_identity() {
-        // 错误信息必须能定位到"是谁"，否则用户无法自诊断（铁律七）。
+
         let msg = TeamError::DuplicateMember(ExpertId::parse("cost-analyst").expect("应合法"))
             .to_string();
         assert!(msg.contains("cost-analyst"), "错误须含专家名：{msg}");

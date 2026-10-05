@@ -1,15 +1,3 @@
-//! 专家与派工 handler 的**端到端**测试（真库 + 真实 axum 路由）。
-//!
-//! 走的是真实的路由匹配、中间件链、extractor、`IntoResponse`；
-//! 唯一没走的是 TCP 与 hyper（与 `http_contract.rs` 同一取舍）。
-//!
-//! # 这一层要证明的，不是仓储已经证明过的事
-//!
-//! 仓储测试验的是「SQL 对不对」；这里验的是**接线对不对**：
-//! 1. 契约 §5.1 的专家路由**不再是 501**（替换掉的占位确实被拿掉了）；
-//! 2. 属主取自令牌 —— B 用自己的令牌去改 A 的专家，拿到的是 404 而不是 403；
-//! 3. 存储不可用时是 **503**，不是 200 空列表；
-//! 4. 错误响应是中文 + 下一步，且**不含**底层 SQL 串。
 
 mod common;
 mod dispatch_seed;
@@ -38,10 +26,6 @@ fn user_id(uid: &str) -> quill_domain::UserId {
     quill_domain::UserId::parse(uid).expect("测试 UID 必须合法")
 }
 
-/// 状态 + 临时库。
-///
-/// ⚠️ 返回 `TestDb` 是**故意的**：它必须活到用例结束，
-/// 否则临时目录会在连接还开着时被删掉（Windows 上直接删不掉）。
 fn state(t: &TestDb) -> AppState {
     let resolver = EnvTokenResolver::new(vec![
         (
@@ -67,7 +51,6 @@ fn state(t: &TestDb) -> AppState {
     }
 }
 
-/// 存储不可用的状态（模拟「库打不开」）。
 fn state_without_db() -> AppState {
     let resolver = EnvTokenResolver::new(vec![(
         TOKEN_A.to_string(),
@@ -118,12 +101,9 @@ fn expert_id(name: &str) -> quill_adapters::ExpertId {
     quill_adapters::ExpertId::parse(name).expect("测试用专家名必须合法")
 }
 
-/// 16 字节 → 32 位十六进制（团队标识在路径里就是 hex）。
 fn hex(b: &[u8; 16]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
-
-// ─────────────────────────── 专家 CRUD ───────────────────────────
 
 #[tokio::test]
 async fn expert_crud_walks_the_full_lifecycle_over_http() {
@@ -131,7 +111,6 @@ async fn expert_crud_walks_the_full_lifecycle_over_http() {
     let app = state(&t);
     let s = state(&t);
 
-    // 列表初始为空
     let resp = build_router(app.clone())
         .oneshot(req("GET", "/api/experts", Some(TOKEN_A), None))
         .await
@@ -144,7 +123,6 @@ async fn expert_crud_walks_the_full_lifecycle_over_http() {
     let body = text(resp).await;
     assert!(body.contains("\"experts\":[]"), "初始列表应为空：{body}");
 
-    // 创建
     let resp = build_router(app.clone())
         .oneshot(req(
             "POST",
@@ -162,7 +140,6 @@ async fn expert_crud_walks_the_full_lifecycle_over_http() {
     let body = text(resp).await;
     assert!(body.contains("cost-analyst"), "应回显专家标识：{body}");
 
-    // 读取
     let resp = build_router(app.clone())
         .oneshot(req("GET", "/api/experts/cost-analyst", Some(TOKEN_A), None))
         .await
@@ -171,7 +148,6 @@ async fn expert_crud_walks_the_full_lifecycle_over_http() {
     let body = text(resp).await;
     assert!(body.contains("成本分析师"), "详情应含显示名：{body}");
 
-    // 修改
     let resp = build_router(app.clone())
         .oneshot(req(
             "PATCH",
@@ -189,7 +165,6 @@ async fn expert_crud_walks_the_full_lifecycle_over_http() {
         "关开关应生效：{body}"
     );
 
-    // 删除（幂等：第二次 deleted=false）
     for (i, want) in [(1, true), (2, false)] {
         let resp = build_router(app.clone())
             .oneshot(req(
@@ -207,7 +182,7 @@ async fn expert_crud_walks_the_full_lifecycle_over_http() {
             "第 {i} 次删除的 deleted 应为 {want}：{body}"
         );
     }
-    // 删后不可见
+
     let resp = build_router(app.clone())
         .oneshot(req("GET", "/api/experts/cost-analyst", Some(TOKEN_A), None))
         .await
@@ -218,8 +193,7 @@ async fn expert_crud_walks_the_full_lifecycle_over_http() {
 
 #[tokio::test]
 async fn user_b_cannot_see_or_touch_user_a_expert_and_gets_404_not_403() {
-    // 🔴 跨用户隔离的 HTTP 表现（M3 判定项）。
-    //    403 会确认「A 确实有这个专家」；必须与「不存在」完全同形。
+
     let t = TestDb::new("http-expert-isolation");
     let app = state(&t);
     build_router(app.clone())
@@ -236,7 +210,6 @@ async fn user_b_cannot_see_or_touch_user_a_expert_and_gets_404_not_403() {
         .await
         .expect("oneshot 失败");
 
-    // B 列表看不到
     let resp = build_router(app.clone())
         .oneshot(req("GET", "/api/experts", Some(TOKEN_B), None))
         .await
@@ -247,7 +220,6 @@ async fn user_b_cannot_see_or_touch_user_a_expert_and_gets_404_not_403() {
         "🔴 B 的列表里不得出现 A 的私有专家：{body}"
     );
 
-    // B 直接按 id 取 → 404（不是 403）
     let resp = build_router(app.clone())
         .oneshot(req(
             "GET",
@@ -263,7 +235,6 @@ async fn user_b_cannot_see_or_touch_user_a_expert_and_gets_404_not_403() {
         "🔴 不可见必须是 404：403 等于确认它存在"
     );
 
-    // B 改名 / 删除 → 同样 404
     for (method, body) in [
         ("PATCH", Some(serde_json::json!({ "display_name": "劫持" }))),
         ("DELETE", None),
@@ -284,7 +255,6 @@ async fn user_b_cannot_see_or_touch_user_a_expert_and_gets_404_not_403() {
         );
     }
 
-    // A 的专家毫发无损
     let resp = build_router(app)
         .oneshot(req(
             "GET",
@@ -301,7 +271,7 @@ async fn user_b_cannot_see_or_touch_user_a_expert_and_gets_404_not_403() {
 
 #[tokio::test]
 async fn storage_unavailable_is_503_and_never_an_empty_200() {
-    // 🔴 反向用例：存储故障必须**响亮**，不能伪装成「我没有专家」。
+
     let resp = build_router(state_without_db())
         .oneshot(req("GET", "/api/experts", Some(TOKEN_A), None))
         .await
@@ -324,7 +294,7 @@ async fn storage_unavailable_is_503_and_never_an_empty_200() {
         !body.contains("\"experts\":[]"),
         "🔴 绝不能用空列表伪装成功：{body}"
     );
-    // /healthz 仍 200 且报出存储不可用（服务活着 ≠ 数据可用）
+
     let resp = build_router(state_without_db())
         .oneshot(req("GET", "/healthz", None, None))
         .await
@@ -342,7 +312,6 @@ async fn bad_input_is_400_in_chinese_and_unknown_fields_are_rejected() {
     let t = TestDb::new("http-expert-badinput");
     let app = state(&t);
 
-    // 非法 slug
     let resp = build_router(app.clone())
         .oneshot(req(
             "POST",
@@ -360,7 +329,6 @@ async fn bad_input_is_400_in_chinese_and_unknown_fields_are_rejected() {
     let body = text(resp).await;
     assert!(body.contains("bad_request"), "错误码应明确：{body}");
 
-    // 字段名拼错（驼峰）必须判红，否则会「返回成功却什么都没改」
     build_router(app.clone())
         .oneshot(req(
             "POST",
@@ -389,7 +357,6 @@ async fn bad_input_is_400_in_chinese_and_unknown_fields_are_rejected() {
     let body = text(resp).await;
     assert!(body.contains("displayName"), "应点名是哪个字段：{body}");
 
-    // 空 PATCH → 400（不许返回 200 却什么都没改）
     let resp = build_router(app.clone())
         .oneshot(req(
             "PATCH",
@@ -406,7 +373,7 @@ async fn bad_input_is_400_in_chinese_and_unknown_fields_are_rejected() {
 
 #[tokio::test]
 async fn expert_import_export_are_still_501_not_fake_success() {
-    // 未实现的路由必须继续报 501（不许因为「专家 CRUD 已实现」就连带变成假成功）。
+
     let t = TestDb::new("http-expert-501");
     let app = state(&t);
     for (method, path) in [
@@ -429,8 +396,7 @@ async fn expert_import_export_are_still_501_not_fake_success() {
 
 #[tokio::test]
 async fn unauthenticated_expert_requests_are_401_before_anything_else() {
-    // 顺序断言：鉴权先于存储。未认证方不得通过状态码区分
-    // 「专家路由存在但你没权限」与「路由不存在」。
+
     let t = TestDb::new("http-expert-401");
     let resp = build_router(state(&t))
         .oneshot(req("GET", "/api/experts", None, None))
@@ -439,14 +405,10 @@ async fn unauthenticated_expert_requests_are_401_before_anything_else() {
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
 
-// ─────────────────────────── 派工 ───────────────────────────
-
 #[tokio::test]
 async fn dispatch_booking_is_idempotent_and_visible_in_the_ledger() {
     let t = TestDb::new("http-dispatch-book");
-    // ⚠️ 团队 / 主持人会话 / 房间**全部取自夹具**，不手写十六进制：
-    //    手写就等于「用例与外键前提各写一份」，两者漂移时 FK 会以
-    //    「内部错误」的形式出现，排障方向完全被带偏。
+
     let f = seed(&t.bridge(), user_id(UID_A), 0x21, &["cost-analyst"]);
     let app = state(&t);
 
@@ -477,7 +439,6 @@ async fn dispatch_booking_is_idempotent_and_visible_in_the_ledger() {
         "🔴 必须明说没执行（不许让用户以为成员跑过了）：{body_text}"
     );
 
-    // 幂等：同一轮再记一次 → existed
     let resp = build_router(app.clone())
         .oneshot(req("POST", &team_path, Some(TOKEN_A), Some(body)))
         .await
@@ -489,7 +450,6 @@ async fn dispatch_booking_is_idempotent_and_visible_in_the_ledger() {
         "🔴 二次记账必须判 existed：{body_text}"
     );
 
-    // 账本可读（GET 同路径）
     let resp = build_router(app.clone())
         .oneshot(req(
             "GET",
@@ -510,7 +470,6 @@ async fn dispatch_booking_is_idempotent_and_visible_in_the_ledger() {
         "账本应含这条派工：{body_text}"
     );
 
-    // 在途视图
     let resp = build_router(app)
         .oneshot(req("GET", "/api/dispatch/inflight", Some(TOKEN_A), None))
         .await
@@ -530,7 +489,6 @@ async fn dispatch_booking_validates_member_id_prefix_and_rejects_empty_members()
     let app = state(&t);
     let team_path = format!("/api/teams/{}/dispatch", hex(&f.team_id));
 
-    // 成员标识必须以「专家名-」开头
     let resp = build_router(app.clone())
         .oneshot(req(
             "POST",
@@ -557,7 +515,6 @@ async fn dispatch_booking_validates_member_id_prefix_and_rejects_empty_members()
     let body = text(resp).await;
     assert!(body.contains("cost-analyst-"), "应说明前缀规则：{body}");
 
-    // 空成员列表
     let resp = build_router(app)
         .oneshot(req(
             "POST",

@@ -1,7 +1,3 @@
-//! `quill backup` / `quill restore` —— 一致性备份与恢复。
-//!
-//! 走 `quill-backup` 的既有实现（`VACUUM INTO` + 摘要校验 + 幂等），
-//! CLI 不重复实现备份逻辑 —— 那是铁律三明令禁止的第二份实现。
 
 use crate::{store, Opts, Outcome};
 use quill_backup::{create_backup, restore_backup, BackupSource};

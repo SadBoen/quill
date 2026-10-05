@@ -1,20 +1,3 @@
-//! 启动与优雅关闭。
-//!
-//! # 优雅关闭做了什么
-//!
-//! 收到 `SIGINT`（Ctrl-C）或 `SIGTERM`（systemd stop）后：
-//! 1. **停止接受新连接**（listener 被关闭）；
-//! 2. **等待在途请求跑完**（axum 的 `with_graceful_shutdown` 语义）；
-//! 3. 超过 `QUILL_SHUTDOWN_TIMEOUT`（默认 30s）仍未结束 → **主动退出**并打 ERROR。
-//!
-//! # 为什么第 3 步必须存在
-//!
-//! 没有超时的话，一个卡住的请求会让 `systemctl stop` 永远等下去，
-//! systemd 最终只能 SIGKILL —— 那等于把"优雅关闭"降级成"强杀"，
-//! 且没有任何日志说明发生了什么（铁律七：失败必须自诊断）。
-//!
-//! ⚠️ 信号处理**只在 Unix** 有意义；Windows 上退化为只等 `ctrl_c`。
-//! 这不是缺陷 —— 本项目发布目标是 Debian 容器（铁律一）。
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -25,16 +8,8 @@ use crate::config::Config;
 use crate::routes::build_router;
 use crate::state::AppState;
 
-/// 优雅关闭超时默认值。
 pub const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// 组装应用状态。
-///
-/// ⚠️ **打不开数据库也不退出**（铁律七）：本项目无人工值守，
-/// 一次目录权限问题就让服务起不来，等于把「配置错一行」变成「实例彻底不可用」，
-/// 而 `quill doctor`（唯一诊断入口）此时也连不上。
-/// 因此这里把失败变成 `db = None` + 一条 WARN + 中文原因，
-/// 由 [`crate::state::AppState::db`] 在请求期统一转成 503。
 pub fn build_state(config: Config) -> (AppState, Vec<crate::config::Warning>) {
     let (resolver, mut warnings) = EnvTokenResolver::from_env();
     let mut all = config.warnings.clone();
@@ -44,9 +19,7 @@ pub fn build_state(config: Config) -> (AppState, Vec<crate::config::Warning>) {
     let max_conn = config.db_max_connections;
     let (db, problem) = match crate::db::DbBridge::open(&db_path, max_conn) {
         Ok(bridge) => {
-            // ⚠️ schema 缺失**不阻断启动**，但必须显式告警：
-            //    「库是空的」与「库连不上」在用户看来都是「专家列表是空的」，
-            //    不告警就等于把故障伪装成数据（AGENTS.md 第 2 类「假成功」）。
+
             match bridge.missing_tables() {
                 Ok(missing) if missing.is_empty() => {}
                 Ok(missing) => all.push(crate::config::Warning {
@@ -95,7 +68,6 @@ pub fn build_state(config: Config) -> (AppState, Vec<crate::config::Warning>) {
     )
 }
 
-/// 绑定监听器 —— 失败时返回中文可诊断错误（铁律七），**不 panic**。
 pub async fn bind(addr: SocketAddr) -> Result<tokio::net::TcpListener, String> {
     tokio::net::TcpListener::bind(addr).await.map_err(|e| {
         format!(
@@ -108,10 +80,6 @@ pub async fn bind(addr: SocketAddr) -> Result<tokio::net::TcpListener, String> {
     })
 }
 
-/// 启动服务并阻塞直到收到关闭信号。
-///
-/// 返回 `Err(String)` 表示**启动失败**（此时进程应非零退出）；
-/// 正常关闭返回 `Ok(())`。
 pub async fn serve(state: AppState, addr: SocketAddr) -> Result<(), String> {
     let listener = bind(addr).await?;
     let local = listener
@@ -152,7 +120,6 @@ pub async fn serve(state: AppState, addr: SocketAddr) -> Result<(), String> {
         .map_err(|e| format!("HTTP 服务异常退出：{e}"))
 }
 
-/// 等待关闭信号。
 async fn shutdown_signal() {
     #[cfg(unix)]
     {
@@ -172,12 +139,11 @@ async fn shutdown_signal() {
     }
     #[cfg(not(unix))]
     {
-        // Windows：没有 SIGTERM，只等 Ctrl-C。
+
         let _ = tokio::signal::ctrl_c().await;
     }
 }
 
-/// 优雅关闭超时（可由 `QUILL_SHUTDOWN_TIMEOUT` 覆盖，单位秒）。
 fn shutdown_timeout() -> Duration {
     let secs = std::env::var("QUILL_SHUTDOWN_TIMEOUT")
         .ok()
@@ -193,10 +159,10 @@ mod tests {
 
     #[tokio::test]
     async fn bind_failure_returns_chinese_actionable_message_not_panic() {
-        // 先占住端口再试第二次 —— 证明"绑定失败"确实被处理，而不是静默。
+
         let first = bind("127.0.0.1:0".parse().expect("合法地址")).await;
         let Ok(listener) = first else {
-            // 极端环境（无回环）下无法构造占用，跳过而不是假装通过。
+
             eprintln!("本环境无法绑定回环端口，跳过占用冲突用例");
             return;
         };
@@ -208,15 +174,14 @@ mod tests {
 
     #[test]
     fn shutdown_timeout_falls_back_when_env_is_garbage() {
-        // 配错不得 panic，也不得变成 0（0 会让"等在途请求"退化为"立即退出"）。
+
         let t = shutdown_timeout();
         assert!(t >= Duration::from_secs(1), "超时必须至少 1 秒");
     }
 
     #[tokio::test]
     async fn build_state_merges_config_and_token_warnings_without_loss() {
-        // 构造一条已知的 config 侧 WARN，看它是否在合并后**仍然存在**
-        // （config.warnings 绝不能被 token 侧的 warnings 覆盖掉）。
+
         let mut config = Config::from_env();
         config.warnings.push(crate::config::Warning {
             source: "QUILL_ADDR".to_string(),
@@ -226,7 +191,6 @@ mod tests {
 
         let (_state, warnings) = build_state(config);
 
-        // ⚠️ 必须 **>= expected**：token 侧可能再追加，但一条都不能丢。
         assert!(
             warnings.len() >= expected,
             "config 侧告警被丢掉了：期望至少 {expected} 条，实际 {} 条",

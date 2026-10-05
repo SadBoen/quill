@@ -1,19 +1,3 @@
-//! 派工编排的**真实行为**测试。
-//!
-//! 覆盖任务书点名的四类场景：
-//! 1. 正常路径（成员交付内容）；
-//! 2. 成员拒绝 / 超时 / 链路断开（`FaultKind` 的前三个网络失败模式）；
-//! 3. 幂等重放（同一轮重跑不重复调用执行器）；
-//! 4. 崩溃恢复（`PENDING` 可重派 vs `RUNNING` 需人工确认）。
-//!
-//! ⚠️ **为什么断言来自返回值而不是输出文本**（铁律十九）：
-//! 每条断言都打在 `DispatchReport` / `MemDispatchLedger` / `MockMemberExecutor`
-//! 的结构化返回值上。`report.summary()` 只在「文案必须带 doctor 命令」
-//! 这一条里被断言 —— 因为那一断言的**对象就是文案本身**。
-//!
-//! ⚠️ **为什么用 `quill-testkit` 的 `MockMemberExecutor`**：
-//! `V1_SCOPE_CONSTRAINTS.md` §五「测试是唯一防线」要求失败模式能在测试里复现。
-//! 自己再造一个 mock 就等于让实现与 fixture 同源漂移（铁律十五）。
 
 use std::sync::Arc;
 
@@ -42,7 +26,6 @@ fn e(name: &str) -> ExpertId {
     ExpertId::parse(name).expect("测试用专家名应合法")
 }
 
-/// 建一个含 3 名成员的团队（leader + 2 成员）。
 fn team3() -> Team {
     let mut t = team_of("growth-squad", "增长小队", "leader-bot").expect("应合法");
     let r = roster(&["cost-analyst", "growth-analyst", "leader-bot"]);
@@ -62,13 +45,8 @@ fn task(expert: &str, seq: u32) -> DispatchTask {
     .expect("测试用派工单应合法")
 }
 
-/// 派工器类型别名：执行器经 [`SharedExecutor`] 包装成 `Arc`（见其文档）。
 type TestDispatcher = Dispatcher<SharedExecutor<MockMemberExecutor>, MemDispatchLedger>;
 
-/// 造一个派工器：给定脚本步骤。
-///
-/// 返回的 `Arc<MockMemberExecutor>` 与派工器内部**共享同一个 mock 实例** ——
-/// 这样测试才能在派工之后断言调用次数与时序。
 fn dispatcher(steps: Vec<Step>) -> (Arc<MockMemberExecutor>, TestDispatcher) {
     let m = Arc::new(MockMemberExecutor::new());
     for st in steps {
@@ -81,11 +59,6 @@ fn dispatcher(steps: Vec<Step>) -> (Arc<MockMemberExecutor>, TestDispatcher) {
     (m, d)
 }
 
-/// 派一轮工（测试侧的便捷封装）。
-///
-/// ⚠️ 刻意**返回 `RoundRequest` 而不是直接派工**：让每个用例自己写
-/// 字段名，才能让「字段写错」在测试里立刻看得见。
-/// 同时避免出现一个 8 参数的测试辅助函数（clippy `too_many_arguments`）。
 fn req<'a>(
     owner: UserId,
     session: SessionId,
@@ -106,7 +79,6 @@ fn req<'a>(
     }
 }
 
-/// 常用组合：属主 u(1) / 会话 s(1) / 房间 `ROOM` / 链为空。
 fn round<'a>(
     d: &TestDispatcher,
     team: &'a Team,
@@ -122,8 +94,6 @@ fn ok_step(member: &str, output: &str) -> Step {
             .expect("结果应合法"),
     )
 }
-
-// ─────────────────────── 正常路径 ───────────────────────
 
 #[test]
 fn all_members_deliver_and_report_carries_counts() {
@@ -149,7 +119,7 @@ fn all_members_deliver_and_report_carries_counts() {
 
 #[test]
 fn partial_outcome_counts_as_delivered_with_its_completed_scope() {
-    // 反向用例：把 partial 当失败会丢掉已完成的工作（docs/07 §2.3）。
+
     let partial = MemberOutcome::new(
         MemberId::parse("cost-analyst-1").expect("应合法"),
         MemberStatus::Partial,
@@ -175,7 +145,7 @@ fn partial_outcome_counts_as_delivered_with_its_completed_scope() {
 
 #[test]
 fn member_self_reported_failure_is_recorded_as_failed_not_delivered() {
-    // 🔴 反向用例：成员自报 failed 却记成 DONE = 主持人把空产出当成果汇总。
+
     let failed = MemberOutcome::failed(
         MemberId::parse("cost-analyst-1").expect("应合法"),
         "只完成了成本结构分析",
@@ -199,7 +169,7 @@ fn member_self_reported_failure_is_recorded_as_failed_not_delivered() {
 
 #[test]
 fn dispatching_to_an_expert_outside_the_team_is_rejected_before_touching_the_executor() {
-    // 反向用例：不校验成员关系 = 允许派工给团外专家，Team 就白建了。
+
     let (m, d) = dispatcher(vec![]);
     let err = round(&d, &team3(), 0, &[task("risk-reviewer", 1)]).expect_err("团外专家必须判红");
     assert!(
@@ -211,10 +181,7 @@ fn dispatching_to_an_expert_outside_the_team_is_rejected_before_touching_the_exe
 
 #[test]
 fn one_invalid_task_aborts_the_whole_round_without_dispatching_any_member() {
-    // 🔴 静默数据丢失用例：若校验是「边派边校验」，
-    // 第 2 个成员非法时第 1 个已经执行完并落账，而函数返回 Err
-    // 让调用方拿不到那条结果 —— 成员跑了、token 烧了、结果被丢掉，
-    // 且账本里留下一条调用方不知道的 DONE。
+
     let (m, d) = dispatcher(vec![ok_step("cost-analyst-1", "会被丢掉的产出")]);
     let tasks = [task("cost-analyst", 1), task("risk-reviewer", 1)];
     let err = round(&d, &team3(), 0, &tasks).expect_err("团外专家必须判红");
@@ -232,9 +199,7 @@ fn one_invalid_task_aborts_the_whole_round_without_dispatching_any_member() {
 
 #[test]
 fn a_cycle_in_a_later_task_also_prevents_every_earlier_dispatch() {
-    // 与上一条同源：链检测也必须整轮前置。
-    // ⚠️ 两个成员都必须在团内（`team3` 只有 cost/growth/leader），
-    // 否则会先撞上「团外专家」判红，测的就不是链检测了。
+
     let (m, d) = dispatcher(vec![ok_step("cost-analyst-1", "会被丢掉的产出")]);
     let hops = chain(&[("growth-analyst", "t-001")]);
     let tasks = [task("cost-analyst", 1), task("growth-analyst", 1)];
@@ -248,19 +213,15 @@ fn a_cycle_in_a_later_task_also_prevents_every_earlier_dispatch() {
 
 #[test]
 fn leader_may_receive_a_dispatch_even_though_it_is_not_in_the_member_set() {
-    // 反向用例：Team 的 leader 不在 members 里（quill-domain 刻意如此），
-    // 编排层若只查 has_member，主持人自己就派不到工。
+
     let (_, d) = dispatcher(vec![ok_step("leader-bot-1", "主持人执行完毕")]);
     let report = round(&d, &team3(), 0, &[task("leader-bot", 1)]).expect("leader 应可被派工");
     assert_eq!(report.delivered_count(), 1);
 }
 
-// ─────────────────────── 成员失败：拒绝 / 超时 / 断链 ───────────────────────
-
 #[test]
 fn rejection_timeout_and_link_drop_each_produce_a_distinct_failure() {
-    // docs/07 §4.2.1 的三个网络失败模式必须**各自**被复现，
-    // 且错误文案互不相同（否则排障时分不清根因）。
+
     let cases = [
         (FaultKind::Rejected, "member_rejected", false),
         (FaultKind::Timeout, "member_rejected", true),
@@ -299,7 +260,7 @@ fn rejection_timeout_and_link_drop_each_produce_a_distinct_failure() {
 
 #[test]
 fn failed_members_do_not_stop_the_others_in_the_same_round() {
-    // 🔴 反向用例：一名成员失败就中断整轮 = 一次网络抖动废掉整个专家团。
+
     let (m, d) = dispatcher(vec![
         Step::Fault(FaultKind::Timeout),
         ok_step("growth-analyst-1", "增长来自自然流量"),
@@ -323,8 +284,7 @@ fn failed_members_do_not_stop_the_others_in_the_same_round() {
 
 #[test]
 fn a_failed_dispatch_is_never_retried_automatically() {
-    // 🔴 契约 docs/07 §4.3 + PHASE2 §七.4：派工失败**不自动重跑**。
-    // 断言「执行器只被调用 1 次」—— 若有人加了重试循环，这条立刻红。
+
     let (m, d) = dispatcher(vec![Step::Fault(FaultKind::PeerUnreachable)]);
     let report = round(&d, &team3(), 0, &[task("cost-analyst", 1)]).expect("派工应返回报告");
     assert_eq!(report.failed_count(), 1);
@@ -353,7 +313,7 @@ fn revoked_authorization_failure_carries_its_own_code() {
 
 #[test]
 fn report_summary_carries_the_copyable_doctor_command_for_every_failure() {
-    // 铁律七：汇总文本是最容易丢「下一步执行哪条命令」的地方。
+
     let (_, d) = dispatcher(vec![
         Step::Fault(FaultKind::Rejected),
         Step::Fault(FaultKind::LinkDropped),
@@ -368,9 +328,7 @@ fn report_summary_carries_the_copyable_doctor_command_for_every_failure() {
     let sum = report.summary();
     assert!(sum.contains("quill doctor"), "汇总须指向 doctor：\n{sum}");
     assert!(sum.contains("member_rejected"), "汇总须含错误码：\n{sum}");
-    // ⚠️ 两条失败 → 汇总里恰好两条命令。
-    // 修复命令的唯一出口是 `AgentError::Display` 的尾部，
-    // 汇总**不得**再打一遍（两处同形命令会被用户当成两个不同动作）。
+
     assert_eq!(
         sum.matches("quill doctor").count(),
         2,
@@ -379,12 +337,9 @@ fn report_summary_carries_the_copyable_doctor_command_for_every_failure() {
     assert!(report.is_total_failure());
 }
 
-// ─────────────────────── 幂等（ux_dispatch_once） ───────────────────────
-
 #[test]
 fn replaying_the_same_round_never_calls_the_executor_twice() {
-    // 🔴 幂等判据：返回值层面「执行器只被调用 1 次」，
-    // 不是「报告看起来一样」。
+
     let (m, d) = dispatcher(vec![ok_step("cost-analyst-1", "成本集中在存储")]);
     let t = team3();
     let tasks = [task("cost-analyst", 1)];
@@ -393,7 +348,6 @@ fn replaying_the_same_round_never_calls_the_executor_twice() {
     assert_eq!(first.delivered_count(), 1);
     assert_eq!(m.count_of("start"), 1);
 
-    // 同一轮重放：脚本已耗尽，若编排层再调一次执行器就会拿到 Conflict。
     let second = round(&d, &t, 0, &tasks).expect("重放应幂等返回");
     assert_eq!(
         m.count_of("start"),
@@ -410,8 +364,7 @@ fn replaying_the_same_round_never_calls_the_executor_twice() {
 
 #[test]
 fn a_different_round_is_a_different_dispatch_and_does_run() {
-    // 反向用例：幂等键若漏了 round（或误用 member 而非 expert），
-    // 第二轮会被错误跳过 —— 一次静默的任务丢失。
+
     let (m, d) = dispatcher(vec![
         ok_step("cost-analyst-1", "第 0 轮结论"),
         ok_step("cost-analyst-2", "第 1 轮结论"),
@@ -443,8 +396,7 @@ fn a_different_room_is_a_different_dispatch_and_does_run() {
 
 #[test]
 fn the_same_room_and_round_are_isolated_between_users() {
-    // 🔴 跨用户隔离：键的第一列是 user_id。
-    // 若漏掉，A 与 B 在同名房间的同一轮会互相命中幂等键 = 一方静默收不到结果。
+
     let (m, d) = dispatcher(vec![
         ok_step("cost-analyst-1", "A 的结论"),
         ok_step("cost-analyst-1", "B 的结论"),
@@ -479,13 +431,9 @@ fn two_dispatches_in_one_round_target_different_members_and_both_run() {
     assert_eq!(d.ledger().len(), 2, "账本按 (room, round, expert) 记 2 条");
 }
 
-// ─────────────────────── 崩溃恢复（ix_dispatch_inflight） ───────────────────────
-
 #[test]
 fn begin_distinguishes_created_from_existed() {
-    // 🔴 幂等的**判别**载体：若 begin() 只返回记录而不说「是不是我插的」，
-    // 编排层就无法区分「正常首派」与「崩溃恢复」，只能把两者混为一谈
-    // —— 那会让每一轮正常派工都被报成「恢复重派」。
+
     let (_, d) = dispatcher(vec![]);
     let key = DispatchKey::new(u(1), ROOM, 0, e("cost-analyst")).expect("键应合法");
     let rec = || {
@@ -509,9 +457,7 @@ fn begin_distinguishes_created_from_existed() {
 
 #[test]
 fn a_fresh_dispatch_is_not_reported_as_a_crash_recovery() {
-    // 🔴 反向用例：正常首派不得被标成「恢复重派」。
-    // 若 begin() 的判别丢失，每一轮正常派工都会往 recovered_for_retry 里塞一条，
-    // 上层据此提示用户「上次有派工没跑完」—— 一个每次都误报的健康告警。
+
     let (_, d) = dispatcher(vec![ok_step("cost-analyst-1", "首派成功")]);
     let report = round(&d, &team3(), 0, &[task("cost-analyst", 1)]).expect("首派应成功");
     assert_eq!(report.delivered_count(), 1);
@@ -524,7 +470,7 @@ fn a_fresh_dispatch_is_not_reported_as_a_crash_recovery() {
 
 #[test]
 fn a_replayed_pending_dispatch_is_reported_as_a_recovery() {
-    // 与上一条相反的方向：键已存在且仍是 PENDING 才算恢复重派。
+
     let key = DispatchKey::new(u(1), ROOM, 0, e("cost-analyst")).expect("键应合法");
     let (_, d) = dispatcher(vec![ok_step("cost-analyst-1", "恢复后跑成功")]);
     d.ledger()
@@ -540,10 +486,10 @@ fn a_replayed_pending_dispatch_is_reported_as_a_recovery() {
 
 #[test]
 fn pending_dispatch_after_a_crash_is_safe_to_retry_and_does_rerun() {
-    // PENDING = 已记账但**成员从未被调用** → 重派安全。
+
     let (m, d) = dispatcher(vec![ok_step("cost-analyst-1", "崩溃后补跑成功")]);
     let key = DispatchKey::new(u(1), ROOM, 0, e("cost-analyst")).expect("键应合法");
-    // 模拟「记账后进程被杀」：只有一条 PENDING 记录，执行器一次都没被调用。
+
     let begun = d
         .ledger()
         .begin(&DispatchRecord::pending(
@@ -576,8 +522,7 @@ fn pending_dispatch_after_a_crash_is_safe_to_retry_and_does_rerun() {
 
 #[test]
 fn running_dispatch_after_a_crash_requires_human_confirmation_and_is_not_rerun() {
-    // 🔴 RUNNING = 执行器**已被调用**，副作用可能已发生 → 不得自动重派。
-    // 若这里重派，就是一次重复执行（成员可能已写过文件/库）。
+
     let (m, d) = dispatcher(vec![ok_step("cost-analyst-1", "不该被调用")]);
     let key = DispatchKey::new(u(1), ROOM, 0, e("cost-analyst")).expect("键应合法");
     let mut rec = DispatchRecord::pending(
@@ -629,7 +574,7 @@ fn asking_dispatch_also_requires_human_confirmation() {
 
 #[test]
 fn recovery_of_a_clean_ledger_reports_zero_checked_not_unknown() {
-    // 🔴 铁律十六：「0 条在途」与「根本没查到」在屏幕上必须能区分。
+
     let (_, d) = dispatcher(vec![]);
     let rec = d.recover(&u(1)).expect("恢复判定应成功");
     assert_eq!(rec.checked, 0, "已检查：确实 0 条在途");
@@ -643,8 +588,7 @@ fn recovery_of_a_clean_ledger_reports_zero_checked_not_unknown() {
 
 #[test]
 fn recovery_only_sees_the_requesting_users_inflight_dispatches() {
-    // 🔴 跨用户隔离：A 的悬挂派工不得出现在 B 的恢复报告里，
-    // 否则 B 会看到别人的任务摘要。
+
     let (_, d) = dispatcher(vec![]);
     for owner in [u(1), u(2)] {
         let key = DispatchKey::new(owner, ROOM, 0, e("cost-analyst")).expect("键应合法");
@@ -661,11 +605,9 @@ fn recovery_only_sees_the_requesting_users_inflight_dispatches() {
     assert!(a.safe_to_retry[0].owner() == u(1), "键的属主必须是 A");
 }
 
-// ─────────────────────── 状态机 ───────────────────────
-
 #[test]
 fn a_settled_dispatch_cannot_be_settled_again() {
-    // 反向用例：重复结算会让**先到的结果被后到的覆盖** = 静默数据丢失。
+
     let key = DispatchKey::new(u(1), ROOM, 0, e("cost-analyst")).expect("键应合法");
     let mut rec = DispatchRecord::pending(key, MemberId::parse("cost-analyst-1").expect("应合法"));
     rec.mark_running().expect("应合法");
@@ -686,7 +628,7 @@ fn a_settled_dispatch_cannot_be_settled_again() {
 
 #[test]
 fn a_failed_outcome_cannot_be_settled_as_done() {
-    // 🔴 反向用例：成员自报 failed 却记 DONE = 主持人汇总到空产出。
+
     let key = DispatchKey::new(u(1), ROOM, 0, e("cost-analyst")).expect("键应合法");
     let mut rec = DispatchRecord::pending(key, MemberId::parse("cost-analyst-1").expect("应合法"));
     rec.mark_running().expect("应合法");
@@ -713,8 +655,7 @@ fn running_cannot_be_entered_from_a_settled_state() {
 
 #[test]
 fn asking_requires_a_positive_depth() {
-    // 反向用例：schema 有 CHECK ((state='ASKING') = (ask_depth > 0))，
-    // 深度 0 进 ASKING 会让写库当场失败。
+
     let key = DispatchKey::new(u(1), ROOM, 0, e("cost-analyst")).expect("键应合法");
     let mut rec = DispatchRecord::pending(key, MemberId::parse("cost-analyst-1").expect("应合法"));
     let err = rec.mark_asking(0).expect_err("深度 0 必须判红");
@@ -729,7 +670,7 @@ fn asking_requires_a_positive_depth() {
 
 #[test]
 fn dispatch_state_wire_names_match_the_schema_check_list() {
-    // 逐字对齐 `task_dispatches.state` 的 CHECK，6 个值不多不少。
+
     let all = [
         (DispatchState::Pending, "PENDING"),
         (DispatchState::Running, "RUNNING"),
@@ -757,7 +698,7 @@ fn dispatch_state_wire_names_match_the_schema_check_list() {
 
 #[test]
 fn inflight_and_terminal_partition_the_six_states_without_gaps() {
-    // 反照 ix_dispatch_inflight 的部分索引条件。
+
     let all = [
         DispatchState::Pending,
         DispatchState::Running,
@@ -776,11 +717,9 @@ fn inflight_and_terminal_partition_the_six_states_without_gaps() {
     }
 }
 
-// ─────────────────────── 委派链环防护 ───────────────────────
-
 #[test]
 fn dispatching_an_expert_already_on_the_chain_is_rejected_before_the_executor_runs() {
-    // A→B→A：B 派 A 必须被检出，且**在触达执行器之前**。
+
     let (m, d) = dispatcher(vec![]);
     let hops = chain(&[("node-a", "t-001"), ("cost-analyst", "t-002")]);
     let err = d
@@ -802,7 +741,7 @@ fn dispatching_an_expert_already_on_the_chain_is_rejected_before_the_executor_ru
 #[test]
 fn chain_deeper_than_the_limit_is_rejected() {
     let (m, d) = dispatcher(vec![]);
-    // MAX_CHAIN_DEPTH = 4 → 已有 4 跳时再派第 5 跳必须判 TooDeep。
+
     let hops: Vec<ChainHop> = (0..4)
         .map(|i| ChainHop::new(format!("node-{i}"), format!("t-{i}")).expect("应合法"))
         .collect();
@@ -841,11 +780,9 @@ fn a_legal_chain_passes_through_and_is_forwarded_to_the_request() {
     assert_eq!(m.count_of("start"), 1);
 }
 
-// ─────────────────────── steer / abort ───────────────────────
-
 #[test]
 fn steer_failure_is_reported_but_does_not_settle_the_dispatch() {
-    // 🔴 docs/07 §0.1.1 保留 G2：隧道断开 ≠ 成员执行失败。
+
     let (_, d) = dispatcher(vec![Step::Fault(FaultKind::LinkDropped)]);
     let member = MemberId::parse("cost-analyst-1").expect("应合法");
     let err = d
@@ -863,7 +800,7 @@ fn steer_failure_is_reported_but_does_not_settle_the_dispatch() {
 
 #[test]
 fn stop_round_does_not_halt_members_but_abort_room_does() {
-    // 契约七.2：停主持人**不能**连带停成员。
+
     let (m, d) = dispatcher(vec![]);
     let a = MemberId::parse("cost-analyst-1").expect("应合法");
     let b = MemberId::parse("growth-analyst-1").expect("应合法");
@@ -883,8 +820,7 @@ fn stop_round_does_not_halt_members_but_abort_room_does() {
 
 #[test]
 fn steer_with_blank_text_is_rejected_before_reaching_the_executor() {
-    // 反向用例：空 steer 若被放行，成员会收到一次「什么都没有」的唤醒，
-    // 白烧一轮 token 且在时间线上留下不可解释的空洞。
+
     let (m, d) = dispatcher(vec![]);
     let member = MemberId::parse("cost-analyst-1").expect("应合法");
     let err = d.steer(&member, "   ").expect_err("空白消息必须判红");
@@ -892,11 +828,9 @@ fn steer_with_blank_text_is_rejected_before_reaching_the_executor() {
     assert_eq!(m.count_of("steer"), 0, "已检查：执行器未被调用");
 }
 
-// ─────────────────────── 派工单校验 ───────────────────────
-
 #[test]
 fn a_task_with_a_member_from_another_expert_is_rejected() {
-    // 反向用例：把 A 专家的任务派给 B 的成员实例 = 串号。
+
     let err = DispatchTask::new(
         e("cost-analyst"),
         MemberId::parse("growth-analyst-1").expect("应合法"),
@@ -931,7 +865,7 @@ fn a_task_with_empty_title_or_instructions_is_rejected() {
 
 #[test]
 fn a_blank_room_id_is_rejected() {
-    // 反向用例：房间标识为空 = 崩溃恢复时找不到这条派工。
+
     let err = DispatchKey::new(u(1), "  ", 0, e("cost-analyst")).expect_err("空房间应判红");
     assert_eq!(err.code(), "dispatch_request_invalid");
     assert!(err.to_string().contains("房间"), "须点名房间：{err}");
@@ -948,8 +882,7 @@ fn dispatch_key_display_is_readable_for_logs() {
 
 #[test]
 fn list_round_returns_records_sorted_by_member_expert() {
-    // 反照 `ix_dispatch_settle`：按 (user_id, room_id, state) 查，
-    // 编排层要求结果可复现 → 必须排序。
+
     let (_, d) = dispatcher(vec![]);
     let prefix = RoundPrefix {
         owner: u(1),
@@ -980,7 +913,7 @@ fn list_round_returns_records_sorted_by_member_expert() {
 
 #[test]
 fn list_round_of_another_users_room_is_empty_not_their_data() {
-    // 🔴 跨用户隔离：按前缀查也必须带 owner。
+
     let (_, d) = dispatcher(vec![]);
     let key = DispatchKey::new(u(1), ROOM, 0, e("cost-analyst")).expect("键应合法");
     d.ledger()

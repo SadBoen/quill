@@ -1,34 +1,3 @@
-//! `index.md` —— 内容导向的目录（规格 §四）。
-//!
-//! # 为什么它是查询路径的**第一步**而不是一个可选的优化
-//!
-//! 规格 §五实测：约 100 来源 / 数百页面规模下，
-//! 「LLM 自读 index.md」效果出奇地好，**无需 embedding 检索**。
-//! `docs/V1_SCOPE_CONSTRAINTS.md` 约束 3 因此禁止首版引入向量库。
-//! 本模块就是那条检索路径的载体。
-//!
-//! # 格式契约（必须与规格 §四一致）
-//!
-//! ```text
-//! # Wiki 索引
-//!
-//! ## Entities
-//! - [[Rust]] — 所有权模型的实现语言。（source_count=3, updated=2026-10-04）
-//!
-//! ## Concepts
-//! - [[所有权]] — 资源的唯一归属规则。（source_count=2, updated=2026-10-04）
-//! ```
-//!
-//! 条目行格式固定为 `- [[标题]] — 一句话摘要（key=value, key=value）`：
-//! - 开头 `- [[` 让你能用 `grep '^- \[\['` 数出页面数；
-//! - 尾部括号里放**可解析**的元数据，而不是自由文本 ——
-//!   否则 lint 的「页面是否在索引里」检查就退化成字符串模糊匹配。
-//!
-//! # 确定性渲染
-//!
-//! [`WikiIndex::render`] 的输出**只依赖条目集合**，不依赖插入顺序或
-//! 当前时间（日期来自条目本身）。这让「重渲染不产生 diff」成立 ——
-//! 否则每次 ingest 都会让整个文件变脏，git 历史失去可读性。
 
 use std::collections::BTreeMap;
 
@@ -36,31 +5,26 @@ use crate::date::Date;
 use crate::page::{Page, PageType};
 use crate::store::WikiError;
 
-/// 索引标题行。
 pub const INDEX_TITLE: &str = "# Wiki 索引";
 
-/// 一条索引条目。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexEntry {
-    /// 页面标题（须等于目标页的 `Page::title()`）。
+
     pub title: String,
-    /// 一句话摘要。
+
     pub summary: String,
-    /// 页面类型（决定落到哪个分类小节）。
+
     pub page_type: PageType,
-    /// 来源数。
+
     pub source_count: u32,
-    /// 更新日期。
+
     pub updated: Date,
 }
 
 impl IndexEntry {
-    /// 从一个已解析页面构造（摘要由 [`summary_of`] 提取）。
+
     pub fn from_page(p: &Page) -> Option<Self> {
-        // 无类型或无日期 → 不进索引。
-        // 理由：索引是「查询时先读它」的唯一入口，
-        // 塞一条无法完整表达元数据的条目，只会让 LLM 读到半条信息
-        // 并据此作答（比查不到更危险）。
+
         let page_type = p.page_type()?;
         let updated = p.frontmatter.updated.or(p.frontmatter.created)?;
         Some(Self {
@@ -73,15 +37,6 @@ impl IndexEntry {
     }
 }
 
-/// 从正文提取一句话摘要。
-///
-/// 规则（确定性，不做 NLP）：
-/// 1. 跳过标题行、列表行、引用行、空行、只剩 wikilink 的行；
-/// 2. 取第一段剩余文本；
-/// 3. 截到第一个句末标点（`。！？.!?`）或 120 字符。
-///
-/// ⚠️ 没有第 4 步的「不理想就留空」判断：摘要是给人读的，
-/// 截断后的半句仍然比空串有用（读者知道这条页面讲什么方向）。
 pub fn summary_of(body: &str) -> String {
     for line in body.split('\n') {
         let t = line.trim();
@@ -94,7 +49,7 @@ pub fn summary_of(body: &str) -> String {
         {
             continue;
         }
-        // 整行就是一个 wikilink（`- [[A]]` 已被上面挡掉）也算跳过。
+
         if t.starts_with('[') && t.ends_with(']') && t.contains("[[") {
             continue;
         }
@@ -117,22 +72,17 @@ pub fn summary_of(body: &str) -> String {
     String::new()
 }
 
-/// 整个 `index.md` 的内存表示。
-///
-/// 用 [`BTreeMap`] 而非 `Vec`：**标题唯一**是索引的核心不变量
-/// （同一标题两条 = LLM 读到互相矛盾的目录）。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WikiIndex {
     entries: BTreeMap<String, IndexEntry>,
 }
 
 impl WikiIndex {
-    /// 空索引。
+
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// 从 `index.md` 原文解析。空串 → 空索引。
     pub fn parse(text: &str) -> Result<Self, WikiError> {
         let mut idx = Self::new();
         for (i, line) in text.lines().enumerate() {
@@ -155,44 +105,36 @@ impl WikiIndex {
         Ok(idx)
     }
 
-    /// 插入或更新一条（按标题覆盖）。
     pub fn upsert(&mut self, e: IndexEntry) {
         self.entries.insert(e.title.clone(), e);
     }
 
-    /// 按标题移除。
     pub fn remove(&mut self, title: &str) -> bool {
         self.entries.remove(title).is_some()
     }
 
-    /// 取一条。
     pub fn get(&self, title: &str) -> Option<&IndexEntry> {
         self.entries.get(title)
     }
 
-    /// 是否含某标题。
     pub fn contains(&self, title: &str) -> bool {
         self.entries.contains_key(title)
     }
 
-    /// 全部条目（按标题字典序 —— 确定性）。
     pub fn entries(&self) -> impl Iterator<Item = &IndexEntry> {
         self.entries.values()
     }
 
-    /// 条目数。
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
-    /// 是否为空。
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
-    /// 渲染回 `index.md` 原文。
     pub fn render(&self) -> String {
-        // 按类型分桶，桶内按标题排序（`entries()` 已是字典序）。
+
         let buckets: [(PageType, &str); 6] = [
             (PageType::Entity, "Entities"),
             (PageType::Concept, "Concepts"),
@@ -220,22 +162,6 @@ impl WikiIndex {
         out
     }
 
-    /// 关键词定位：返回与 `query` 有词面重合的条目，按重合度降序。
-    ///
-    /// ⚠️ **这就是 v1 的全部检索能力**，刻意如此：
-    /// 规格 §五 + 约束 3 明确「首版不做向量检索」，
-    /// 检索方式是「LLM 自读 index.md」。
-    /// 本函数只是帮编排层把 index.md 摊平成一个候选集，
-    /// **不做排序打分以外的事**，更不做 embedding。
-    ///
-    /// 匹配规则：把 query 按非字母数字切词，然后对每个词做**子串包含**判定
-    /// （标题权重 2、摘要权重 1）。
-    /// ⚠️ 用子串而非词元相等：中文没有空格，按非字母数字切词会把
-    /// 「在编译期检查所有权」整段当成一个词元，于是 `lookup("所有权")` 命中不了它
-    /// —— 中文 wiki 上那等于检索恒空（恒绿假闸门）。
-    /// 代价是英文短词会误命中（`own` 命中 `download`），但对「给模型一份
-    /// 候选集」这个用途来说，多给几页远好过少给几页。
-    /// 零交集 → 空候选（此时编排层把整个 index.md 交给 LLM 自己看）。
     pub fn lookup(&self, query: &str, limit: usize) -> Vec<&IndexEntry> {
         let terms = tokenize(query);
         if terms.is_empty() {
@@ -259,14 +185,13 @@ impl WikiIndex {
                 (score > 0).then_some((score, e))
             })
             .collect();
-        // 分数降序；同分按标题升序 —— 保证同一 query 每次给出同一顺序。
+
         scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.title.cmp(&b.1.title)));
         scored.truncate(limit);
         scored.into_iter().map(|(_, e)| e).collect()
     }
 }
 
-/// 切词：按非字母数字切分，转小写。
 fn tokenize(s: &str) -> Vec<String> {
     s.split(|c: char| !c.is_alphanumeric())
         .filter(|p| !p.is_empty())
@@ -283,10 +208,6 @@ fn render_entry_line(e: &IndexEntry) -> String {
     s
 }
 
-/// 解析一行条目。
-///
-/// 拆成三段（`[[标题]]` / 摘要 / 尾部元数据）分别解析，
-/// 任何一段坏都返回带**原因**的 Err（铁律七：失败必须自诊断）。
 fn parse_entry_line(line: &str) -> Result<IndexEntry, String> {
     let rest = line
         .strip_prefix("- [[")
@@ -298,7 +219,6 @@ fn parse_entry_line(line: &str) -> Result<IndexEntry, String> {
     }
     let mut tail = &rest[close + 2..];
 
-    // 尾部元数据：最后一个 `（...）`。
     let mut source_count = 0u32;
     let mut updated = None;
     if let Some(open) = tail.rfind('（') {
@@ -327,15 +247,12 @@ fn parse_entry_line(line: &str) -> Result<IndexEntry, String> {
         }
     }
 
-    // 摘要：去掉分隔用的 ` — `。
     let summary = tail.trim().trim_start_matches('—').trim().to_string();
 
     Ok(IndexEntry {
         title,
         summary,
-        // 渲染时分类由所在小节决定；解析回内存时不保留小节名，
-        // 统一落 Summary —— 分类在 render 时按 `page_type` 重算，
-        // 所以这个默认值**不会**造成往返不一致（见 round_trip 测试）。
+
         page_type: PageType::Summary,
         source_count,
         updated: updated.ok_or_else(|| "缺少 updated 元数据".to_string())?,
@@ -372,7 +289,7 @@ mod tests {
         assert!(text.starts_with(INDEX_TITLE));
         assert!(text.contains("## Entities\n- [[Rust]] — 所有权模型的实现语言。（source_count=3, updated=2026-10-04）"));
         assert!(text.contains("## Concepts\n- [[所有权]]"));
-        // 反渲染：每条都能被 grep '^## \[' 之外的 `^- \[\[` 数出来
+
         assert_eq!(text.lines().filter(|l| l.starts_with("- [[")).count(), 2);
     }
 
@@ -415,11 +332,11 @@ mod tests {
     fn parse_rejects_malformed_lines_with_reason() {
         let bad = [
             "- [[未闭合",
-            "- [[]] — x（source_count=1, updated=2026-10-04）", // 标题为空
+            "- [[]] — x（source_count=1, updated=2026-10-04）",
             "- [[A]] — x（updated=2026-13-40）",
             "- [[A]] — x（source_count=多, updated=2026-10-04）",
-            "- [[A]] — x",                                 // 缺 updated 元数据
-            "- [[A]] — x（未知键=1, updated=2026-10-04）", // 未知元数据键
+            "- [[A]] — x",
+            "- [[A]] — x（未知键=1, updated=2026-10-04）",
         ];
         for line in bad {
             let r = WikiIndex::parse(line);
@@ -429,8 +346,7 @@ mod tests {
 
     #[test]
     fn parse_ignores_non_entry_lines_without_erroring() {
-        // 非条目行（含 `index.md` 的标题行、空行、说明文字）必须被**跳过**而不是报错 ——
-        // index.md 是人可编辑的，让一句说明文字把整份索引读废是不可接受的。
+
         let text = format!(
             "{}\n\n## Concepts\n\n一行说明文字\n- [[A]] — 摘要。（source_count=1, updated=2026-10-04）\n",
             INDEX_TITLE
@@ -462,7 +378,7 @@ mod tests {
         );
         assert_eq!(summary_of("只有一行没有句号"), "只有一行没有句号");
         assert_eq!(summary_of("# 只有标题"), "");
-        // 超长截断到 120 字符
+
         let long = "字".repeat(200);
         let s = summary_of(&long);
         assert!(s.chars().count() <= 121, "截断失效：{}", s.chars().count());
@@ -530,7 +446,7 @@ mod tests {
         assert_eq!(e.summary, "甲乙丙。");
         assert_eq!(e.source_count, 7);
         assert_eq!(e.updated, d("2026-10-04"));
-        // 再渲染一次必须字节一致（幂等）
+
         assert_eq!(back.render(), text);
     }
 }

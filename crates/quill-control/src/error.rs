@@ -1,160 +1,128 @@
-//! 控制面领域错误：中文人话 + **可直接复制**的修复命令。
-//!
-//! 依据 `AGENTS.md` 铁律七「失败必须自诊断」：
-//! - 不把 `EACCES` / sqlx 错误码抛给用户；
-//! - 每条错误都带一条**完整、可直接复制**的命令；
-//! - 用户出错时**唯一需要执行**的命令是 `quill doctor` —— 本模块的
-//!   `tests::every_error_carries_a_copyable_command` 把这条口径固化成断言。
-//!
-//! # 两条不可协商的约束
-//!
-//! | 约束 | 原因 | 固化它的测试 |
-//! |---|---|---|
-//! | 错误消息里**绝不出现**密码 / 令牌原文 | 错误会进日志、进 syslog、进 UI 横幅；明文一旦落到那里就是凭据泄漏 | `errors_never_echo_secrets` |
-//! | 「用户名不存在」与「密码错误」返回**同一个**变体 | 否则登录接口就是用户枚举器 | `tests::control_plane.rs::login_does_not_reveal_whether_username_exists` |
-//!
-//! # 为什么手写 `Display` 而不用 `thiserror`
-//!
-//! `thiserror` 在 `Cargo.lock` 里但不在本 crate 的依赖表里；
-//! 契约层 `quill-adapters` 也是同样处理（见其 `member.rs` 的同名说明）。
-//! 少写几行 derive 不值得引入一条新依赖边。
 
 use std::fmt;
 
 use quill_adapters::AdapterError;
 
-/// 全项目统一的诊断命令（`AGENTS.md` 铁律七：唯一需要执行的命令）。
-///
-/// ⚠️ 它是**诊断入口**而不是万能修复：具体错误会额外给出更精确的命令。
 pub const DOCTOR_CMD: &str = "quill doctor";
 
-/// 控制面领域错误。
-///
-/// 变体按「用户能据此做什么」划分，而不是按数据库列划分：
-/// 每个变体都必须能回答「下一步执行哪条命令」。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControlError {
-    /// 用户名非法（附中文原因）。
+
     UsernameInvalid {
-        /// 用户原始输入（原样回显，便于用户看清自己敲了什么）。
+
         raw: String,
-        /// 违规原因（中文短句）。
+
         reason: &'static str,
     },
-    /// 用户名规范化后已被占用。
+
     UsernameTaken {
-        /// 规范化后的用户名。
+
         username_norm: String,
     },
-    /// 显示名非法。
+
     DisplayNameInvalid {
-        /// 用户原始输入。
+
         raw: String,
-        /// 违规原因（中文短句）。
+
         reason: &'static str,
     },
-    /// 密码短于下限。
+
     PasswordTooShort {
-        /// 实际长度（按字符计，非字节）。
+
         len: usize,
-        /// 要求下限。
+
         min: usize,
     },
-    /// 密码长于上限（用于给 PBKDF2 成本封顶）。
+
     PasswordTooLong {
-        /// 实际长度。
+
         len: usize,
-        /// 允许上限。
+
         max: usize,
     },
-    /// 密码与用户名相同。
+
     PasswordEqualsUsername,
-    /// 凭据不匹配：**用户名不存在**与**密码错误**共用此变体。
-    ///
-    /// ⚠️ 拆成两个变体等于开一个用户枚举器，所以这里刻意合并。
+
     CredentialsRejected,
-    /// 账号被禁用。
+
     AccountDisabled {
-        /// 用户名（规范化形态）。
+
         username_norm: String,
     },
-    /// 连续失败过多，账号被临时锁定。
+
     AccountLocked {
-        /// 用户名（规范化形态）。
+
         username_norm: String,
-        /// 解锁时刻（毫秒时间戳）。
+
         until_ms: i64,
     },
-    /// 操作者不是 owner。
+
     NotAnOwner {
-        /// 该操作要求的角色说明。
+
         operation: &'static str,
     },
-    /// 已经有第一个 owner 了，不能再 bootstrapping。
+
     FirstOwnerExists,
-    /// 令牌格式非法（不是 64 位小写 hex）。
+
     TokenMalformed,
-    /// 令牌查无对应会话。
+
     SessionUnknown,
-    /// 会话已过期。
+
     SessionExpired {
-        /// 过期时刻（毫秒时间戳）。
+
         expired_at_ms: i64,
     },
-    /// 会话已被撤销（含「改密后撤销」「登出撤销」「轮换撤销」）。
+
     SessionRevoked {
-        /// 撤销原因（来自 `sessions_auth.revoked_reason`，原文回显）。
+
         reason: String,
     },
-    /// 检出**令牌重放**：已轮换/已撤销的令牌又被使用 → 整个令牌家族连坐撤销。
+
     SessionReuseDetected {
-        /// 令牌家族标识（`SessionId` 的 Display 形态，可直接贴进 syslog）。
+
         family: String,
     },
-    /// 邀请码格式非法。
+
     InviteMalformed,
-    /// 邀请码不存在。
+
     InviteUnknown,
-    /// 邀请码已过期。
+
     InviteExpired {
-        /// 过期时刻（毫秒时间戳）。
+
         expired_at_ms: i64,
     },
-    /// 邀请码已被用满。
+
     InviteExhausted {
-        /// 允许的最大使用次数。
+
         max_uses: i32,
     },
-    /// 邀请码已被撤销。
+
     InviteRevoked,
-    /// 目标用户不存在（或已软删除）。
+
     UserNotFound,
-    /// owner 试图禁用自己。
+
     SelfDisableForbidden,
-    /// 邀请码使用次数超出允许区间。
+
     InviteUsesOutOfRange {
-        /// 请求的次数。
+
         got: i32,
-        /// 允许上限。
+
         max: i32,
     },
-    /// 不变量被破坏（代码 bug，不是用户能修的）。
+
     InvariantBroken {
-        /// 中文描述。
+
         detail: String,
     },
-    /// 存储层失败。
+
     Storage {
-        /// 中文描述（**不得**含凭据原文）。
+
         detail: String,
     },
 }
 
 impl ControlError {
-    /// 错误码：稳定的机器可读标识。
-    ///
-    /// 存在的理由：`quill-server` 把它映射成 HTTP 状态码与前端 i18n key，
-    /// 而**不能**去匹配中文文案（文案会改，码不会）。
+
     pub fn code(&self) -> &'static str {
         match self {
             Self::UsernameInvalid { .. } => "username_invalid",
@@ -186,12 +154,6 @@ impl ControlError {
         }
     }
 
-    /// 该错误**唯一**需要的用户动作命令（可直接复制）。
-    ///
-    /// 判据（`tests::every_error_carries_a_copyable_command` 固化为断言）：
-    /// ① 必须以 `quill` 开头（是本项目的命令，不是 `rm -rf` 之类）；
-    /// ② 必须单行（可整行复制进终端）；
-    /// ③ 必须含 `doctor`，即最终诊断入口唯一。
     pub fn fix_command(&self) -> String {
         match self {
             Self::UsernameInvalid { .. }
@@ -233,12 +195,6 @@ impl ControlError {
     }
 }
 
-/// 统一的尾部提示：告诉用户「复制这一行就行」。
-///
-/// ⚠️ 尾部必须打 `fix_command()`（带 `--section=` 的**那一条**），
-/// 而不是笼统的 `quill doctor` —— 否则文案与程序建议不一致，
-/// 用户照抄文案的命令会与 `fix_command()` 指向不同的检查段。
-/// 两者一致由 `tests::every_error_display_points_at_the_same_command` 守住。
 fn tail(f: &mut fmt::Formatter<'_>, cmd: &str) -> fmt::Result {
     write!(
         f,
@@ -248,8 +204,7 @@ fn tail(f: &mut fmt::Formatter<'_>, cmd: &str) -> fmt::Result {
 
 impl fmt::Display for ControlError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // ⚠️ 先算一次命令，所有分支共用：保证「文案里的命令」与
-        //    `fix_command()` **逐字相同**（铁律七的唯一真相源）。
+
         let cmd = self.fix_command();
         let tail = |f: &mut fmt::Formatter<'_>| tail(f, &cmd);
         match self {
@@ -283,8 +238,7 @@ impl fmt::Display for ControlError {
                 write!(f, "密码不能和用户名一样")?;
                 tail(f)
             }
-            // ⚠️ 这一条**刻意不区分**「用户不存在」与「密码错」。
-            // 若分开提示，登录接口就成了用户枚举器。
+
             Self::CredentialsRejected => {
                 write!(f, "用户名或密码不正确")?;
                 tail(f)
@@ -411,13 +365,9 @@ impl fmt::Display for ControlError {
 impl std::error::Error for ControlError {}
 
 impl From<ControlError> for AdapterError {
-    /// 在契约层边界转换（`docs/PHASE2_CONTRACT.md` §三）。
-    ///
-    /// 映射口径：**按语义类别**分，不按变体一对一 ——
-    /// 因为契约层只有 7 个变体，而本层有 22 个。
+
     fn from(e: ControlError) -> Self {
-        // ⚠️ 只带 `code()` 过去，**不带中文文案**：
-        // 中文文案属于人看的层，塞进机器枚举的载荷里会让日志无法聚合。
+
         let code = e.code();
         match e {
             ControlError::CredentialsRejected
@@ -455,10 +405,6 @@ impl From<ControlError> for AdapterError {
 mod tests {
     use super::*;
 
-    /// 构造**每一个**变体的一个样本。
-    ///
-    /// 新增变体时忘记写中文文案 / 忘记写命令，本测试会立刻红 ——
-    /// 这就是它存在的意义。
     fn one_of_each() -> Vec<ControlError> {
         vec![
             ControlError::UsernameInvalid {
@@ -519,10 +465,7 @@ mod tests {
 
     #[test]
     fn every_error_carries_a_copyable_command() {
-        // 判据三条同时成立才算通过（AGENTS.md 铁律七）：
-        // ① 命令是**单行** —— 多行没法整行复制
-        // ② 命令以 `quill` 开头 —— 是本项目命令，不是危险外部命令
-        // ③ 命令含 `doctor` —— 诊断入口唯一
+
         let all = one_of_each();
         assert_eq!(all.len(), 26, "变体数变了，请同步本测试的样本清单");
         for e in &all {
@@ -548,8 +491,7 @@ mod tests {
 
     #[test]
     fn every_error_display_points_at_the_same_command() {
-        // 铁律七的「唯一命令」口径：文案里给出的命令必须与 fix_command() 一致，
-        // 否则用户照抄文案里的命令会与程序建议的不一致（两处真相源）。
+
         for e in one_of_each() {
             let msg = e.to_string();
             assert!(
@@ -557,7 +499,7 @@ mod tests {
                 "[{}] 文案没给出 fix_command() 的那条命令：\n{msg}",
                 e.code()
             );
-            // 不得把 errno 之类的东西抛给用户
+
             assert!(
                 !msg.contains("SQLITE_"),
                 "[{}] 文案漏出数据库错误码：{msg}",
@@ -568,7 +510,7 @@ mod tests {
 
     #[test]
     fn errors_never_echo_secrets() {
-        // 装置可信性：这里真的构造一个「含凭据」的输入，证明它**没有**出现在消息里。
+
         let secretish = "hunter2-correct-horse";
         let tokenish = "a".repeat(64);
         let cases = [
@@ -593,7 +535,7 @@ mod tests {
                 e.code()
             );
         }
-        // 反向断言：确实查了东西（否则上面两条是恒真）
+
         assert!(cases[0].to_string().contains("bad name"));
     }
 
@@ -615,13 +557,12 @@ mod tests {
 
     #[test]
     fn adapter_error_carries_code_not_prose() {
-        // 契约边界：机器枚举里只带 code，不带中文文案。
-        // 断言「不带文案」是本测试的价值 —— 带上文案日志就没法按 code 聚合。
+
         let a: AdapterError = ControlError::CredentialsRejected.into();
         match a {
             AdapterError::Unauthorized(payload) => {
                 assert_eq!(payload, "credentials_rejected");
-                // 载荷必须是纯 ASCII 的 code：出现任何非 ASCII 即说明混进了中文文案
+
                 assert!(
                     payload.is_ascii(),
                     "AdapterError 载荷混进了非 ASCII（疑似中文文案）：{payload}"

@@ -1,30 +1,11 @@
-//! `quill doctor` —— 一次说清哪里坏了、怎么修。
-//!
-//! # 存在的理由
-//!
-//! 铁律七：**「用户在出错时唯一需要执行的命令是 `quill doctor`」**。
-//! 在本命令存在之前，那条规则是空的 —— 它要求一个不存在的程序。
-//!
-//! # 三态，不是两态
-//!
-//! 每项检查输出 `✓` / `✗` / `▲`：
-//! · `✓` 查了，没问题
-//! · `✗` 查了，有问题
-//! · `▲` **查不出来**（环境缺、路径不存在、无法打开）
-//!
-//! `▲` 单独成档且**计入退出码 2**，因为「查不出来」比「查出问题」更危险：
-//! 问题至少有记录，查不出来则连记录都没有。
 
 use crate::{store, Opts, Outcome};
 use std::path::Path;
 
 pub async fn run(o: &Opts) -> Outcome {
     let mut lines: Vec<String> = Vec::new();
-    let mut worst: u8 = 0; // 0 好 / 1 有问题 / 2 查不出来
+    let mut worst: u8 = 0;
 
-    // 🔴 三态累计：`✓` **不改变**结论；`✗` 记 1；`▲` 记 2（更严重）。
-    //    我第一版写成「任何项都把 worst 抬到 1」，导致全 ✓ 也报「有问题」——
-    //    单测不会抓到这种"输出文案与自身状态矛盾"的错，只有真跑才会。
     let bad = |w: &mut u8, buf: &mut Vec<String>, title: &str, state: char, msg: &str| {
         buf.push(format!("{state} {title}\n      {msg}"));
         match state {
@@ -39,7 +20,6 @@ pub async fn run(o: &Opts) -> Outcome {
     lines.push(format!("  数据库    : {}", o.db));
     lines.push("".into());
 
-    // ── 1. 数据库目录与文件 ────────────────────────────────────────────
     let dbp = Path::new(&o.db);
     if let Some(parent) = dbp.parent() {
         if parent.as_os_str().is_empty() || parent.is_dir() {
@@ -65,7 +45,6 @@ pub async fn run(o: &Opts) -> Outcome {
         }
     }
 
-    // ── 2. 能否打开 + 迁移 ────────────────────────────────────────────
     match store::open_db(&o.db).await {
         Ok(pool) => {
             bad(
@@ -76,7 +55,6 @@ pub async fn run(o: &Opts) -> Outcome {
                 &format!("已打开并确认 schema（{}）", dbp.display()),
             );
 
-            // ── 3. 关键表是否齐 ────────────────────────────────────────
             let need = ["users", "experts", "task_dispatches", "wiki_index"];
             let mut missing = Vec::new();
             for t in need {
@@ -113,7 +91,6 @@ pub async fn run(o: &Opts) -> Outcome {
                 );
             }
 
-            // ── 4. 数据根目录 ──────────────────────────────────────────
             match store::data_root(&o.root) {
                 Ok(d) => {
                     let writable = {
@@ -151,7 +128,6 @@ pub async fn run(o: &Opts) -> Outcome {
                 Err(e) => bad(&mut worst, &mut lines, "数据根目录", '▲', &e.message),
             }
 
-            // ── 5. 库里的真实统计（不是占位，是查出来的）────────────────
             let users: i64 = sqlx::query_scalar("SELECT count(*) FROM users")
                 .fetch_one(&pool)
                 .await
@@ -183,7 +159,6 @@ pub async fn run(o: &Opts) -> Outcome {
         }
     }
 
-    // ── 6. 版本 / 契约 ────────────────────────────────────────────────
     bad(
         &mut worst,
         &mut lines,

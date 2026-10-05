@@ -1,13 +1,4 @@
-﻿//! `quill-cli` 的行为测试。
-//!
-//! # 测什么
-//!
-//! 只测**能判红**的东西。凡是"跑一下看起来对"的输出，本测试**不测**。
-//!
-//! 重点是三条**容易悄悄坏掉**的边界：
-//! 1. `--as <拼错的名字>` 读操作**不得**静默建号（否则用户以为是隔离坏了）
-//! 2. `rm` 不带 `--yes` **不得**真删
-//! 3. 退出码三态：0 / 1 / 2 各自可达且互不混淆
+﻿
 
 use quill_cli::{cmd_doctor, cmd_experts, Opts};
 use std::path::{Path, PathBuf};
@@ -60,7 +51,6 @@ fn 读一个不存在的用户必须报错_不得静默建号() {
             out.message
         );
 
-        // ★ 反向断言：这次读**不得**建出用户行
         let pool = quill_store::configure_pool(&base.join("quill.db").to_string_lossy(), 1)
             .await
             .expect("开库");
@@ -84,7 +74,6 @@ fn rm_不带_yes_不得真删() {
         let created = cmd_experts::run(&o_add).await;
         assert_eq!(created.code, 0, "建专家失败：{}", created.message);
 
-        // 不带 --yes
         let o_rm = opts(&base, "alice", vec!["rm", "zhangsan"]);
         let out = cmd_experts::run(&o_rm).await;
         assert_eq!(out.code, 0, "提示性输出不该是失败：{}", out.message);
@@ -94,7 +83,6 @@ fn rm_不带_yes_不得真删() {
             out.message
         );
 
-        // ★ 反向断言：专家还在
         o_add.rest = vec!["ls".into()];
         let ls = cmd_experts::run(&o_add).await;
         assert!(
@@ -178,7 +166,7 @@ fn doctor_全绿时必须退出_0() {
         let base = ws("doctor");
         let o = opts(&base, "alice", vec![]);
         let out = cmd_doctor::run(&o).await;
-        // 🔴 这条专治"输出全 ✓ 却报有问题"——第一版真出现过这个错
+
         assert_eq!(
             out.code, 0,
             "全新环境下 doctor 应全绿，实得 {}：\n{}",
@@ -190,9 +178,7 @@ fn doctor_全绿时必须退出_0() {
             "缺少全绿结论行：\n{}",
             out.message
         );
-        // ⚠️ 判据必须看**行首标记**，不能用子串：
-        //    报告末尾的图例里就写着「✗ 有问题 / ▲ 无法判定」，
-        //    `contains("有问题")` 会命中图例 —— 我第一版就是这么误判的。
+
         for line in out.message.lines() {
             let t = line.trim_start();
             assert!(
@@ -213,8 +199,7 @@ fn doctor_第二次跑_不能因迁移非幂等而失败() {
         let base = ws("doctor2");
         let o = opts(&base, "alice", vec![]);
         assert_eq!(cmd_doctor::run(&o).await.code, 0, "第一次跑挂了");
-        // ★ `run_migration` **不是幂等的**（第二次会撞 "table already exists"）。
-        //   这条钉住 CLI 的"先探测再迁移"逻辑。
+
         let second = cmd_doctor::run(&o).await;
         assert_eq!(
             second.code, 0,
@@ -235,7 +220,7 @@ fn 未知选项必须拒绝_不得默默用默认值() {
 
 #[test]
 fn 参数顺序不影响命令识别() {
-    // 🔴 第一版只认 args[0] 是命令，于是 `quill --root X doctor` 报「不认识的命令 --root」
+
     let cases: Vec<Vec<String>> = vec![
         vec!["experts".into(), "ls".into()],
         vec![

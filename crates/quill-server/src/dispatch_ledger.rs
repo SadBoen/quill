@@ -1,65 +1,3 @@
-//! `DispatchLedger` 的 sqlx 实现（表 `task_dispatches`）。
-//!
-//! # `begin` 必须靠 `ON CONFLICT DO NOTHING RETURNING` 判别
-//!
-//! [`BeginOutcome`] 要回答的是「**这一次**插入的是新行，还是键早就在」。
-//! 「先 SELECT 再 INSERT」回答不了：两次操作之间有竞态窗口，两个并发派工
-//! 都会查到「不存在」，然后都插入，其中一个拿到的是**别人**的记录，
-//! 却以为自己成功记账了。
-//!
-//! 因此本实现只用一次语句拿判别：
-//!
-//! ```sql
-//! INSERT … ON CONFLICT DO NOTHING RETURNING <列>
-//! ```
-//!
-//! - 拿到行 → [`BeginOutcome::Created`]；
-//! - 没拿到行 → **按幂等键的四元组**（`user_id, room_id, round, member_expert_id`）
-//!   再查一次 → [`BeginOutcome::Existed`]。
-//!
-//! ⚠️ 第二次查询**不是**「先查后插」：它发生在插入已被数据库判定为冲突之后，
-//! 不存在窗口；而且它查的是幂等索引的四元组，不是派生出来的行 id。
-//! 若这次查询也没查到（例如派生行 id 撞上了别的键），本实现**判红**
-//! （`AgentError::InvariantBroken`）而不是把别人的记录当自己的返回 ——
-//! 「静默错配」比「报错」危险得多。
-//!
-//! # 为什么需要 [`DispatchScope`]（冻结端口与表结构之间的缺口）
-//!
-//! `task_dispatches` 有三个 `NOT NULL` 外键列：
-//! `team_id`（→ `teams`）、`leader_session_id`（与 `user_id` 组成复合外键 → `sessions`）、
-//! `member_session_id`（→ `sessions`）。而**冻结的** [`DispatchKey`] 只有
-//! `(owner, room_id, round, member_expert)` 四项，**没有**这三样。
-//!
-//! `PRAGMA foreign_keys = ON` 是 `quill_store::configure_pool` 强制设的
-//! （漏设则所有复合外键形同虚设且不报错），所以**写不出这三列就一行都插不进去**。
-//! 两条路：
-//!
-//! | 路 | 结论 |
-//! |---|---|
-//! | 填全零 / 随便填 | 外键直接失败，或（若 FK 被关）写入跨用户错配的脏数据 |
-//! | **调用方提供** [`DispatchScope`] | ✅ 团队与成员会话是**调用方**掌握的事实，账本不该自己编 |
-//!
-//! 因此本实现把 scope 作为**构造参数**（不放在 `static`、不放在全局表里 ——
-//! 契约 §2.5 规则 7 面 B），每个请求用它组装一个账本实例。
-//! 缺某个成员的会话时**明确报错**并说明该补什么，不静默写零。
-//!
-//! # 领域投影没覆盖的列（逐条交代，避免第二份真相源）
-//!
-//! | 列 | 本实现 | 理由 |
-//! |---|---|---|
-//! | `task_digest` | JSON 信封 `{"member":"<MemberId>"}` | 🔴 表里**没有**成员名列，而 `DispatchRecord::member()` 是领域 API 的一部分。不存它，读回时只能凭空造一个成员名（那会让用户看到错误的成员）。信封里只有成员名 —— 任务正文按契约不入库（见 `Dispatcher::recover` 的注释） |
-//! | `result_digest` | 结算信封 `{"status","scope","output"}` / `{"retryable"}` | 同上：`MemberOutcome` 的正文在库里无处可放，丢了就读不回。schema 对该列**没有**长度 CHECK，将来若加上 `CHECK(length(result_digest)=32)`，本实现会**立刻写库失败**而不是静默丢数据 —— 这正是期望的失败方式 |
-//! | `result_bytes` | 信封字节数 | 便于对账「结算结果有多大」 |
-//! | `callback_at` / `deadline_at` | 恒为 NULL | 领域投影无这两个概念；由未来的回调/超时机制写入 |
-//! | `dispatched_at` | 首次写入时间（`put` 时不覆盖） | 对应 `ix_dispatch_inflight` |
-//! | `started_at` | 首次离开 `PENDING` 的时间（`COALESCE` 保留首次） | —— |
-//! | `settled_at` | 终态时写入 | 对应 `CHECK ((state IN ('DONE','FAILED','CANCELLED')) = (settled_at IS NOT NULL))` |
-//!
-//! # 跨用户隔离
-//!
-//! `begin` / `put` 的 `INSERT` 都写 `user_id = key.owner`；
-//! `get` / `list_round` / `inflight` 的 `WHERE` 都以 `user_id = ?` 打头。
-//! **没有一条语句可以不带 `user_id`** —— 这是本文件最硬的一条约束。
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -79,22 +17,18 @@ const OP_GET: &str = "读取派工记录";
 const OP_INFLIGHT: &str = "列出在途派工";
 const OP_ROUND: &str = "列出某轮派工";
 
-/// 一次派工所需的**表结构之外**的上下文（团队 + 会话）。
-///
-/// ⚠️ 它由调用方组装并**按值交给**账本，不存任何全局表：
-/// 「哪个成员会话对应哪个专家」是请求级事实，缓存它就等于缓存用户态。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DispatchScope {
-    /// 团队标识（`teams.id`，16 字节）。
+
     pub team_id: [u8; 16],
-    /// 主持人会话（`task_dispatches.leader_session_id`）。
+
     pub leader_session_id: SessionId,
-    /// 成员会话：专家标识 → 该成员的会话。
+
     pub member_sessions: BTreeMap<ExpertId, SessionId>,
 }
 
 impl DispatchScope {
-    /// 组装 scope。
+
     pub fn new(
         team_id: [u8; 16],
         leader_session_id: SessionId,
@@ -107,7 +41,6 @@ impl DispatchScope {
         }
     }
 
-    /// 取某专家的成员会话；缺则给出**可诊断**错误。
     fn member_session(&self, expert: &ExpertId, room_id: &str) -> Result<&SessionId, AgentError> {
         self.member_sessions
             .get(expert)
@@ -121,22 +54,12 @@ impl DispatchScope {
     }
 }
 
-/// 读列清单（`begin` 的 `RETURNING` 与各 `SELECT` 共用同一份）。
-///
-/// ⚠️ 投影需要的字段一个都不能少，而**表里没有**的字段（成员名、结果正文）
-/// 由 `task_digest` / `result_digest` 两个信封带回来。
 const COLUMNS: &str = "id, user_id, room_id, \"round\", member_expert_id, member_session_id, \
                        task_digest, state, ask_depth, result_digest, result_bytes, \
                        error_code, error_message";
 
-/// 派工键四元组 → 派生行 id 的标签。
 const ROW_ID_LABEL: &str = "task_dispatches.id";
 
-/// 插值：一次派工记账语句。
-///
-/// ⚠️ `ON CONFLICT DO NOTHING` **不带冲突目标**：本表有两处唯一约束
-/// （主键 `(user_id, id)` 与 `ux_dispatch_once`），任一命中都意味着「键已存在」。
-/// 带了目标反而会漏判另一种。
 fn begin_sql() -> String {
     format!(
         "INSERT INTO task_dispatches (\
@@ -149,11 +72,6 @@ fn begin_sql() -> String {
     )
 }
 
-/// 覆盖写入语句（状态机跃迁后调用）。
-///
-/// ⚠️ `COALESCE(task_dispatches.started_at, excluded.started_at)`：
-/// 只保留**首次**离开 `PENDING` 的时间。若每次 `put` 都覆盖它，
-/// 「这个成员跑了多久」会被最后一次写入时刻污染。
 pub(crate) const PUT_SQL: &str = "INSERT INTO task_dispatches (\
      user_id, id, room_id, team_id, \"round\", leader_session_id, member_session_id, \
      member_expert_id, task_digest, state, ask_depth, result_digest, result_bytes, \
@@ -172,7 +90,6 @@ pub(crate) const PUT_SQL: &str = "INSERT INTO task_dispatches (\
      settled_at = excluded.settled_at, \
      updated_at = excluded.updated_at";
 
-/// `DispatchLedger` 的真库实现。
 #[derive(Debug, Clone)]
 pub struct SqlxDispatchLedger {
     db: Arc<DbBridge>,
@@ -180,7 +97,7 @@ pub struct SqlxDispatchLedger {
 }
 
 impl SqlxDispatchLedger {
-    /// 组装账本。
+
     pub fn new(db: Arc<DbBridge>, scope: DispatchScope) -> Self {
         Self {
             db,
@@ -188,21 +105,16 @@ impl SqlxDispatchLedger {
         }
     }
 
-    /// 读回 scope（handler 组装响应时需要它说明记账上下文）。
     pub fn scope(&self) -> &DispatchScope {
         &self.scope
     }
 }
 
-// ─────────────────────────── 信封编解码 ───────────────────────────
-
-/// 任务信封：只装领域投影缺失的「成员名」。
 fn task_envelope(record: &DispatchRecord) -> Vec<u8> {
     let v = serde_json::json!({ "member": record.member().as_str() });
     v.to_string().into_bytes()
 }
 
-/// 从任务信封取回成员名。
 fn parse_member(raw: &[u8], key: &DispatchKey) -> Result<MemberId, AgentError> {
     let text = std::str::from_utf8(raw).map_err(|e| {
         crate::db::invariant_broken(format!("task_digest 不是 UTF-8（{e}）：数据已损坏"))
@@ -222,9 +134,6 @@ fn parse_member(raw: &[u8], key: &DispatchKey) -> Result<MemberId, AgentError> {
     })
 }
 
-/// 结算信封 → `(outcome, error)`。
-///
-/// 返回 `None` 表示「未结算」（非终态）。
 fn parse_result(
     raw: Option<Vec<u8>>,
     state: DispatchState,
@@ -310,8 +219,7 @@ fn parse_json(raw: &[u8], column: &str) -> Result<serde_json::Value, AgentError>
 
 fn kind_from_wire(code: &str) -> Option<quill_agent::MemberRejectKind> {
     use quill_agent::MemberRejectKind as K;
-    // ⚠️ 逐个列举而不是「拿 wire 串反查」：`MemberRejectKind` 没有公开的反查函数，
-    //    而 `code()` 是**派生**出来的（见 quill-agent 的错误码说明）。
+
     Some(match code {
         "member_rejected" => K::Rejected,
         "member_unauthorized" => K::Unauthorized,
@@ -321,7 +229,6 @@ fn kind_from_wire(code: &str) -> Option<quill_agent::MemberRejectKind> {
     })
 }
 
-/// 终态的结算信封 + 错误列。
 fn result_payload(
     record: &DispatchRecord,
 ) -> (Option<Vec<u8>>, i64, Option<String>, Option<String>) {
@@ -351,8 +258,6 @@ fn result_payload(
     }
 }
 
-// ─────────────────────────── 行 → 领域值 ───────────────────────────
-
 fn row_into_record(row: &SqliteRow) -> Result<DispatchRecord, AgentError> {
     let id_raw: Vec<u8> = col!(row, Vec<u8>, "id", OP_GET);
     let owner_raw: Vec<u8> = col!(row, Vec<u8>, "user_id", OP_GET);
@@ -378,8 +283,7 @@ fn row_into_record(row: &SqliteRow) -> Result<DispatchRecord, AgentError> {
     let state = DispatchState::from_wire(&state_raw).ok_or_else(|| {
         crate::db::invariant_broken(format!("task_dispatches.state = {state_raw:?} 不合法"))
     })?;
-    // ⚠️ 行 id 必须是键的**派生值**：不等就说明这行不是本键写的（或被篡改）。
-    //    把它当成错误而不是忽略，是为了让「错配」变成可见的失败。
+
     let expected_id = row_id_for(&owner, &room_id, round, &expert);
     if id_raw.as_slice() != expected_id.as_slice() {
         return Err(crate::db::invariant_broken(format!(
@@ -398,8 +302,7 @@ fn row_into_record(row: &SqliteRow) -> Result<DispatchRecord, AgentError> {
         Some(Ok(outcome)) => record.settle_done(outcome)?,
         Some(Err(err)) => record.settle_failed(err)?,
         None => match state {
-            // ⚠️ 顺序要紧：`mark_running` 只接受 `PENDING` 出发，
-            //    `mark_asking` 只接受在途状态。先 RUNNING 再 ASKING 才合法。
+
             DispatchState::Pending => {}
             DispatchState::Running => record.mark_running()?,
             DispatchState::Asking => {
@@ -424,7 +327,6 @@ fn row_into_record(row: &SqliteRow) -> Result<DispatchRecord, AgentError> {
     Ok(record)
 }
 
-/// 派工键 → 16 字节行 id（确定性派生，见 `crate::db::digest16` 的说明）。
 fn row_id_for(owner: &UserId, room_id: &str, round: i64, expert: &ExpertId) -> [u8; 16] {
     let round_bytes = round.to_be_bytes();
     digest16(
@@ -438,7 +340,6 @@ fn row_id_for(owner: &UserId, room_id: &str, round: i64, expert: &ExpertId) -> [
     )
 }
 
-/// 按幂等键四元组取一行。
 async fn select_by_key(
     pool: &sqlx::SqlitePool,
     owner: UserId,
@@ -459,8 +360,6 @@ async fn select_by_key(
         .await
         .map_err(|e| storage_error(OP_GET, e))
 }
-
-// ─────────────────────────── SQL ───────────────────────────
 
 async fn sql_begin(
     pool: &sqlx::SqlitePool,
@@ -506,7 +405,6 @@ async fn sql_begin(
         return Ok(BeginOutcome::Created(row_into_record(&row)?));
     }
 
-    // 冲突：按**幂等键**取既有记录（不是按派生 id）。
     match select_by_key(
         pool,
         owner,
@@ -641,8 +539,6 @@ async fn sql_list_round(
     Ok(out)
 }
 
-// ─────────────────────────── 端口实现 ───────────────────────────
-
 impl DispatchLedger for SqlxDispatchLedger {
     fn begin(&self, record: &DispatchRecord) -> Result<BeginOutcome, AgentError> {
         let scope = Arc::clone(&self.scope);
@@ -681,7 +577,6 @@ impl DispatchLedger for SqlxDispatchLedger {
 mod tests {
     use super::*;
 
-    /// 锁住两条关键形态：冲突目标「无」（两张唯一约束都算）与派生 id 的一致性。
     #[test]
     fn begin_statement_conflicts_on_any_unique_constraint() {
         let sql = begin_sql();
@@ -708,7 +603,6 @@ mod tests {
         assert_ne!(a, other_user, "🔴 跨用户：不同用户必须不同 id");
     }
 
-    /// 反向用例：不可重建的错误码必须判红，而不是被塞进别的变体。
     #[test]
     fn unknown_error_code_is_reported_not_guessed() {
         assert!(kind_from_wire("member_cancelled").is_some());

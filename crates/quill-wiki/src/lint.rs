@@ -1,38 +1,3 @@
-//! 体检规则引擎（规格 §三 3.3 Lint）。
-//!
-//! # v1 覆盖范围与**不覆盖**的范围
-//!
-//! 规格 §3.3 列了 6 项。逐项交代本版是否覆盖、以及为什么：
-//!
-//! | 规格项 | v1 | 载体 |
-//! |---|---|---|
-//! | 无入链的孤儿页面 | ✅ | [`Rule::OrphanPage`] |
-//! | 缺失的交叉引用 | ✅ | [`Rule::BrokenLink`] + [`Rule::MissingCrossReference`] |
-//! | 页面间矛盾 | ✅（可计算的部分） | [`Rule::Contradiction`] |
-//! | 被新来源取代的过时断言 | ✅（可计算的部分） | [`Rule::Contradiction`] 的 `updated` 方向 |
-//! | 被提及但缺页面的重要概念 | ✅ | [`Rule::BrokenLink`]（未解析链接 = 缺页面） |
-//! | 可通过搜索填补的数据空白 | ⚠️ 部分 | [`Rule::MissingSourceTrace`] |
-//!
-//! ## 「矛盾」为什么能算出来，而不用 LLM
-//!
-//! 语义矛盾（「A 页说 X 成立，B 页说 X 不成立」）需要推理，不是 grep。
-//! 但 v1 能算的是**结构矛盾**，它们同样是真问题且不需要模型：
-//!
-//! 1. **同一主体两处定义**（`Contradiction` / `DuplicateSubject`）——
-//!    两个页面的标题规范化（忽略大小写、空格、连字符）后相同。
-//!    这是矛盾的**根源**：读者/LLM 读到两份定义，无从判断哪个有效。
-//! 2. **同一断言键给出不同值**（`Contradiction` / `ConflictingAssertion`）——
-//!    两页正文里有 `键: 值` 形态的断言行，同键不同值。
-//! 3. **可溯源性被破坏**（`MissingSourceTrace`）——
-//!    规格 §6.4 约束 3「每个页面必须可溯源」。若 `source_count: 3`
-//!    却一条 `../raw/` 引用都没有，两种解释（引用被手工删了 / 计数写错了）
-//!    都会让读者拿不到原始文档。
-//!
-//! ⚠️ **明确不覆盖**：同一事实在两页里用**不同措辞**表达出的矛盾。
-//! 那需要 LLM 逐对比对，成本是 lint 的主要开销（规格 §九）。
-//! 本模块**不假装**能做这件事 —— 上表「可计算的部分」就是这个边界。
-//! 要扩展它，正确做法是调 [`quill_adapters::KnowledgeBackend::lint_semantics`]
-//! 让模型补一轮语义比对，而不是在规则里堆启发式。
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -41,38 +6,32 @@ use crate::graph::LinkGraph;
 use crate::index::WikiIndex;
 use crate::page::{Page, PageType};
 
-/// 触发「缺失交叉引用」的**最少**共同标签数。
-///
-/// 1 会把「都打了 rust 标签」的两页判成缺引用（噪声）；
-/// 3 在标签稀疏的 wiki 里几乎永不触发（漏报）。
-/// 2 是本 wiki 实际标签密度下的平衡点，**可被 [`LintConfig`] 覆盖**。
 pub const DEFAULT_MIN_SHARED_TAGS: usize = 2;
 
-/// 规则 ID（`src` 是产出它的解析告警，见 [`Rule::BadFrontmatter`]）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Rule {
-    /// 无入链的孤儿页面。
+
     OrphanPage,
-    /// 链接指向不存在的页面（= 被提及但缺页面）。
+
     BrokenLink,
-    /// 共享标签却互不链接的页面（= 缺失的交叉引用）。
+
     MissingCrossReference,
-    /// 页面间矛盾。
+
     Contradiction,
-    /// 声明了来源却无法溯源。
+
     MissingSourceTrace,
-    /// frontmatter 降级（解析告警）。
+
     BadFrontmatter,
-    /// 有页面没进 `index.md`。
+
     MissingIndexEntry,
-    /// 页面重名（`index.md` 会给读者两条同名条目）。
+
     DuplicateTitle,
-    /// 页面缺少 `type`（六种之一）。
+
     MissingPageType,
 }
 
 impl Rule {
-    /// 稳定 ID（用于报告与测试断言，**不得随文案改动**）。
+
     pub const fn id(self) -> &'static str {
         match self {
             Self::OrphanPage => "orphan-page",
@@ -87,7 +46,6 @@ impl Rule {
         }
     }
 
-    /// 全部规则（供 runner 遍历与覆盖率自检）。
     pub const ALL: [Rule; 9] = [
         Self::OrphanPage,
         Self::BrokenLink,
@@ -107,34 +65,32 @@ impl fmt::Display for Rule {
     }
 }
 
-/// 矛盾的具体种类。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Contradiction {
-    /// 同一主体两处定义（标题规范化后相同）。
+
     DuplicateSubject { first: String, second: String },
-    /// 同一断言键给出不同值。
+
     ConflictingAssertion {
         first_page: String,
         second_page: String,
         key: String,
         first_value: String,
         second_value: String,
-        /// 断言较旧的一侧 —— 即「被新来源取代的过时断言」。
+
         stale_page: String,
         fresh_page: String,
     },
 }
 
-/// 一条发现。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Finding {
-    /// 触发的规则。
+
     pub rule: Rule,
-    /// 相关页面路径。
+
     pub pages: Vec<String>,
-    /// 人类可读说明（中文，含**该做什么**，铁律七）。
+
     pub message: String,
-    /// 矛盾详情（非矛盾规则为 `None`）。
+
     pub contradiction: Option<Contradiction>,
 }
 
@@ -158,12 +114,11 @@ impl Finding {
     }
 }
 
-/// lint 配置。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LintConfig {
-    /// 触发「缺失交叉引用」的最少共同标签数。
+
     pub min_shared_tags: usize,
-    /// 是否把重名页面报为矛盾。
+
     pub detect_duplicate_subject: bool,
 }
 
@@ -176,51 +131,38 @@ impl Default for LintConfig {
     }
 }
 
-/// 覆盖统计。
-///
-/// ⚠️ **存在的唯一理由是铁律十六**：「已检查 0 条」与
-/// 「检查了 8 条、0 条有问题」在屏幕上必须能区分。
-/// 尤其 [`LintReport::assertions_checked`] —— 矛盾检测读的是
-/// `键: 值` 断言行；一个断言行都没有的 wiki 会得到 0 条矛盾，
-/// 而那**不是**「没有矛盾」，是「没东西可比」。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LintStats {
-    /// 参与体检的知识页面数（不含 `index.md` / `log.md`）。
+
     pub pages_checked: usize,
-    /// 检查过的链接数（出边 + 未解析）。
+
     pub links_checked: usize,
-    /// 检查过的 `键: 值` 断言行数。
+
     pub assertions_checked: usize,
-    /// 参与两两比对的页面对数。
+
     pub page_pairs_checked: usize,
-    /// 结构文件是否读到（`index.md`）。
+
     pub index_loaded: bool,
 }
 
-/// 体检报告。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LintReport {
-    /// 发现，按 (规则, 页面) 排序 —— 排序保证同一 wiki 的报告可比对。
+
     pub findings: Vec<Finding>,
-    /// 覆盖统计。
+
     pub stats: LintStats,
 }
 
 impl LintReport {
-    /// 某条规则的发现数。
+
     pub fn count(&self, rule: Rule) -> usize {
         self.findings.iter().filter(|f| f.rule == rule).count()
     }
 
-    /// 是否有「有问题」。
-    ///
-    /// ⚠️ **只回答「有没有问题」，不回答「检查充分吗」** ——
-    /// 后者看 [`LintReport::stats`]（铁律十六）。
     pub fn has_problems(&self) -> bool {
         !self.findings.is_empty()
     }
 
-    /// 一行摘要（可直接进 `log.md`）。
     pub fn summary(&self) -> String {
         format!(
             "已检查 {} 页 / {} 链接 / {} 断言行 / {} 页对（index.md {}），发现 {} 条",
@@ -237,7 +179,6 @@ impl LintReport {
         )
     }
 
-    /// 渲染成 `log.md` 正文。
     pub fn render(&self) -> String {
         let mut s = self.summary();
         for f in &self.findings {
@@ -252,13 +193,6 @@ impl LintReport {
     }
 }
 
-/// 对一批页面跑体检。
-///
-/// `index` 传 `None` 表示**没有** `index.md`（首次运行）。
-/// ⚠️ 传 `None` 不等于「索引里没有遗漏」—— 那时
-/// [`Rule::MissingIndexEntry`] 无法判定，报告里会体现为
-/// `index_loaded = false` 且不产生该规则发现。**这个区别必须显眼**
-/// （铁律十六），不能让人误以为索引是完整的。
 pub fn lint(pages: &[Page], index: Option<&WikiIndex>, cfg: &LintConfig) -> LintReport {
     let knowledge: Vec<&Page> = pages.iter().filter(|p| !is_structural(&p.path)).collect();
     let graph = LinkGraph::build(&knowledge.iter().map(|p| (*p).clone()).collect::<Vec<_>>());
@@ -270,7 +204,6 @@ pub fn lint(pages: &[Page], index: Option<&WikiIndex>, cfg: &LintConfig) -> Lint
         ..LintStats::default()
     };
 
-    // ── 1. 孤儿页面 ──
     for n in graph.orphans() {
         findings.push(Finding::new(
             Rule::OrphanPage,
@@ -282,7 +215,6 @@ pub fn lint(pages: &[Page], index: Option<&WikiIndex>, cfg: &LintConfig) -> Lint
         ));
     }
 
-    // ── 2. 断链（= 被提及但缺页面）──
     for u in graph.unresolved_links() {
         findings.push(Finding::new(
             Rule::BrokenLink,
@@ -294,7 +226,6 @@ pub fn lint(pages: &[Page], index: Option<&WikiIndex>, cfg: &LintConfig) -> Lint
         ));
     }
 
-    // ── 3. 缺失的交叉引用 ──
     let pairs = graph.unlinked_tag_pairs(cfg.min_shared_tags);
     stats.page_pairs_checked = knowledge
         .len()
@@ -311,14 +242,12 @@ pub fn lint(pages: &[Page], index: Option<&WikiIndex>, cfg: &LintConfig) -> Lint
         ));
     }
 
-    // ── 4. 页面间矛盾 ──
     stats.assertions_checked = 0;
     if cfg.detect_duplicate_subject {
         findings.extend(duplicate_subject_findings(&knowledge));
     }
     findings.extend(conflicting_assertion_findings(&knowledge, &mut stats));
 
-    // ── 5. 可溯源性 ──
     for p in &knowledge {
         if p.frontmatter.source_count.unwrap_or(0) > 0 && !has_raw_reference(&p.body) {
             findings.push(Finding::new(
@@ -333,7 +262,6 @@ pub fn lint(pages: &[Page], index: Option<&WikiIndex>, cfg: &LintConfig) -> Lint
         }
     }
 
-    // ── 6. 解析降级 ──
     for p in &knowledge {
         for w in &p.warnings {
             findings.push(Finding::new(
@@ -344,7 +272,6 @@ pub fn lint(pages: &[Page], index: Option<&WikiIndex>, cfg: &LintConfig) -> Lint
         }
     }
 
-    // ── 7. 缺页面类型 ──
     for p in &knowledge {
         if p.page_type().is_none() {
             findings.push(Finding::new(
@@ -363,7 +290,6 @@ pub fn lint(pages: &[Page], index: Option<&WikiIndex>, cfg: &LintConfig) -> Lint
         }
     }
 
-    // ── 8. 索引遗漏 + 重名 ──
     if let Some(idx) = index {
         let mut seen: BTreeSet<String> = BTreeSet::new();
         for p in &knowledge {
@@ -400,9 +326,6 @@ fn is_structural(path: &str) -> bool {
     crate::graph::STRUCTURAL_FILES.contains(&path)
 }
 
-/// 标题规范化：忽略大小写、空格、连字符、下划线。
-///
-/// 目的是让 `Rust 所有权` / `rust-所有权` / `RUST所有权` 被认作同一主体。
 fn normalize_subject(title: &str) -> String {
     title
         .chars()
@@ -438,14 +361,6 @@ fn duplicate_subject_findings(pages: &[&Page]) -> Vec<Finding> {
     out
 }
 
-/// 抽取 `键: 值` 形态的断言行。
-///
-/// 只认「以 `- ` 开头的列表项，且整行恰好一个 `:`」
-/// —— 全角冒号也算。这样约束了断言的书写形态，
-/// 是本 wiki 的**约定**（写在 schema 层，LLM 按它写）。
-///
-/// ⚠️ 因此断言数为 0 的 wiki **得不到**矛盾结论；
-/// 这一点由 [`LintStats::assertions_checked`] 显式暴露，不假装覆盖。
 fn extract_assertions(body: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for line in body.split('\n') {
@@ -454,7 +369,7 @@ fn extract_assertions(body: &str) -> Vec<(String, String)> {
             continue;
         };
         let item = item.trim();
-        // 恰好一个分隔符：`键: 值`
+
         let Some((k, v)) = item.split_once([':', '：']) else {
             continue;
         };
@@ -470,7 +385,6 @@ fn extract_assertions(body: &str) -> Vec<(String, String)> {
     out
 }
 
-/// 值归一化（比较用）：忽略大小写与首尾标点。
 fn normalize_value(v: &str) -> String {
     v.trim()
         .trim_end_matches(['。', '.', '，', ',', '；', ';'])
@@ -479,7 +393,7 @@ fn normalize_value(v: &str) -> String {
 }
 
 fn conflicting_assertion_findings(pages: &[&Page], stats: &mut LintStats) -> Vec<Finding> {
-    // 键 → (归一化值, 页面, 原值)
+
     let mut by_key: BTreeMap<String, Vec<(String, String, String)>> = BTreeMap::new();
     let mut updated_of: BTreeMap<String, String> = BTreeMap::new();
     for p in pages {
@@ -500,13 +414,13 @@ fn conflicting_assertion_findings(pages: &[&Page], stats: &mut LintStats) -> Vec
         if vals.len() < 2 {
             continue;
         }
-        // 同键下不同归一化值 → 矛盾。取第一对不同的即可，避免 O(k²) 噪声。
+
         let base = &vals[0];
         for other in &vals[1..] {
             if other.0 == base.0 {
                 continue;
             }
-            // 较旧的一侧 = 可能被新来源取代的过时断言
+
             let (stale, fresh) = match (
                 updated_of.get(&base.1).map(|s| s.as_str()),
                 updated_of.get(&other.1).map(|s| s.as_str()),
@@ -559,7 +473,7 @@ mod tests {
     }
 
     fn clean_pages() -> Vec<Page> {
-        // 一份「无任何问题」的 wiki：必须零发现（不误报是硬要求）
+
         vec![
             concept(
                 "a.md",
@@ -600,12 +514,12 @@ mod tests {
         let pages = clean_pages();
         let idx = index_of(&pages);
         let r = lint(&pages, Some(&idx), &LintConfig::default());
-        // 铁律十六：必须能区分「检查了 N 条，0 条有问题」与「没检查」
+
         assert_eq!(r.stats.pages_checked, 2);
         assert_eq!(r.stats.links_checked, 2);
         assert!(r.stats.index_loaded);
         assert!(r.summary().contains("已检查 2 页"));
-        // 断言行数必须被显式报出
+
         assert!(
             r.summary().contains("断言行"),
             "摘要须显式含断言行数：{}",
@@ -633,7 +547,7 @@ mod tests {
 
     #[test]
     fn index_md_page_is_never_an_orphan() {
-        // index.md 自身没入链；若被当孤儿，lint 每次都会报一条假问题
+
         let mut pages = clean_pages();
         pages.push(p("index.md", "---\ntitle: 索引\n---\n\n- [[A]]\n- [[B]]\n"));
         let r = lint(&pages, None, &LintConfig::default());
@@ -667,7 +581,7 @@ mod tests {
             "共享两个标签却互不链接应报一次：{:#?}",
             r.findings
         );
-        // 只共享一个标签 → 不报（不误报）
+
         let one_tag = vec![
             concept("c.md", "C", "正文", "内存"),
             concept("d.md", "D", "正文", "安全"),
@@ -738,8 +652,7 @@ mod tests {
 
     #[test]
     fn same_assertion_value_is_not_a_contradiction() {
-        // 归一化后相同（尾部句号不算差异）→ 不是矛盾。
-        // 反例见 conflicting_assertion_and_names_the_stale_page。
+
         let pages = vec![
             p(
                 "a.md",
@@ -757,7 +670,7 @@ mod tests {
 
     #[test]
     fn zero_assertions_is_visible_not_silently_clean() {
-        // 没有断言行的 wiki：矛盾数为 0，但检查数也必须是 0（不是「查过没问题」）
+
         let pages = vec![
             concept("a.md", "A", "没有断言行", "x"),
             concept("b.md", "B", "见 [[A]]", "y"),
@@ -800,7 +713,6 @@ mod tests {
         assert_eq!(r.count(Rule::MissingIndexEntry), 1);
         assert!(r.stats.index_loaded);
 
-        // ⚠️ index.md 不存在时：不产生该规则发现，但 index_loaded=false 必须显眼
         let none = lint(&pages, None, &LintConfig::default());
         assert_eq!(none.count(Rule::MissingIndexEntry), 0);
         assert!(!none.stats.index_loaded);
@@ -833,7 +745,7 @@ mod tests {
             assert!(!r.id().is_empty());
             assert_eq!(r.to_string(), r.id());
         }
-        // ID 不得重复（否则报告里两类问题无法区分）
+
         let mut ids: Vec<&str> = Rule::ALL.iter().map(|r| r.id()).collect();
         ids.sort();
         let n = ids.len();

@@ -1,31 +1,3 @@
-//! ingest / query / lint 三流程的端到端测试。
-//!
-//! ## 关键点：这里有一个**假 LLM**
-//!
-//! 用真实 provider 跑测试既慢又不确定（约束 4：本地模型在本机很慢，
-//! CI 必须跑得动）。因此本文件用 [`FakeBackend`] —— 它实现
-//! [`KnowledgeBackend`] 并按固定脚本走一遍「产出内容 → 经工具调用写盘 → 收回执」。
-//!
-//! ⚠️ **假 LLM 不是「不测」**：它验证的是**编排层的正确性**
-//! （读什么、递什么材料、回执怎么核对、索引/日志怎么更新、
-//! 越权路径会不会被挡住、谎报的回执会不会被抓住），
-//! 这些都不依赖模型质量。而「模型产出的内容对不对」属于 provider 侧，
-//! 不在本 crate 的可判定范围内 —— 假装能测它就是自欺。
-//!
-//! ## 必测的反例（AGENTS.md 铁律十二：禁令必须配合法反例）
-//!
-//! - LLM 返回**越权路径**（`../其他用户/...`）→ 必须被拒且**不落盘**；
-//! - LLM 返回**合法路径** → 必须落盘（证明拒绝逻辑不是「一律拒绝」）；
-//! - 同一来源重复 ingest → 索引不出现重复条目（幂等）；
-//! - LLM **谎报回执**（声称写了却没写）→ 必须判红（回执核对闸门的违规侧）。
-//!
-//! ## 为什么假 LLM 在自己写盘（2026-10-05 trait 迁移）
-//!
-//! 契约层 `KnowledgeBackend::plan_ingest` 返回 [`IndexReceipt`]，
-//! 只有 `touched: Vec<String>` 与 `summary` —— **不携带页面内容**。
-//! 编排层因此无法代劳写盘，写入发生在 backend 实现侧（经 [`WikiStore::write_page`]，
-//! 路径校验与用户隔离一道不少）。这正是 [`FakeBackend`] 做的事，
-//! 也正是真实 provider 实现该做的事。
 
 use std::path::{Path, PathBuf};
 
@@ -39,29 +11,24 @@ use quill_wiki::log::parse_log;
 use quill_wiki::store::WikiStore;
 use quill_wiki::{run_lint, Date, LintConfig, UserId};
 
-/// 回执里带的摘要（断言日志时用）。
 const SUMMARY: &str = "测试摄入";
 
-/// 假 LLM：按预设脚本走一遍「写盘 → 收回执」，并**记录**它收到了什么。
 struct FakeBackend {
-    /// 写盘落点（backend 侧自己持有 store，而不是由编排层代劳）。
+
     base: PathBuf,
     user: UserId,
-    /// 本次要产出的页面（契约层低分辨率载荷）。
+
     writes: Vec<KnowledgePage>,
-    /// 查询答案。
+
     answer: QueryAnswer,
-    /// 🔴 回执谎报：声称写入这些路径，但**一个字节都不写**。
-    ///
-    /// 只为验证编排层的「回执核对」闸门真的会红（铁律十二的违规侧）。
-    /// `None` = 老老实实写。
+
     lie_about: Option<Vec<String>>,
     seen_questions: std::sync::Mutex<Vec<String>>,
-    /// 收到的来源相对路径。
+
     seen_sources: std::sync::Mutex<Vec<String>>,
-    /// 收到的来源正文。
+
     seen_source_text: std::sync::Mutex<Vec<String>>,
-    /// 收到的体检报告**文本**。
+
     seen_lint_reports: std::sync::Mutex<Vec<String>>,
 }
 
@@ -80,18 +47,12 @@ impl FakeBackend {
         }
     }
 
-    /// 一个只会**谎报**回执的 backend：声称写了 2 页，实际 0 页。
     fn liar(base: &Path, user: UserId, claimed: &[&str]) -> Self {
         let mut b = Self::new(base, user, Vec::new());
         b.lie_about = Some(claimed.iter().map(|s| (*s).to_string()).collect());
         b
     }
 
-    /// 真正干活的实现：产出内容 → 校验 → 经唯一写入口落盘 → 收回执。
-    ///
-    /// 写成**同步函数**再包进 [`std::future::ready`]：
-    /// trait 声明的是 `-> impl Future + Send`，
-    /// 而 impl 里写 `async fn` 不是同一个签名（`async fn` 不隐含 `Send`）。
     fn do_plan_ingest(&self, ctx: IngestContext) -> Result<IndexReceipt, AdapterError> {
         self.seen_sources
             .lock()
@@ -103,7 +64,7 @@ impl FakeBackend {
             .push(ctx.source.text);
 
         if let Some(claimed) = &self.lie_about {
-            // 🔴 只报成功、**什么都不写** —— 编排层必须抓住它。
+
             return Ok(IndexReceipt {
                 touched: claimed.clone(),
                 summary: "谎报回执".to_string(),
@@ -113,8 +74,7 @@ impl FakeBackend {
         let store = WikiStore::new(&self.base, self.user);
         let mut touched = Vec::new();
         for w in &self.writes {
-            // 内容先过合法性校验（解析失败必须 Err，不兜底成空页面），
-            // 再经 WikiStore 落盘 —— 路径校验与用户隔离都在 resolve 里。
+
             let page = page_from_wire(w)?;
             store.write_page(&page.path, &w.content)?;
             touched.push(page.path);
@@ -157,26 +117,16 @@ impl KnowledgeBackend for FakeBackend {
     }
 }
 
-/// 最小的单线程执行器：`#[tokio::test]` 需要 tokio 依赖，
-/// 而本 crate **不新增外部 crate**
-/// （tokio 虽已在 lock 里，但把它写进 `[dev-dependencies]`
-/// 就是新增一条依赖声明，按本项目惯例须主理人裁决）。
-///
-/// 这里只需要「把一个立刻就绪的 future 跑完」——
-/// 假 LLM 的 future 全是 `std::future::ready(..)`，永不 Pending，
-/// 所以自旋 poll 循环就足够且不会挂死。
 fn block_on<F: std::future::Future>(fut: F) -> F::Output {
     use std::task::Poll;
 
-    // `Waker::noop()`：不唤醒的 waker。手写 `impl Wake` 会被 clippy 判红
-    // （`manual_async_fn` 家族的红灯之一），且 std 已经给了。
     let waker = std::task::Waker::noop();
     let mut cx = std::task::Context::from_waker(waker);
     let mut fut = std::pin::pin!(fut);
     loop {
         match fut.as_mut().poll(&mut cx) {
             Poll::Ready(v) => return v,
-            // 假 LLM 永不 Pending；真 Pending 时自旋（等价于「本执行器不调度」）。
+
             Poll::Pending => std::hint::spin_loop(),
         }
     }
@@ -203,7 +153,6 @@ fn day() -> Date {
     Date::parse("2026-10-04").expect("测试日期")
 }
 
-/// 造一批**合法**的页面载荷（frontmatter 齐全，能过 `page_from_wire`）。
 fn pages_with(paths: &[&str]) -> Vec<KnowledgePage> {
     paths
         .iter()
@@ -240,17 +189,14 @@ fn ingest_writes_pages_index_and_log() {
     let out =
         block_on(quill_wiki::ingest::ingest(&store, &backend, user(1), &req)).expect("摄入成功");
 
-    // 1. 页面真的落盘，且能读回
     assert_eq!(out.written.len(), 2);
     let p0 = store.read_page("concepts/页0.md").expect("读回页0");
     assert_eq!(p0.frontmatter.title.as_deref(), Some("页0"));
 
-    // 2. index.md 重建了，且能被反解析
     let idx_text = store.read_index().expect("读索引").expect("索引存在");
     let idx = WikiIndex::parse(&idx_text).expect("索引可解析");
     assert_eq!(idx.len(), 2, "索引应有两条：\n{idx_text}");
 
-    // 3. log.md 追加了，格式可被 grep '^## \[' 解析
     let log_text = store.read_log().expect("读日志").expect("日志存在");
     assert_eq!(
         log_text.lines().filter(|l| l.starts_with("## [")).count(),
@@ -261,14 +207,12 @@ fn ingest_writes_pages_index_and_log() {
     assert_eq!(parsed.skipped_headings, 0);
     assert_eq!(parsed.entries[0].op, quill_wiki::LogOp::Ingest);
     assert!(parsed.entries[0].title.contains("a.pdf.txt"));
-    // 回执摘要进了日志
+
     assert!(
         parsed.entries[0].body.contains(SUMMARY),
         "摘要未落进日志：\n{log_text}"
     );
 
-    // 4. LLM 确实拿到了来源（证明编排层把材料递对了）——
-    //    且拿到的是**内容**不是路径句柄（规格 §6.4 约束 1）
     assert_eq!(
         backend.seen_sources.lock().expect("锁").as_slice(),
         &["papers/a.pdf.txt".to_string()]
@@ -300,13 +244,12 @@ fn ingest_is_idempotent_on_repeat() {
     assert_eq!(out2.index_entries, 1, "重复摄入不该让索引膨胀");
     let idx = WikiIndex::parse(&store.read_index().expect("读").expect("有")).expect("解析");
     assert_eq!(idx.len(), 1);
-    // 日志是**追加**的：两次 = 两条
+
     let log = store.read_log().expect("读").expect("有");
     assert_eq!(log.lines().filter(|l| l.starts_with("## [")).count(), 2);
     let _ = std::fs::remove_dir_all(&base);
 }
 
-/// 🔴 铁律十二的「违规 fixture」：LLM 返回越权路径必须被拒。
 #[test]
 fn ingest_rejects_escape_paths_from_the_llm_and_writes_nothing() {
     let base = tmp_root("ingest-escape");
@@ -314,7 +257,6 @@ fn ingest_rejects_escape_paths_from_the_llm_and_writes_nothing() {
     store.ensure_layout().expect("建三层");
     store.write_raw("a.txt", "来源").expect("写来源");
 
-    // 第一条合法、第二条越权 → 必须整体失败，且越权那条**不能落盘**
     let mut pages = pages_with(&["concepts/good.md"]);
     pages.push(KnowledgePage {
         rel_path: format!("../{}/wiki/stolen.md", user(2).to_compact_hex()),
@@ -329,7 +271,7 @@ fn ingest_rejects_escape_paths_from_the_llm_and_writes_nothing() {
 
     let r = block_on(quill_wiki::ingest::ingest(&store, &backend, user(1), &req));
     assert!(r.is_err(), "越权路径竟被接受了：{:?}", r.map(|o| o.written));
-    // 越权目标在 B 的根下也不该存在
+
     let victim = WikiStore::new(&base, user(2))
         .root()
         .join("wiki")
@@ -338,7 +280,6 @@ fn ingest_rejects_escape_paths_from_the_llm_and_writes_nothing() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
-/// 铁律十二的「合法 fixture」：证明上一条不是「一律拒绝」。
 #[test]
 fn ingest_accepts_ordinary_relative_paths() {
     let base = tmp_root("ingest-legal");
@@ -364,13 +305,6 @@ fn ingest_accepts_ordinary_relative_paths() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
-/// 🔴 回执核对闸门的**违规侧**：backend 声称写了却没写，必须判红。
-///
-/// 判据有三条，缺一条这条测试就只是在测「我自己的实现」：
-/// 1. `ingest` 返回 `Err`（不是 `Ok` + 空结果）；
-/// 2. 声称的页面**确实不存在**（证明它真的没写）；
-/// 3. `log.md` 里**没有** ingest 条目 —— 静默失败最阴的地方就是
-///    日志显示一切正常。
 #[test]
 fn ingest_rejects_a_lying_receipt_and_writes_no_log_entry() {
     let base = tmp_root("ingest-liar");
@@ -391,23 +325,20 @@ fn ingest_rejects_a_lying_receipt_and_writes_no_log_entry() {
 
     let r = block_on(quill_wiki::ingest::ingest(&store, &backend, user(1), &req));
     assert!(r.is_err(), "谎报回执竟被采信了：{:?}", r.map(|o| o.written));
-    // 报错文案必须说清「已完成到哪」（铁律七）
+
     let msg = r.expect_err("应报错").to_string();
     assert!(
         msg.contains("没写") || msg.contains("读不回来"),
         "错误文案没说明回执与磁盘不一致：{msg}"
     );
-    // 声称写了却没写
+
     for rel in ["concepts/根本没写.md", "concepts/也没有.md"] {
         assert!(
             store.read_page(rel).is_err(),
             "{rel} 不该存在（backend 根本没写）"
         );
     }
-    // 🔴 静默失败的判据：不得留下「一切正常」的日志。
-    //    注意 `log.md` **可能压根不存在** —— 那比「有条目」更干净，
-    //    所以「不存在」与「存在但没有 ingest 条目」都算通过；
-    //    判红的是「存在一条声称写入 2 页的 ingest 条目」。
+
     match store.read_log().expect("读日志") {
         None => {}
         Some(log) => {
@@ -421,7 +352,7 @@ fn ingest_rejects_a_lying_receipt_and_writes_no_log_entry() {
             );
         }
     }
-    // 同理，index.md 不得被这次失败的摄入重建出条目
+
     match store.read_index().expect("读索引") {
         None => {}
         Some(text) => {
@@ -439,7 +370,6 @@ fn query_reads_index_then_answers_and_logs() {
     store.ensure_layout().expect("建三层");
     store.write_raw("a.txt", "来源").expect("写来源");
 
-    // 先摄入建出索引
     let backend = FakeBackend::new(&base, user(1), pages_with(&["concepts/页0.md"]));
     let req = quill_wiki::IngestRequest {
         source_rel: "a.txt".to_string(),
@@ -448,7 +378,6 @@ fn query_reads_index_then_answers_and_logs() {
     };
     block_on(quill_wiki::ingest::ingest(&store, &backend, user(1), &req)).expect("摄入");
 
-    // 换一个有答案的 backend 做查询
     let mut qb = FakeBackend::new(&base, user(1), Vec::new());
     qb.answer = QueryAnswer {
         answer: "答案正文".to_string(),
@@ -469,7 +398,6 @@ fn query_reads_index_then_answers_and_logs() {
     assert!(!out.used_pages.is_empty(), "查询应至少用到一页：{out:?}");
     assert!(out.archival_candidate.is_some(), "归档建议应被带回");
 
-    // log.md 现在有 ingest + query 两条
     let log = store.read_log().expect("读").expect("有");
     let parsed = parse_log(&log);
     assert_eq!(parsed.skipped_headings, 0);
@@ -477,13 +405,11 @@ fn query_reads_index_then_answers_and_logs() {
     assert!(ops.contains(&quill_wiki::LogOp::Ingest));
     assert!(ops.contains(&quill_wiki::LogOp::Query));
 
-    // ★ 归档只建议不自动写：此时新页**还不存在**
     assert!(
         store.read_page("synthesis/新页.md").is_err(),
         "归档不该自动落盘（必须由人/策略确认）"
     );
 
-    // 确认后走同一条受控写入路径
     let arc = quill_wiki::query::archive_answer(
         &store,
         out.archival_candidate.as_ref().expect("归档建议"),
@@ -492,7 +418,7 @@ fn query_reads_index_then_answers_and_logs() {
     .expect("归档成功");
     assert_eq!(arc.path, "synthesis/新页.md");
     assert!(store.read_page("synthesis/新页.md").is_ok());
-    // 归档后索引应包含新页
+
     let idx = WikiIndex::parse(&store.read_index().expect("读").expect("有")).expect("解析");
     assert!(
         idx.contains("新页"),
@@ -502,7 +428,6 @@ fn query_reads_index_then_answers_and_logs() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
-/// 🔴 归档建议若不是合法页面，**必须**在写盘前被拒（不许兜底成空页面）。
 #[test]
 fn archive_answer_rejects_an_unparsable_candidate() {
     let base = tmp_root("archive-bad");
@@ -511,7 +436,7 @@ fn archive_answer_rejects_an_unparsable_candidate() {
 
     let bad = KnowledgePage {
         rel_path: "synthesis/坏页.md".to_string(),
-        // 完全没有 frontmatter → 不是合法页面
+
         content: "# 只有标题没有 frontmatter\n".to_string(),
     };
     let r = quill_wiki::query::archive_answer(&store, &bad, day());
@@ -523,7 +448,6 @@ fn archive_answer_rejects_an_unparsable_candidate() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
-/// 体检报告**渲染成文本**后才跨界 —— 契约层不认识 `LintReport`。
 #[test]
 fn lint_report_crosses_the_boundary_as_text() {
     let base = tmp_root("lint-wire");
@@ -541,7 +465,7 @@ fn lint_report_crosses_the_boundary_as_text() {
 
     let backend = FakeBackend::new(&base, user(1), Vec::new());
     let ctx = lint_context(report.render(), &pages);
-    // 页面正文也一并过去，且只有字符串（无路径句柄）
+
     assert!(
         ctx.pages
             .iter()
@@ -554,7 +478,7 @@ fn lint_report_crosses_the_boundary_as_text() {
 
     let seen = backend.seen_lint_reports.lock().expect("锁").clone();
     assert_eq!(seen.len(), 1);
-    // 结构发现确实以**文本**形式过去了（含覆盖统计 + 规则 ID）
+
     assert!(
         seen[0].contains("已检查"),
         "报告文本缺覆盖统计：{}",
@@ -573,7 +497,7 @@ fn lint_run_reports_and_logs() {
     let base = tmp_root("lint");
     let store = WikiStore::new(&base, user(1));
     store.ensure_layout().expect("建三层");
-    // 一个孤儿页 + 一条断链
+
     store
         .write_page("lonely.md", "---\ntitle: 孤儿\ntype: concept\ncreated: 2026-10-04\nupdated: 2026-10-04\n---\n\n见 [[不存在的页]]\n")
         .expect("写页");
@@ -584,7 +508,6 @@ fn lint_run_reports_and_logs() {
     assert_eq!(report.count(quill_wiki::Rule::BrokenLink), 1);
     assert_eq!(report.stats.pages_checked, 1);
 
-    // lint 结果进了 log.md
     let log = store.read_log().expect("读").expect("有");
     let parsed = parse_log(&log);
     assert_eq!(parsed.entries.len(), 1);
@@ -595,8 +518,7 @@ fn lint_run_reports_and_logs() {
 
 #[test]
 fn lint_does_not_run_on_every_ingest() {
-    // 规格 §6.4 约束 4：lint 是周期性的，不是每次写入都做。
-    // 判据：ingest 之后 log.md 里**不能**出现 lint 条目。
+
     let base = tmp_root("no-auto-lint");
     let store = WikiStore::new(&base, user(1));
     store.ensure_layout().expect("建三层");
