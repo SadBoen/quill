@@ -1318,7 +1318,12 @@ async fn setting_a_new_default_is_reflected_by_the_legacy_admin_config() {
     assert_eq!(after["protocol"], "openai");
 }
 
-/// 6) 真实探测：display_name / context_window(n_ctx_train) / modality / owned_by。
+/// 6) 真实探测：display_name / context_window(n_ctx) / modality / owned_by。
+///
+/// 注意 `context_window` 取的是 **`n_ctx`（实例窗口）而不是 `n_ctx_train`
+/// （训练窗口）**。这个夹具照抄真机 llama.cpp 响应，两者同时存在：
+/// `n_ctx = 8192`、`n_ctx_train = 262144`。报后者会把「上下文上限」说大 32 倍，
+/// 而用户正是照着这个数去填 `max_context_tokens`。见 ISSUE-022。
 #[tokio::test]
 async fn model_probe_derives_name_context_and_modality_from_the_upstream() {
     let base_url = spawn_fake_upstream(FAKE_LLAMA_MODELS).await;
@@ -1338,7 +1343,7 @@ async fn model_probe_derives_name_context_and_modality_from_the_upstream() {
     let m = &models[0];
     assert_eq!(m["id"], FAKE_MODEL_ID, "id 必须原样透传");
     assert_eq!(m["display_name"], "Qwen3.5-4B-Q4_K_M");
-    assert_eq!(m["context_window"], 262144, "训练上下文优先于实例 n_ctx");
+    assert_eq!(m["context_window"], 8192, "必须是实例窗口 n_ctx，不是训练窗口 n_ctx_train");
     assert_eq!(m["modality"], "text", "capabilities=[completion] 是文本证据");
     assert_eq!(m["owned_by"], "llamacpp");
 
@@ -1353,7 +1358,7 @@ async fn model_probe_derives_name_context_and_modality_from_the_upstream() {
     assert_eq!(entries[0]["provider_id"].as_str(), Some(id.as_str()));
     assert_eq!(entries[0]["provider_name"], "假上游");
     assert_eq!(entries[0]["starred"], true, "等于 provider.model 的模型必须打星");
-    assert_eq!(entries[0]["model"]["context_window"], 262144);
+    assert_eq!(entries[0]["model"]["context_window"], 8192, "模型池里同样是实例窗口");
     assert_eq!(entries[0]["model"]["display_name"], "Qwen3.5-4B-Q4_K_M");
 
     // ☆ 点一下只发 model：不能把别的字段清空。

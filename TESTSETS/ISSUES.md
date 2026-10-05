@@ -800,10 +800,78 @@
     上面四条是产物层与静态检查的证据，**不是**「界面已肉眼验过」。
 - **未修（别当成已修）**：quill **仍然不知道**模型的真实窗口。要真知道，
   得在 `provider.models()` 之后另找一条能报窗口的途径，或让用户在模型服务侧确认。
+  → 这条已被 ISSUE-022 部分推翻，见那里。
 - **这条把 ISSUE-019 的修复方向改掉了**：原方向是「发请求前拿
   `max_context_tokens` 做 token 预检」。按本条实测，**那条路在当前部署里
   根本不会触发** —— 估出 8525 < 32768，预检放行，上游照样拒。
   所以 ISSUE-019 的预检**不能**被说成修好了它；要修得先解决「窗口从哪来」。
+
+---
+
+## ISSUE-022 · 探测到的「上下文窗口」取的是**训练窗口**，比真实窗口大 32 倍
+
+**状态**：已修（2026-10-06）
+
+- **严重度**：高。这是本项目到目前为止**最接近红线**的一条 ——
+  它不是编造数字，而是把一个**真实上报的数**放进了**错误的字段**，
+  然后界面照着它显示、`validate()` 照着它指导用户填配置。
+- **现象**（真机探测原文，2026-10-06，llama-b10068 + Qwen3.5-4B）：
+  ```
+  GET /v1/models → 200
+  "meta":{ … ,"n_ctx":8192,"n_ctx_train":262144, … }
+            ^^^^^ 服务窗口     ^^^^^^^^^^^^ 训练窗口
+  ```
+  llama.cpp 用 `-c 8192` 起的服务器，**同时**报这两个数。
+  旧代码 `CONTEXT_KEYS = ["n_ctx_train", "context_length", "max_model_len"]`
+  把 `n_ctx_train` 排在**第一位**，`first_positive_u32` 取第一个命中，
+  于是探测报出 **262144** —— 比真实窗口**大 32 倍**。
+- **为什么会流到用户眼前**（两条路，都是真的）：
+  1. `GET /api/admin/providers/{id}/models` 的 `ModelCard.context_window`
+     → 模型页照着显示。
+  2. `llm_providers.rs:132` 的校验文案：
+     「`max_context_tokens` 必须 > 0。下一步：填模型真实的上下文窗口
+     （可先用 GET /api/admin/providers/{id}/models 看探测到的 context_window）」
+     —— 界面在**教用户照一个偏大 32 倍的数**填配置。
+- **这不是手滑，是一个被明确写下来的错误决定**（所以更值得记）：
+  旧测试叫 `context_window_prefers_the_trained_length_and_never_invents_one`，
+  断言写着「训练上下文优先于实例上下文」和「n_ctx 不是训练上下文，不许拿它顶包」。
+  当时的理由是「训练上下文才是模型真正的能力上限，实例开小是部署的事」。
+  **那个理由在「模型能力」问题上成立，在「这条请求最多能带多少 token」问题上
+  完全不成立** —— 而这个字段正是后一个问题。这是一条被测试**保护**着的错误，
+  所以光靠跑测试发现不了；它是真机跑任务、看到 8192 vs 32768 才顺藤摸出来的。
+- **已修**：
+  - `CONTEXT_KEYS` 改为 `["n_ctx", "context_length", "max_model_len"]`，
+    **删掉 `n_ctx_train`**，并把「为什么顺序本身就是判断」「为什么排除它」
+    写在常量旁边的注释里。
+  - 只报 `n_ctx_train` 的端点现在得到 `None`（**不知道**）而不是那个偏大的数。
+    这是刻意的：`None` 让界面说「上游没报这个信息」，而报一个错的数会让用户
+    照着把配置改坏 —— 后者远比前者麻烦。
+- **回归**：
+  - `llm_providers::tests::context_window_is_the_serving_window_never_the_trained_one`
+    （由旧的 `context_window_prefers_the_trained_length_and_never_invents_one`
+    改名并**翻转断言**）。用真机抓到的原文做夹具，四个条目分别断言：
+    `n_ctx + n_ctx_train` 并存 → 取 **8192**；只有 `n_ctx` → 取 8192；
+    `max_model_len` → 取 131072；**只有 `n_ctx_train` → `None`**。
+    另有一条 `assert_ne!(…, Some(262144))` 单独钉住「不许报 32 倍」。
+    测试名与注释都留了「这条断言被推翻过一次」的痕迹。
+  - `http_contract::model_probe_derives_name_context_and_modality_from_the_upstream`
+    —— HTTP 契约层**同一处错误断言有两处**（探测接口 + 模型池），
+    两处都得改，只改一处会让 `cargo_rc=101` 卡住。夹具 `FAKE_LLAMA_MODELS`
+    照抄真机原文（`n_ctx: 8192, n_ctx_train: 262144`），所以这条契约测试
+    就是把真机行为钉在 HTTP 层。
+- **真机验过**（重新 `cargo build` → 重启 quill-server → 打真接口）：
+  ```
+  GET /api/admin/models   →  ctx_win : 8192      ← 修前这里是 262144
+  GET /api/admin/config   →  max_context_tokens = 32768   （对照组：用户填的值，没动）
+  ```
+  两个数并排看最清楚：**探测到的真实窗口 8192**，**配置里写的 32768**。
+- 全量 `.wsl-verify-persona.sh`：**963 passed / 0 failed**。
+- **未做**：没有改 `validate()` 里那句「可先用 …/models 看探测到的
+  context_window」—— 现在它指的是**正确的**数了，那句话不用动。
+- **对 ISSUE-019 的影响**：窗口现在**查得到**了（本部署 8192），
+  所以「拿真实窗口做本地预检、超了就在本地拦下来并点名是哪些技能撑大的」
+  这条修复方向**重新变得可行**。但仍**未修**，且要注意 `max_context_tokens`
+  配错时依然会骗过预检 —— 预检该用**探测到的窗口**，不是配置值。
 
 ---
 

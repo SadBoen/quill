@@ -294,7 +294,26 @@ fn first_positive_u32(v: &Value, keys: &[&str]) -> Option<u32> {
     None
 }
 
-const CONTEXT_KEYS: [&str; 3] = ["n_ctx_train", "context_length", "max_model_len"];
+/// 「这条请求最多能带多少 token」的上游字段候选，**按可信度从高到低**排列。
+///
+/// `first_positive_u32` 取**第一个命中**的，所以顺序本身就是判断。
+///
+/// **`n_ctx_train` 被故意排除在外。** llama.cpp 的 `meta` 同时报两个数：
+/// - `meta.n_ctx` —— **服务器当前开着的**窗口（用 `-c` 指定的）。
+/// - `meta.n_ctx_train` —— 模型**被训练时**的窗口，与这次部署无关。
+///
+/// 本机实测（2026-10-06，llama-b10068 + Qwen3.5-4B）：
+/// `n_ctx = 8192`、`n_ctx_train = 262144`，同一个响应里同时出现。
+/// 原来的列表把 `n_ctx_train` 排在**第一位**，于是探测报出 262144 ——
+/// 比真实窗口大 **32 倍**。这个数会流到
+/// `GET /api/admin/providers/{id}/models` 给界面显示，而 `validate()` 又让用户
+/// 「填模型真实的上下文窗口（可先用 …/models 看探测到的 context_window）」——
+/// 等于**界面在教用户填一个偏大 32 倍的数**。见 ISSUE-022。
+///
+/// 只报 `n_ctx_train` 的端点现在会得到 `None`（**不知道**）而不是那个偏大的数。
+/// 这是刻意的：`None` 会让界面说「上游没报这个信息」，而报一个错的数会让用户
+/// 照着把配置改坏 —— 后者远比前者麻烦。
+const CONTEXT_KEYS: [&str; 3] = ["n_ctx", "context_length", "max_model_len"];
 
 const TEXT_HINTS: [&str; 7] = [
     "text", "completion", "completions", "chat", "generate", "inference", "llm",
@@ -768,7 +787,20 @@ mod tests {
     }
 
     #[test]
-    fn context_window_prefers_the_trained_length_and_never_invents_one() {
+    /// 这条测试的**断言在 2026-10-06 被推翻过一次**，所以名字与注释都留了痕迹。
+    ///
+    /// 原来它断言 `n_ctx_train`（训练窗口）**优先于** `n_ctx`（实例窗口），
+    /// 还写着「n_ctx 不是训练上下文，不许拿它顶包」。当时的理由是：
+    /// 「训练上下文才是模型真正的能力上限，实例开小是部署的事」。
+    /// 那个理由在**能力**问题上成立，在**「这条请求最多能带多少 token」**问题上
+    /// 完全不成立 —— 而 `ModelCard.context_window` 正是后一个问题，因为
+    /// `validate()` 让用户照着它填 `max_context_tokens`，界面也照着它显示。
+    ///
+    /// 本机实测坐实了后果：llama-b10068 + Qwen3.5-4B，`-c 8192` 起的，
+    /// 同一个响应里 `n_ctx = 8192` / `n_ctx_train = 262144`。
+    /// 旧行为会报出 262144 —— **偏大 32 倍**，而服务器只吞 8192。
+    /// 见 ISSUE-022。
+    fn context_window_is_the_serving_window_never_the_trained_one() {
         let payload = json!({
             "object": "list",
             "data": [
@@ -779,15 +811,27 @@ mod tests {
                 },
                 { "id": "no-meta", "meta": { "n_ctx": 8192 } },
                 { "id": "vllm", "meta": { "max_model_len": 131072 } },
+                { "id": "train-only", "meta": { "n_ctx_train": 262144 } },
             ]
         });
         let got = parse_models_payload(&payload).expect("合法响应必须解析");
-        assert_eq!(got[0].context_window, Some(262144), "训练上下文优先于实例上下文");
         assert_eq!(
-            got[1].context_window, None,
-            "n_ctx 不是训练上下文，不许拿它顶包"
+            got[0].context_window,
+            Some(8192),
+            "实例窗口才是这次部署实际能吞下的量"
         );
+        assert_ne!(
+            got[0].context_window,
+            Some(262144),
+            "拿 n_ctx_train 会把上限报大 32 倍"
+        );
+        assert_eq!(got[1].context_window, Some(8192), "meta 里只有 n_ctx 时就用它");
         assert_eq!(got[2].context_window, Some(131072));
+        assert_eq!(
+            got[3].context_window,
+            None,
+            "只报了训练窗口就该说「不知道」，不能拿它顶包"
+        );
         assert_eq!(got[0].owned_by.as_deref(), Some("llamacpp"));
         assert_eq!(got[1].owned_by, None);
     }
