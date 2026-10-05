@@ -1,0 +1,56 @@
+[package]
+name = "quill-server"
+version = "0.1.0"
+edition = "2021"
+description = "Quill 服务端二进制入口（组装全部 crate）"
+license = "Apache-2.0"
+
+[lib]
+name = "quill_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "quill-server"
+path = "src/main.rs"
+
+[dependencies]
+# ⚠️ 依赖方向铁律（契约 §一）：
+#    quill-server 是**依赖图的顶端**，可以依赖全部；
+#    但**任何 quill-* crate 禁止依赖它**（会形成环）。
+#    由 scripts/check-crate-deps.sh（G40）强制。
+quill-adapters = { path = "../quill-adapters" }
+quill-domain = { path = "../quill-domain" }
+quill-store = { path = "../quill-store" }
+quill-control = { path = "../quill-control" }
+quill-agent = { path = "../quill-agent" }
+
+# ⚠️ 第三方依赖口径（本次任务硬约束）：
+#    **只允许 axum 及其必要生态**，且每一项都必须在 Cargo.lock 里已存在。
+#    实测已存在于 Cargo.lock：axum 0.8.9 / tower 0.5.3 / serde 1.0.229 /
+#    serde_json 1.0.151 / http-body-util 0.1.5 / tokio 1.53.2。
+#    实测**不存在**、因此未引入：tower-http / uuid / axum-extra / futures-util /
+#    async-trait / hmac / anyhow。
+axum = { version = "0.8", features = ["http1", "json", "tokio"] }
+# ⚠️ sqlx 只加在 quill-server（组装层），且**不新增任何 crate**：
+#    0.8.6 早已在 Cargo.lock 里（quill-store 依赖它），
+#    特性与 quill-store 逐字一致（runtime-tokio + sqlite），
+#    因此 `git diff -- Cargo.lock | grep '^+name = '` 必须零命中。
+#    用途：实现 quill-agent 的两个存储端口（ExpertRepository / DispatchLedger）。
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "sqlite",
+] }
+# tower 只用它的 Service/Layer/ServiceExt 形态：
+#   · Layer/Service —— 中间件（请求 ID + panic 兜底）
+#   · ServiceExt::oneshot —— 集成测试直接打路由，不起真实端口
+tower = { version = "0.5", features = ["util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net"] }
+serde_json = "1"
+
+[dev-dependencies]
+# ⚠️ 集成测试需要 `#[tokio::test]` 与读取响应体。
+#    http-body-util 在 Cargo.lock 中已存在（axum 的传递依赖），
+#    这里显式声明是为了让 BodyExt::collect 可用。
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net"] }

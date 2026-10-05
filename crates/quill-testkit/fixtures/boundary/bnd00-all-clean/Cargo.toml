@@ -1,0 +1,6 @@
+[workspace]
+members = ["crates/quill-good"]
+
+[workspace.dependencies]
+# ✅ 正确：精确 commit pin（规则 3 的合法形态）
+goose = { git = "https://github.com/aaif-goose/goose", rev = "76da81cb964b21cd096db739302329b40c2998b8" }

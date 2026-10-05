@@ -1,0 +1,223 @@
+{
+  "_说明": [
+    "边界闸门 fixture 清单 —— 供 `cargo xtask boundary` 的 G08 门槛消费。",
+    "",
+    "⚠️ 每个违规 fixture **只违反一条规则**，其他五条均合法。",
+    "   这是关键：若一个 fixture 违反多条，检查器可能因**别的原因**失败 → 假绿。",
+    "",
+    "🔴 断言失败信息必须**精确指向规则编号**：",
+    "   即 stderr 含 `rule N` 且不含 `rule M (M≠N)`。"
+  ],
+  "fixtures": [
+    {
+      "id": "BND-00",
+      "dir": "bnd00-all-clean",
+      "violates": [
+        "G26-1/2/3/4/5"
+      ],
+      "must_pass": true,
+      "real_incident": "无违规 —— 这是**不误报**用例，防止闸门变成'一律禁止'",
+      "covers_exemptions": [
+        "Cargo.toml 用精确 rev pin（规则 3 的合法形态）",
+        "禁用符号只出现在注释里（不构成违规）",
+        "注入式构造路径而非全局单例"
+      ],
+      "covered_by": "G26-1/2/3/4/5"
+    },
+    {
+      "id": "BND-01",
+      "dir": "bnd01-duplicate-path",
+      "violates": [
+        1
+      ],
+      "must_pass": false,
+      "real_incident": "D1 决策：重复路径会让每次 subtree pull 必冲突，零冲突同步失效",
+      "covered_by": "none"
+    },
+    {
+      "id": "BND-02",
+      "dir": "bnd02-unregistered-patch",
+      "violates": [
+        2
+      ],
+      "must_pass": false,
+      "real_incident": "未登记的偏离是隐形偏离；sync 时 AI 会误判为零 diff 被破坏，进而 checkout 抹掉，丢掉上游 bug 修复",
+      "covered_by": "none"
+    },
+    {
+      "id": "BND-03",
+      "dir": "bnd03-floating-dep",
+      "violates": [
+        3
+      ],
+      "must_pass": false,
+      "real_incident": "goose 每周二发版（年 50+ 次）；浮动依赖导致'昨天能编过今天编不过'，且 git 里没有任何改动",
+      "covered_by": "none"
+    },
+    {
+      "id": "BND-04",
+      "dir": "bnd04-no-upstream-remote",
+      "violates": [
+        4
+      ],
+      "must_pass": false,
+      "real_incident": "remote 丢失后同步能力静默消失，直到某次 pull 才报错（可能已是几周后）",
+      "requires": "真实 git 仓库（需 git init 后检查器才能识别）",
+      "covered_by": "none"
+    },
+    {
+      "id": "BND-05",
+      "dir": "bnd05-failing-test",
+      "violates": [
+        5
+      ],
+      "must_pass": false,
+      "real_incident": "闸门体系中**唯一的真实执行检查**；前四条都是静态检查，无法发现'能编译但逻辑错'",
+      "verified": "已实测：退出码 101",
+      "covered_by": "none"
+    },
+    {
+      "id": "BND-06",
+      "dir": "bnd06-todo-marker",
+      "violates": [
+        6
+      ],
+      "must_pass": false,
+      "real_incident": "无人 review 下 `todo!()` = 这段路径从未跑过；`unimplemented!()` 调用即 panic",
+      "covered_by": "none"
+    },
+    {
+      "id": "BND-07",
+      "dir": "bnd07-singleton-regression",
+      "violates": [
+        "G26-1"
+      ],
+      "covered_by": "G26-1",
+      "must_pass": false,
+      "real_incident": "单进程多用户的前提是'只用可注入构造路径'。用全局单例会让所有用户的会话与凭据混在一个 data_dir —— 影响面是全局性的，比漏写 where 更危险。",
+      "notes": "本套中唯一能被现有检查器判定的违规用例；用于验证 G26 检查器真的能拦住"
+    },
+    {
+      "id": "BND-08",
+      "dir": "bnd08-include-macro",
+      "violates": [
+        "G26-3"
+      ],
+      "covered_by": "G26-3",
+      "must_pass": false,
+      "real_incident": "include! 用 ../../../ 逃出 crates/ —— 纯 grep 扫 crates/ 命中 0，闸门判红。⚠️ 初版我写的是 ../../（少一级），从 src/ 出发只回到 crates/ 层，**并未构成真实逃逸**，G26-3 判它红反而是误报。已修正为 ../../../ 并复验：纯 grep=0 命中、闸门=rc1，构成有效绕过证明。",
+      "bypass_kind": "include! 宏逃逸",
+      "requires_checker_must": "解析 include!/mod 路径参数，递归纳入扫描范围"
+    },
+    {
+      "id": "BND-08L",
+      "dir": "bnd08L-include-legal",
+      "violates": [
+        "G26-3"
+      ],
+      "covered_by": "G26-3",
+      "must_pass": true,
+      "real_incident": "配对正向：include! 目标在 crates/ 内且无违规 → 必须不误报。（初版我写错路径 ../shared.rs，G26-3 判红是对的 —— 是我的 fixture 写错了。）",
+      "bypass_kind": "include! 合法形态（不误报对照）"
+    },
+    {
+      "id": "BND-09",
+      "dir": "bnd09-symlink-escape",
+      "violates": [
+        "G26-4"
+      ],
+      "covered_by": "G26-4",
+      "must_pass": false,
+      "real_incident": "符号链接把 crates/x 指向 crates/ 外，违规代码照样编译进二进制。三种策略：拒绝越界链接 / 跟随但校验 canonical 归属 / 跳过链接（后者即漏洞本身）。",
+      "bypass_kind": "符号链接逃逸",
+      "requires": "符号链接（由 runner 在运行前创建，跨平台兼容）",
+      "platform_note": "Windows 创建 symlink 需管理员或开发者模式；故不预先提交，由 runner 生成。",
+      "platform": "需要 POSIX 软链。CI 目标 ubuntu-latest 满足；本地 Windows 若不支持则计入『未覆盖』并标黄，不静默跳过。"
+    },
+    {
+      "id": "BND-10",
+      "dir": "bnd10-buildrs",
+      "violates": [
+        "G26-5"
+      ],
+      "covered_by": "G26-5",
+      "must_pass": false,
+      "real_incident": "违规代码在 build.rs 里，src/lib.rs 表面合规。构建脚本常被排除在源码扫描外 → 逃逸。",
+      "bypass_kind": "build.rs 引用",
+      "requires_checker_must": "单独扫 build.rs；并识别其文件写入目标是否为可编译代码"
+    },
+    {
+      "id": "BND-08X",
+      "dir": "bnd08x-string-decoy",
+      "violates": [
+        "G26"
+      ],
+      "covered_by": "none-by-design",
+      "must_pass": false,
+      "real_incident": "format!(\"Config::{}()\", \"global\") 这类运行时拼接 —— 源码中不存在连续禁用字符串，任何文本匹配都抓不到。**这是方法论上限，不是待修的 bug。**",
+      "design_limitation": true,
+      "notes": "故意标为 none-by-design：若标 'none'，有人会去补检查器但补不出来，最终可能选择放宽规则 → 引入真漏报。显式标注是为了阻止'为变绿而放松防线'。",
+      "human_note": "这不是'我们漏了'，而是静态文本分析的固有边界。\n  api_docs()  —— 纯字符串字面量，G26-1 **能**抓到（真实可查路径，故意保留）。\n  assembled() —— format! 运行时拼接，源码中不存在连续的 Config::global()，\n                  **任何文本匹配都抓不到**，这是方法论上限。\n  闸门判红是预期行为（must_pass=false）。**不要为它放宽匹配规则** ——\n  那会牺牲 G26-1 对字符串常量的检测能力。"
+    },
+    {
+      "id": "BND-08M",
+      "dir": "bnd08M-include-inside-bnd",
+      "violates": [],
+      "covered_by": "G26-3",
+      "must_pass": true,
+      "real_incident": "BND-08 的精确反向：**少一级**的 include!（../../ → 仍回到 crates/ 层）必须放行。\n  与 BND-08 的区别仅一个 `..`。若闸门无法区分这两者，说明路径归约是错的。\n  ⚠️ 初版 BND-08 正是这个形态 —— 当时闸门判红是**误报**，修正 BND-08 后本 fixture 锁死该行为。",
+      "pairs_with": "BND-08"
+    }
+  ],
+  "consumers": {
+    "G08": "cargo xtask boundary --fixtures   # 跑本清单所有 fixture，校验期望的通过/失败",
+    "G09": "cargo xtask boundary              # 跑真实仓库的边界检查"
+  },
+  "notes": [
+    "fixture 里的 crates/ 与 vendor/ 是**最小骨架**，不参与真实构建（根 workspace 不含它们）。",
+    "BND-05 与 BND-00 含可编译的 Cargo 工程，可独立 `cd` 进去跑 `cargo test` 验证。",
+    "其余 fixture 只需路径/文本结构，供静态检查器判定。"
+  ],
+  "_covered_by 说明": [
+    "covered_by: 该 fixture 违反的规则由哪个检查器覆盖。",
+    "  'G26'  → check-boundary-singletons.sh（已实现，禁 Config::global()/SessionManager::instance()）",
+    "  'none' → 六规则（路径重复/偏离未登记/依赖浮动/无remote/测试不全绿/todo残留），",
+    "           目前**尚无检查器实现** → runner 报「未覆盖」而非「通过」。",
+    "",
+    "⚠️ 未覆盖 ≠ 通过。待 cargo xtask boundary 实现六规则后，",
+    "   把对应项改为 'G26'（或新检查器名）即可自动纳入判定。"
+  ],
+  "_绕过手法说明": [
+    "BND-08~10 是三个**让纯 grep 型闸门全部失效**的绕过手法，与 BND-01~06（结构性违规）不同类。",
+    "",
+    "为什么它们比 BND-01~06 更重要：",
+    "  BND-01~06 是'规则没实现'，补检查器即可拦住；",
+    "  BND-08~10 是'**检查器实现了但被绕过**' —— 纯 grep 路径/内容扫描对它们完全无效。",
+    "  这三类会让 G26 看起来在工作，实际有绕过路径。",
+    "",
+    "⚠️ BND-08L 是配对的**不误报**用例：若闸门把合法 include! 也拦了，",
+    "   实现者的反应会是'那就不用 include!' —— 而 include! 本身是合法组织方式。"
+  ],
+  "_covered_by 三态": [
+    "covered_by: 该 fixture 违反的规则由哪个检查器覆盖。**三态区分很重要**：",
+    "",
+    "  'G26'            → check-boundary-singletons.sh 能判定",
+    "  'none'           → **检查器应该能判但尚未实现**（BND-01~06 六规则）",
+    "                     → 补检查器后应自动转绿",
+    "  'none-by-design' → **设计上不可能拦住**（BND-08X 运行时拼接）",
+    "                     → 永远不会转绿，且**必须永远可见**",
+    "",
+    "⚠️ 为什么要区分后两者：",
+    "  若把设计性盲区标成 'none'，有人看到'N 个未覆盖'会去补检查器 ——",
+    "  但文本匹配补不出来（方法论上限），最后可能选择**放宽匹配规则**来'让它变绿'",
+    "  → 那会引入**真正的漏报**。显式标注 'none-by-design' 是为了阻止这种演化。"
+  ],
+  "_G26 规则编号": [
+    "G26-1 = Config::global()            G26-2 = SessionManager::instance()",
+    "G26-3 = include! 逃出 crates/       G26-4 = 符号链接指向 crates/ 外",
+    "G26-5 = build.rs 含违规或生成源码",
+    "",
+    "BND-08 与 BND-08M 成对，区别仅一个 `..`：逃出边界（判红）vs 仍在界内（放行）。",
+    "BND-08X 的 assembled() 部分是方法论盲区，永久不覆盖。"
+  ]
+}

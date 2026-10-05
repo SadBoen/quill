@@ -1,0 +1,26 @@
+[package]
+name = "quill-agent"
+version = "0.1.0"
+edition = "2021"
+description = "专家团编排（专家领域逻辑 / 派工 / 幂等 / 崩溃恢复）"
+license = "Apache-2.0"
+
+# ⚠️ 依赖方向（docs/PHASE2_CONTRACT.md §一）：
+#   本 crate 允许依赖 quill-adapters（契约层）+ quill-domain（领域模型）+ quill-wiki（仅经 trait）。
+#   **禁止**依赖 quill-store（存储实现）/ quill-server / quill-control / vendor/goose。
+#   存储访问一律经本 crate 定义的端口 trait（`ExpertStore` / `DispatchLedger`）注入，
+#   由 quill-server 侧用 sqlx 实现 —— 详见 src/dispatch.rs 与 src/expert.rs 的模块注释。
+[dependencies]
+quill-adapters = { path = "../quill-adapters" }
+quill-domain = { path = "../quill-domain" }
+quill-wiki = { path = "../quill-wiki" }
+
+[dev-dependencies]
+# ⚠️ quill-testkit 只允许出现在 [dev-dependencies]（PHASE2_CONTRACT §2.5 规则 7 面 C）。
+#    它提供 MemberExecutor 的测试替身（`MockMemberExecutor` + `FaultKind` 六种委派失败模式）。
+#    ⚠️ 它是**工作区内部** crate，不是外部依赖 —— Cargo.lock 不会新增任何外部 crate。
+quill-testkit = { path = "../quill-testkit" }
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "deny"

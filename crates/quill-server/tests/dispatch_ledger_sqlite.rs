@@ -1,0 +1,531 @@
+//! `DispatchLedger` 的**真库**集成测试（临时 SQLite 文件）。
+//!
+//! 覆盖任务要求的四项中与派工相关的两条，外加两条它必须自证的：
+//!
+//! | 用例 | 验的是 |
+//! |---|---|
+//! | `begin_twice_…` | 幂等：第二次必须 `Existed`（`BeginOutcome` 判别力） |
+//! | `begin_does_not_overwrite_…` | 命中键时**不覆盖**既有记录 |
+//! | `same_key_of_another_user_is_independent` | 🔴 跨用户隔离：同键不同用户互不干扰 |
+//! | `state_transitions_survive_…` | 状态机 + `ask_depth` + 结算结果的往返 |
+//! | `dispatch_row_really_lands_in_the_table` | 「行真的落库了」而不是只在内存里转 |
+//! | `missing_member_session_…` | 前提缺失时**判红且不写库** |
+//!
+//! # 为什么必须打真库
+//!
+//! `BeginOutcome` 的判别力完全依赖 `ON CONFLICT DO NOTHING RETURNING`
+//! 这一条 SQL 语义。内存实现（`MemDispatchLedger`）用 `BTreeMap` 查一次，
+//! 它的行为**证明不了**真库那句语句是否真的区分了「本次插入」与「早已存在」。
+
+mod common;
+mod dispatch_seed;
+
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use quill_adapters::{ExpertId, MemberId, MemberOutcome, MemberStatus, SessionId, UserId};
+use quill_agent::{
+    AgentError, DispatchKey, DispatchLedger, DispatchRecord, DispatchState, DispatchTask,
+    MemberRejectKind, RoundPrefix,
+};
+use quill_server::db::DbBridge;
+use quill_server::dispatch_ledger::{DispatchScope, SqlxDispatchLedger};
+
+use common::{scalar_i64, text_of, TestDb};
+use dispatch_seed::{member_session, seed};
+
+fn u(n: u8) -> UserId {
+    UserId::from_bytes([n; 16])
+}
+
+fn e(name: &str) -> ExpertId {
+    ExpertId::parse(name).unwrap_or_else(|err| panic!("专家名 {name:?} 非法：{err}"))
+}
+
+fn member(expert: &str, seq: u32) -> MemberId {
+    MemberId::for_expert(&e(expert), seq).unwrap_or_else(|err| panic!("成员标识非法：{err}"))
+}
+
+fn key(owner: UserId, room: &str, round: u32, expert: &str) -> DispatchKey {
+    DispatchKey::new(owner, room, round, e(expert)).expect("派工键应合法")
+}
+
+/// 建「库 + 外键前提 + 账本 + 房间名」四件套。
+///
+/// ⚠️ 房间名**从夹具取**而不是在用例里另写一个：房间是 `task_dispatches`
+/// 幂等键的组成部分，用例与夹具各写一份就等于两份真相源。
+fn fixture(
+    label: &str,
+    owner: u8,
+    team_seed: u8,
+    members: &[&str],
+) -> (TestDb, SqlxDispatchLedger, String) {
+    let t = TestDb::new(label);
+    let f = seed(&t.bridge(), u(owner), team_seed, members);
+    let mut map: BTreeMap<ExpertId, SessionId> = BTreeMap::new();
+    for m in members {
+        // ⚠️ 派生规则**只有一份**：在 dispatch_seed 里。
+        map.insert(e(m), member_session(team_seed, &e(m)));
+    }
+    let ledger = SqlxDispatchLedger::new(
+        t.bridge(),
+        DispatchScope::new(f.team_id, f.leader_session, map),
+    );
+    let room = f.room_id;
+    (t, ledger, room)
+}
+
+#[test]
+fn begin_twice_returns_created_then_existed() {
+    // 🔴 幂等判别（`BeginOutcome` 存在的全部理由）。
+    let (t, ledger, room) = fixture("dispatch-idempotent", 1, 0x11, &["cost-analyst"]);
+    let k = key(u(1), &room, 0, "cost-analyst");
+
+    let first = ledger
+        .begin(&DispatchRecord::pending(
+            k.clone(),
+            member("cost-analyst", 1),
+        ))
+        .expect("首次记账应成功");
+    assert!(first.is_created(), "首次记账必须是 Created（键此前不存在）");
+    assert_eq!(first.record().state(), DispatchState::Pending);
+
+    let second = ledger
+        .begin(&DispatchRecord::pending(
+            k.clone(),
+            member("cost-analyst", 1),
+        ))
+        .expect("二次记账必须成功返回（幂等的语义是「拿到同一个结果」，不是报错）");
+    assert!(
+        !second.is_created(),
+        "🔴 二次记账必须判为 Existed —— 若判成 Created，说明判别逻辑是假的"
+    );
+    assert_eq!(
+        second.record(),
+        first.record(),
+        "Existed 必须返回既有记录本身"
+    );
+
+    // ⚠️ 「判别不是靠先查后插」的可观察证据：库里**只有一行**。
+    //    若实现是「先 SELECT 再 INSERT」，第二次虽然也可能返回 Existed，
+    //    但行数会变成 2 —— 那说明唯一索引没兜住。
+    assert_eq!(
+        scalar_i64(
+            &t.bridge(),
+            "SELECT COUNT(*) AS c FROM task_dispatches WHERE user_id = x'01010101010101010101010101010101'"
+        ),
+        1,
+        "同一幂等键只能有一行"
+    );
+}
+
+#[test]
+fn begin_does_not_overwrite_an_existing_record() {
+    // 幂等的第二半：命中键时**不覆盖**。若 begin 顺手把状态改回 PENDING，
+    // 一个正在 RUNNING 的成员会被重派 —— 而它可能已经产生了副作用。
+    let (_t, ledger, room) = fixture("dispatch-no-overwrite", 1, 0x12, &["cost-analyst"]);
+    let k = key(u(1), &room, 0, "cost-analyst");
+
+    ledger
+        .begin(&DispatchRecord::pending(
+            k.clone(),
+            member("cost-analyst", 1),
+        ))
+        .expect("首次记账应成功");
+    let mut running = DispatchRecord::pending(k.clone(), member("cost-analyst", 1));
+    running.mark_running().expect("跃迁 RUNNING 应成功");
+    ledger.put(&running).expect("写 RUNNING 应成功");
+
+    let again = ledger
+        .begin(&DispatchRecord::pending(
+            k.clone(),
+            member("cost-analyst", 1),
+        ))
+        .expect("二次记账应成功");
+    assert!(!again.is_created());
+    assert_eq!(
+        again.record().state(),
+        DispatchState::Running,
+        "🔴 begin 不得把 RUNNING 覆盖回 PENDING"
+    );
+}
+
+#[test]
+fn same_key_of_another_user_is_independent() {
+    // 🔴 跨用户隔离：同一 (room, round, expert) 在不同用户下必须是两条独立记录。
+    //    若某条语句漏了 user_id，B 就会「命中」A 的派工并读到 A 的成员会话。
+    let t = TestDb::new("dispatch-isolation");
+    // 两个用户各要一套外键前提（teams/sessions 都带 user_id）
+    seed(&t.bridge(), u(1), 0x13, &["cost-analyst"]);
+    seed(&t.bridge(), u(2), 0x14, &["cost-analyst"]);
+
+    let mk = |team: u8| {
+        let mut map = BTreeMap::new();
+        map.insert(e("cost-analyst"), member_session(team, &e("cost-analyst")));
+        SqlxDispatchLedger::new(
+            t.bridge(),
+            DispatchScope::new([team; 16], SessionId::from_bytes([team; 16]), map),
+        )
+    };
+    let la = mk(0x13);
+    let lb = mk(0x14);
+
+    let ka = key(u(1), "shared-room", 3, "cost-analyst");
+    let kb = key(u(2), "shared-room", 3, "cost-analyst");
+
+    assert!(la
+        .begin(&DispatchRecord::pending(
+            ka.clone(),
+            member("cost-analyst", 1)
+        ))
+        .expect("A 记账应成功")
+        .is_created());
+    let b_out = lb
+        .begin(&DispatchRecord::pending(
+            kb.clone(),
+            member("cost-analyst", 1),
+        ))
+        .expect("B 记账应成功");
+    assert!(
+        b_out.is_created(),
+        "🔴 B 的同名同房间同轮必须是 Created —— 命中 A 的记录即隔离失效"
+    );
+    assert_eq!(b_out.record().key().owner(), u(2));
+
+    // A 的记录仍在，且 B 看不到
+    assert_eq!(la.inflight(&u(1)).expect("A 列在途应成功").len(), 1);
+    assert_eq!(lb.inflight(&u(2)).expect("B 列在途应成功").len(), 1);
+    // ⚠️ 归属由**键里的 owner** 决定，不由账本实例决定：
+    //    用 A 的账本对象按 B 的键去查，返回的必须是 B 的行（这才是正确的隔离），
+    //    若它返回 A 的行，说明查询条件丢掉了 user_id。
+    let via_a = la
+        .get(&kb)
+        .expect("按 B 的键查应成功")
+        .expect("B 的行必须存在");
+    assert_eq!(via_a.key().owner(), u(2), "查到的必须是 B 自己的行");
+    // 🔴 真正的隔离断言：两行的成员会话**互不相同**。
+    //    若某条语句漏了 user_id，B 的插入会覆盖 A 的行（复合主键不同则更糟：
+    //    幂等键相同但用户不同，本该是两条独立记录）。
+    let a_sess = text_of(
+        &t.bridge(),
+        "SELECT hex(member_session_id) AS v FROM task_dispatches WHERE user_id = x'01010101010101010101010101010101'",
+    );
+    let b_sess = text_of(
+        &t.bridge(),
+        "SELECT hex(member_session_id) AS v FROM task_dispatches WHERE user_id = x'02020202020202020202020202020202'",
+    );
+    assert_ne!(a_sess, b_sess, "🔴 两用户的成员会话不得互相覆盖");
+    assert!(
+        a_sess.to_uppercase().starts_with("13"),
+        "A 的行必须指向 A 的成员会话（以 13 开头）：{a_sess}"
+    );
+    assert!(
+        b_sess.to_uppercase().starts_with("14"),
+        "B 的行必须指向 B 的成员会话（以 14 开头）：{b_sess}"
+    );
+    assert_eq!(
+        scalar_i64(&t.bridge(), "SELECT COUNT(*) AS c FROM task_dispatches"),
+        2,
+        "两个用户各一行"
+    );
+}
+
+#[test]
+fn state_transitions_and_settlement_survive_a_real_roundtrip() {
+    // 状态机 + ask_depth + 结算结果的往返。schema 上有两条硬 CHECK：
+    //   CHECK ((state = 'ASKING') = (ask_depth > 0))
+    //   CHECK ((state IN ('DONE','FAILED','CANCELLED')) = (settled_at IS NOT NULL))
+    // 它们在真库上会真的拒绝非法写入，因此这条用例同时验了「写进去的东西合法」。
+    let (t, ledger, room) = fixture(
+        "dispatch-transitions",
+        1,
+        0x15,
+        &["cost-analyst", "risk-checker"],
+    );
+    let k = key(u(1), &room, 2, "cost-analyst");
+
+    ledger
+        .begin(&DispatchRecord::pending(
+            k.clone(),
+            member("cost-analyst", 1),
+        ))
+        .expect("记账应成功");
+
+    // PENDING → RUNNING
+    let mut r = DispatchRecord::pending(k.clone(), member("cost-analyst", 1));
+    r.mark_running().expect("RUNNING 应成功");
+    ledger.put(&r).expect("写 RUNNING 应成功");
+    let got = ledger.get(&k).expect("读应成功").expect("行应存在");
+    assert_eq!(got.state(), DispatchState::Running);
+    assert_eq!(
+        got.member().as_str(),
+        "cost-analyst-1",
+        "成员名必须往返保住"
+    );
+
+    // RUNNING → ASKING（ask_depth = 2）
+    let mut asking = DispatchRecord::pending(k.clone(), member("cost-analyst", 1));
+    asking.mark_running().expect("RUNNING 应成功");
+    asking.mark_asking(2).expect("ASKING 应成功");
+    ledger.put(&asking).expect("写 ASKING 应成功");
+    let got = ledger.get(&k).expect("读应成功").expect("行应存在");
+    assert_eq!(got.state(), DispatchState::Asking);
+    assert_eq!(
+        got.ask_depth(),
+        2,
+        "ask_depth 必须往返保住（表上有对应 CHECK）"
+    );
+
+    // → DONE（带产出正文）
+    let outcome = MemberOutcome::new(
+        member("cost-analyst", 1),
+        MemberStatus::Partial,
+        "已完成数据采集",
+        "采集到 3 条成本记录",
+    )
+    .expect("结果应合法");
+    let mut done = DispatchRecord::pending(k.clone(), member("cost-analyst", 1));
+    done.settle_done(outcome.clone()).expect("结算 DONE 应成功");
+    ledger.put(&done).expect("写 DONE 应成功");
+    let got = ledger.get(&k).expect("读应成功").expect("行应存在");
+    assert_eq!(got.state(), DispatchState::Done);
+    let o = got.outcome().expect("DONE 必须带回结果");
+    assert_eq!(o.status(), MemberStatus::Partial);
+    assert_eq!(o.completed_scope(), "已完成数据采集");
+    assert_eq!(o.output(), "采集到 3 条成本记录");
+    assert_eq!(*o, outcome, "结算结果必须逐字往返（不丢正文）");
+    assert_eq!(
+        text_of(
+            &t.bridge(),
+            "SELECT state AS v FROM task_dispatches WHERE member_expert_id = 'cost-analyst'"
+        ),
+        "DONE",
+        "🔴 状态必须真的落库，而不是只在内存里转"
+    );
+
+    // 另一名成员 → FAILED（错误码必须往返，前端据此分支）
+    let k2 = key(u(1), &room, 2, "risk-checker");
+    let mut failed = DispatchRecord::pending(k2.clone(), member("risk-checker", 1));
+    let err = AgentError::MemberRejected {
+        member: member("risk-checker", 1),
+        kind: MemberRejectKind::SelfReportedFailure,
+        detail: "成员自报做不到风险评估".to_string(),
+        retryable: true,
+    };
+    failed.settle_failed(err).expect("结算 FAILED 应成功");
+    ledger.put(&failed).expect("写 FAILED 应成功");
+    let got = ledger.get(&k2).expect("读应成功").expect("行应存在");
+    assert_eq!(got.state(), DispatchState::Failed);
+    let e2 = got.error().expect("FAILED 必须带回错误");
+    assert_eq!(e2.code(), "member_reported_failure", "🔴 错误码必须往返");
+    assert!(e2.is_retryable(), "retryable 标志必须往返");
+    assert!(e2.to_string().contains("做不到风险评估"));
+}
+
+#[test]
+fn inflight_lists_only_inflight_and_list_round_is_sorted() {
+    let (_t, ledger, room) = fixture("dispatch-listing", 1, 0x16, &["zeta", "alpha", "mid"]);
+    for (expert, round) in [("zeta", 0u32), ("alpha", 0), ("mid", 0), ("alpha", 1)] {
+        let k = key(u(1), &room, round, expert);
+        ledger
+            .begin(&DispatchRecord::pending(k, member(expert, 1)))
+            .unwrap_or_else(|err| panic!("{expert}/round-{round} 记账失败：{err}"));
+    }
+    // 把 alpha/0 结算掉 → 它不该再出现在 inflight 里
+    let k = key(u(1), &room, 0, "alpha");
+    let mut done = DispatchRecord::pending(k.clone(), member("alpha", 1));
+    done.settle_done(
+        MemberOutcome::new(member("alpha", 1), MemberStatus::Done, "已完成", "结论")
+            .expect("结果应合法"),
+    )
+    .expect("结算应成功");
+    ledger.put(&done).expect("写 DONE 应成功");
+
+    let inflight = ledger.inflight(&u(1)).expect("列在途应成功");
+    assert_eq!(inflight.len(), 3, "已结算的不该在途：{inflight:?}");
+    assert!(inflight.iter().all(|r| r.state().is_inflight()));
+
+    let round0 = ledger
+        .list_round(&RoundPrefix {
+            owner: u(1),
+            room_id: room.clone(),
+            round: 0,
+        })
+        .expect("列某轮应成功");
+    let ids: Vec<String> = round0
+        .iter()
+        .map(|r| r.key().member_expert().as_str().to_string())
+        .collect();
+    assert_eq!(
+        ids,
+        vec!["alpha", "mid", "zeta"],
+        "必须按 member_expert 升序"
+    );
+    assert!(
+        round0.iter().any(|r| r.state() == DispatchState::Done),
+        "已结算的记录也属于「某轮派工」"
+    );
+}
+
+#[test]
+fn missing_member_session_is_reported_and_writes_nothing() {
+    // 🔴 反向用例：前提缺失必须**响亮地失败**且**不写库**。
+    //    若默默填全零，会写出一条跨用户错配的脏行（或在 FK 被关时直接落库）。
+    let t = TestDb::new("dispatch-missing-session");
+    seed(&t.bridge(), u(1), 0x17, &["cost-analyst"]);
+    // scope 里**故意不给**任何成员会话
+    let ledger = SqlxDispatchLedger::new(
+        t.bridge(),
+        DispatchScope::new(
+            [0x17; 16],
+            SessionId::from_bytes([0x17; 16]),
+            BTreeMap::new(),
+        ),
+    );
+    let k = key(u(1), "room-21", 0, "cost-analyst");
+    let err = ledger
+        .begin(&DispatchRecord::pending(k, member("cost-analyst", 1)))
+        .expect_err("缺成员会话必须判红");
+    assert_eq!(
+        err.code(),
+        "dispatch_request_invalid",
+        "应是「请求前提不合法」而不是「存储错误」：{err}"
+    );
+    assert!(
+        err.to_string().contains("cost-analyst"),
+        "错误必须点名缺的是哪个专家：{err}"
+    );
+    assert_eq!(
+        scalar_i64(&t.bridge(), "SELECT COUNT(*) AS c FROM task_dispatches"),
+        0,
+        "🔴 失败时绝不能留下半行"
+    );
+}
+
+#[test]
+fn dispatcher_agrees_with_the_ledger_on_replay() {
+    // 用领域层 `Dispatcher` 的真实判别路径复核一遍：
+    // 同一轮重放必须「跳过」（不重复调用执行器）。
+    // 这里用一个只记账、不执行的极简执行器来验 —— 本用例关注的是
+    // 「账本把 Existed 判对了」，而不是执行器行为。
+    use std::sync::Mutex;
+
+    /// 计数执行器：内部自己持 `Arc`，这样派工器可以按值持有它，
+    /// 而用例仍能通过另一个 `Arc` 句柄断言调用次数。
+    #[derive(Debug, Clone, Default)]
+    struct CountingExecutor {
+        started: Arc<Mutex<Vec<MemberId>>>,
+    }
+    impl quill_adapters::MemberExecutor for CountingExecutor {
+        fn start(
+            &self,
+            req: quill_adapters::MemberStartRequest,
+        ) -> impl std::future::Future<Output = Result<MemberOutcome, quill_adapters::AdapterError>> + Send
+        {
+            let m = req.member().clone();
+            let log = Arc::clone(&self.started);
+            async move {
+                log.lock().expect("计数锁不应被毒化").push(m);
+                MemberOutcome::done(req.member().clone(), "已完成", "模拟执行产出")
+                    .map_err(|e| quill_adapters::AdapterError::Internal(e.to_string()))
+            }
+        }
+        async fn steer(
+            &self,
+            _member: &MemberId,
+            _msg: quill_adapters::Message,
+        ) -> Result<(), quill_adapters::AdapterError> {
+            Ok(())
+        }
+        async fn abort(
+            &self,
+            _member: &MemberId,
+            _scope: quill_adapters::AbortScope,
+        ) -> Result<(), quill_adapters::AdapterError> {
+            Ok(())
+        }
+    }
+
+    let (_t, ledger, room) = fixture("dispatch-replay", 1, 0x18, &["cost-analyst"]);
+    let started = Arc::new(Mutex::new(Vec::new()));
+    let exec = CountingExecutor {
+        started: Arc::clone(&started),
+    };
+    let d = quill_agent::Dispatcher::new(exec, ledger);
+
+    let task = DispatchTask::with_seq(e("cost-analyst"), 1, "算成本", "把本月成本算清楚")
+        .expect("派工单应合法");
+    // ⚠️ 被派的专家就是**主持人**：这样无需往 Team 里加成员
+    //    （`add_member` 要求传入名册，而名册来自专家仓储，
+    //    在本用例里那会引入一个与主题无关的前置条件）。
+    //    `dispatch_round` 允许派给 leader（`has_member || is_leader`）。
+    let team = quill_domain::Team::new(
+        quill_domain::TeamId::parse("team-24").expect("团队名应合法"),
+        "成本核算团",
+        e("cost-analyst"),
+    )
+    .expect("团队应可建");
+    let req = quill_agent::RoundRequest {
+        owner: u(1),
+        session: SessionId::from_bytes([0x18; 16]),
+        team: &team,
+        room_id: &room,
+        round: 0,
+        tasks: std::slice::from_ref(&task),
+        chain: &[],
+    };
+
+    let r1 = d.dispatch_round(&req).expect("首轮派工应成功");
+    assert_eq!(r1.delivered_count(), 1, "首轮应交付 1 个成员");
+    assert_eq!(started.lock().expect("锁").len(), 1);
+
+    let r2 = d.dispatch_round(&req).expect("重放同轮应成功（幂等）");
+    assert_eq!(
+        r2.delivered_count(),
+        0,
+        "🔴 重放不得再交付（已结算的键必须被跳过）"
+    );
+    assert_eq!(
+        r2.skipped_as_duplicate.len(),
+        1,
+        "重放必须记为幂等跳过：{}",
+        r2.summary()
+    );
+    assert_eq!(
+        started.lock().expect("锁").len(),
+        1,
+        "🔴 重放不得再次调用执行器（否则就是重复副作用）"
+    );
+}
+
+#[test]
+fn a_fresh_bridge_sees_the_dispatches_written_by_the_previous_one() {
+    // 「重启即失」在派工侧的同类验证。
+    let t = TestDb::new("dispatch-restart");
+    let path = t.path();
+    {
+        let f = seed(&t.bridge(), u(1), 0x19, &["cost-analyst"]);
+        let mut map = BTreeMap::new();
+        map.insert(e("cost-analyst"), member_session(0x19, &e("cost-analyst")));
+        let ledger = SqlxDispatchLedger::new(
+            t.bridge(),
+            DispatchScope::new(f.team_id, f.leader_session, map),
+        );
+        let k = key(u(1), "room-23", 0, "cost-analyst");
+        ledger
+            .begin(&DispatchRecord::pending(k, member("cost-analyst", 1)))
+            .expect("记账应成功");
+    }
+    let fresh = Arc::new(DbBridge::open(&path, 2).expect("重开库应成功"));
+    // 读路径不需要 scope
+    let ledger = SqlxDispatchLedger::new(
+        fresh,
+        DispatchScope::new([0u8; 16], SessionId::from_bytes([0u8; 16]), BTreeMap::new()),
+    );
+    let got = ledger
+        .get(&key(u(1), "room-23", 0, "cost-analyst"))
+        .expect("读应成功")
+        .expect("🔴 重启后派工记录必须还在（否则崩溃恢复无从谈起）");
+    assert_eq!(got.state(), DispatchState::Pending);
+    assert_eq!(got.member().as_str(), "cost-analyst-1");
+}

@@ -1,0 +1,29 @@
+[package]
+name = "quill-upgrade"
+version = "0.1.0"
+edition = "2021"
+description = "手动受控升级（升级前强制备份 + 回滚）"
+license = "Apache-2.0"
+
+[dependencies]
+quill-adapters = { path = "../quill-adapters" }
+quill-domain = { path = "../quill-domain" }
+# ⚠️ 升级前备份直接复用 quill-backup：一致性（`VACUUM INTO`）、
+#    密钥排除、摘要校验、幂等恢复都**只应有一份实现**（铁律二十五的同源问题：
+#    两处各写一遍备份逻辑，早晚漂移）。
+quill-backup = { path = "../quill-backup" }
+
+[dev-dependencies]
+# ⚠️ 以下三个都**不是新增外部 crate**：都已在 Cargo.lock 里
+# （quill-store / sqlx 由 quill-backup 引入，tokio 由各 crate 引入）。
+# 判据：`git diff -- Cargo.lock` 不新增任何 `[[package]]` 条目。
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "sqlite",
+] }
+quill-store = { path = "../quill-store" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "deny"

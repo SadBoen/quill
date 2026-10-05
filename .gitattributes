@@ -1,0 +1,11 @@
+# ── 行尾策略（2026-10-05 基线归一化）──
+# 🔴 为什么需要：接手时全库 24 个文件（含 vendor/goose）因 CRLF/LF 翻转
+#    呈现为"已修改"，git diff 显示 4.6 万行噪音，而真实内容改动只有 83 行。
+#    后果：① 铁律九「vendor 零 diff」被行尾噪音破坏
+#          ② 任何人 git add -A 都会把噪音提交进历史
+# ⚠️ vendor/goose 是 pinned 区：**显式声明 LF**，与上游仓库一致，
+#    确保任何行尾策略都不会在 vendor 区产生 diff。
+* text=auto eol=lf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+vendor/** text=auto eol=lf -diff

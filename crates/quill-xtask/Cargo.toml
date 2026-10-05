@@ -1,0 +1,12 @@
+[package]
+name = "quill-xtask"
+version = "0.1.0"
+edition = "2021"
+description = "未实现的占位 crate：真实边界闸门是 scripts/check-boundary-singletons.sh（G26-1~G26-5）"
+license = "Apache-2.0"
+
+[dependencies]
+quill-adapters = { path = "../quill-adapters" }
+quill-domain = { path = "../quill-domain" }
+
+[dev-dependencies]

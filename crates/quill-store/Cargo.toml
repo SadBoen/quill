@@ -1,0 +1,28 @@
+[package]
+name = "quill-store"
+version = "0.1.0"
+edition = "2021"
+description = "Quill 状态存储 —— SQLite 连接层与 schema 约束的运行时守卫"
+license = "Apache-2.0"
+publish = false
+
+# crate 依赖方向（契约 §1）：quill-store 依赖 adapters + domain
+# ⚠️ 本 crate 是「存储实现」，不依赖 quill-control / quill-agent / quill-wiki
+#    —— 反向依赖会形成环。
+
+[dependencies]
+# 只依赖 sqlx 的 SQLite 后端 + tokio 运行时。
+# 刻意不引 uuid / serde —— 领域类型在 quill-domain 定义，
+# 本 crate 只做「领域类型 ↔ SQLite 值」的转换（见 §10.2 可移植性）。
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "sqlite",
+] }
+
+[dev-dependencies]
+# ⚠️ tokio 的 macros/rt 特性：集成测试需要 #[tokio::test]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "deny"

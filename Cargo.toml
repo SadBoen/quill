@@ -1,0 +1,50 @@
+[workspace]
+resolver = "2"
+members = [
+    # ── 产品 crate（10 个，依赖方向受 boundary 规则检查）──
+    "crates/quill-adapters",       # ★ 注入点，最底层，零 quill 依赖
+    "crates/quill-domain",         # 领域模型
+    "crates/quill-store",          # sqlx 仓储 + 迁移（14 表 DDL）
+    "crates/quill-bridge",         # 实例间委派共享防护（SSRF/路径/头剥离）
+    "crates/quill-control",        # 多用户控制面
+    "crates/quill-wiki",           # xu-wiki
+    "crates/quill-agent",          # 专家团编排
+    "crates/quill-ext-hub",       # MCP/SKILL/插件注册
+    "crates/quill-backup",         # 备份恢复
+    "crates/quill-upgrade",        # 手动受控升级
+    "crates/quill-xtask",          # ⚠️ 未实现的占位 crate（非「边界闸门」）
+    # ── 支撑 crate（1 个，只允许 dev-dependencies）──
+    "crates/quill-testkit",        # 测试基础设施，publish = false
+    # ── 二进制入口（1 个，依赖图顶端）──
+    "crates/quill-server",
+    "crates/quill-cli",            # 命令行入口（quill doctor / experts / wiki / backup）
+]
+# ⚠️ 上面的 members 刻意**显式列举**，不用 `crates/*` 或 `xtask`（均已实测）：
+# 写成通配或提前列入会让 cargo 在**加载阶段**整体报错
+# `failed to load manifest for workspace member ...`，
+# 该错误会掩盖后续所有真实错误，看起来像"某个 crate 坏了"。
+# 新增 crate 时由主理人加这一行。
+# 🔒 本文件唯一维护人 = 主理人。
+#    理由与背景见 AGENTS.md「🔒 根 `Cargo.toml` 维护权」一节。
+#    ⚠️ 2026-10-05 接手订正：原文此处写的是「见 AGENTS.md 铁律三十一」，
+#       但当时的 AGENTS.md **没有铁律三十一号段**（三十之后直接跳三十二，
+#       历史删除后未重编）—— 这是一处悬空引用，读者按它跳过去只会撞空。
+#       编号已重编为连续的 31~35，故「铁律三十一」现在**存在**但指的是
+#       另一条法律（依赖未裁决前提的设计必须标注），与本行原意无关。
+#       → 因此**改为按章节标题引用**：标题不会随增删而漂移，编号会。
+#    维护权已随项目交接由高屋建移交至现任主理人。
+# 🔴 边界 fixture 必须排除（qa-engineer 预警，已实测确认）
+#
+# 为什么要 exclude：
+#   crates/quill-testkit/fixtures/boundary/ 下每个 fixture 是**独立骨架工程**，
+#   各自带 [workspace] 表。bnd05-failing-test 里**故意有一个失败的测试**
+#   （assert_eq!(add(2,2), 5)）。若被扫进主 workspace：
+#     · `cargo test --workspace` 会红，且报错指向 fixture 而非真实代码
+#     · 极易被误判为"某个 crate 写错了"
+#   它只会在 M1 跑 `cargo test --workspace --release` 时暴露 —— 那时已经晚了一步。
+#
+# 移除此行会立刻让全量测试变红。若你新增 fixture 目录，请同步更新这里。
+exclude = [
+    "crates/quill-testkit/fixtures/*",
+    "crates/quill-testkit/fixtures/**",
+]

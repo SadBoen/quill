@@ -1,0 +1,66 @@
+# ── 编译产物 ──
+/target/
+**/*.rs.bk
+
+# ── 运行时数据（含凭据，绝不入库）──
+/data/
+/workspace/
+*.db
+*.db-wal
+*.db-shm
+secrets.enc
+*.key
+
+# ── 模型文件（本地 LLM provider 用，绝不入库）──
+/models/
+**/*.gguf
+**/*.ggml
+**/*.safetensors
+**/*.onnx
+**/*.bin
+**/tokenizer.json
+**/tokenizer_config.json
+
+# ── 环境与凭据 ──
+.env
+.env.*
+*.pem
+credentials.json
+service-account*.json
+
+# ── 成员临时工作区 ──
+/.scratch/
+/_scratch/
+/lie/
+/check.sh
+
+# ── IDE ──
+.vscode/
+.idea/
+.DS_Store
+
+# ⚠️ 旧 git 目录备份（备份用，绝不入库）
+/.git-backup-*/
+
+# 闸门自检的临时目录（运维实测踩过：残留会污染工作区）
+.tmp-*
+# ⚠️ 只增不删的 fixture 目录（scripts/test-quill-doctor-roaming.sh 历史行为：
+#    沙箱里 rm -rf 会挂起，故当时改成"只增不删" → 累积 461 个空文件）
+#    现已改为系统 temp 存放；此条保留为兜底。
+.tmp-*/
+
+# ── 中间态 / 调试残留（绝不入库）──
+# ⚠️ .git-rewrite/ 是 git fast-import 历史重写的工作态（backup-refs/index/map/revs），
+#    属一次性工具产物，被误提交进历史（206 个文件、480K）。
+#    加 ignore 只能拦住**新增**；已跟踪条目需 `git rm -r --cached .git-rewrite`，
+#    属主理人裁决范围（本次未执行任何 git rm/add/commit）。
+/.git-rewrite/
+/.git-backup-*/
+/_out*.txt
+/_r/
+/_p[0-9]*/
+# Python 字节码缓存（validate-gates-manifest.py 每次跑都会生成）
+__pycache__/
+*.pyc
+
+/.demo/
