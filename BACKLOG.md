@@ -361,6 +361,21 @@ registry 就调它。四条决定都有测试钉住：只挂 `enabled` 的；磁
   而工具描述每轮请求都带。装 3 个长 SKILL 就是每轮多几万 token，哪怕一个都没用到 ——
   与上面「用不到就不占常驻上下文」的说法不符。**这条还没修**，b 线之后要定。
 
+**2026-10-06：界面如实显示「模型看不看得见」（ISSUE-009）。** 挂进去之后，
+`GET /api/extensions/skills` 仍然只报 `enabled` 与 `content_missing` ——
+界面上「技能包」那条写的是「尚未挂进对话的工具表」，**在把已经能用的东西说成不能用**。
+
+判断抽成 `tools::skill_visibility(existing, row, body) -> SkillVisibility`
+（`Visible` / `Disabled` / `NotMounted(原因)`），`with_skills` 与 `list_skills`
+调**同一个函数**：两边各判一次必然漂，而漂了没有任何报错会指向它。
+`list_skills` 每条加 `model_can_see`，挂不上时加 `not_mounted_reason`；
+停用是用户的选择、不是故障，**不带** reason。界面文案（中英各一份，
+另有 `libCapabilityNote`）一并改成实话。
+
+支点测试是 `the_api_says_model_can_see_a_skill_exactly_when_it_reaches_the_tool_table`：
+把界面报的布尔值与**真实工具表**逐条比对，任一边漂了都红。反向验证过 ——
+把 `model_can_see` 写死成 `true` 时 3 条测试变红。
+
 #### 参考实现
 
 goose 在 `vendor/goose/` 用 `rmcp` crate，`.mcp.json` 格式

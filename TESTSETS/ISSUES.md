@@ -183,6 +183,46 @@
 
 ---
 
+## ISSUE-009 · 界面把「已挂进对话工具表」的技能包说成「尚未挂进」
+
+**状态**：已修（2026-10-06）
+
+- **现象**：`GET /api/extensions/skills` 只报 `enabled` 与 `content_missing`，
+  界面上「技能包」那一条写的是「能存能读；尚未挂进对话的工具表」
+  （`ui/web/src/capabilityGaps.ts`）。而 `ToolRegistry::with_skills` 上一轮已经把
+  启用的 SKILL 挂进对话的工具表了 —— 界面在把**已经能用**的东西说成不能用。
+  中英文各一份文案（`i18n/resources.ts`、`ChatPage.tsx`、`LibraryTab.tsx`）
+  以及 `libCapabilityNote` 全都停在旧状态。
+- **根因**：存储层、执行层、界面三层各自演进，没有一个测试钉住
+  「界面说的」与「后端做的」必须一致。`with_skills` 决定挂不挂，
+  `list_skills` 决定显示什么，两边各判一次 —— 必然漂。
+- **复现**：
+  1. 装一个 `enabled: true` 且正文在磁盘上的 SKILL。
+  2. `GET /api/extensions/skills` —— 响应里没有任何字段说「模型看不看得见」。
+  3. 界面上仍显示「尚未挂进对话的工具表」。
+- **修复**：
+  1. 抽出 `tools::skill_visibility(existing, row, body) -> SkillVisibility`
+     （`Visible` / `Disabled` / `NotMounted(原因)`）。`with_skills` 与
+     `list_skills` 调**同一个**函数 —— 两处各判一次是这类 bug 的根源。
+  2. `list_skills` 每条加 `model_can_see`，挂不上时加 `not_mounted_reason`
+     （停用不算故障，**不带** reason）。`content_missing` 保留不动。
+  3. 界面文案改成实话：技能包「已挂进对话工具表（每条带 model_can_see）；
+     MCP 来的工具还没有」。`partial` 保留 —— 确实还缺 MCP 那一半。
+  4. `capabilityGaps.ts` 顶部注释同步改掉「存储层已通，执行层没接」这个已过时的定义。
+- **回归**：
+  - `extensions_http` 新增 4 条，其中
+    `the_api_says_model_can_see_a_skill_exactly_when_it_reaches_the_tool_table`
+    是支点：它把界面报的布尔值与**真实工具表**逐条比对，任一边漂了都会红。
+  - 反向验证：把 `model_can_see` 写死成 `true` 后 3 条测试变红（已复现并撤回）。
+  - `tools` 单测 2 条（Disabled 不许伪装成 NotMounted、Visible/NotMounted 判定）。
+  - 前端 `capabilityGaps.test.ts` 新增 2 条；`LibraryTab.test.tsx` 原来有一条
+    断言写死了旧文案「部分接通 · 能存能读」，本次一并改成新文案并加反向断言
+    （界面不许再出现「尚未挂进 / 还调不到」）。
+  - 全量：`cargo test --workspace` 913 passed / 0 failed、`ui/web` 62 passed、
+    `typecheck` 干净、`i18n-check` 0 问题、`library-check` 334/334。
+
+---
+
 ## 待补（还没跑到，先占位）
 
 跑 100 条任务时新发现的问题往这里追加，编号接着往下排。

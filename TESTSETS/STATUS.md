@@ -10,9 +10,13 @@
       `api_chat.rs` 构造完 registry 就调。只挂 `enabled` 的；磁盘没正文的跳过而不是
       注册空工具；与已有工具同名的跳过而不是顶掉它；查库失败**整条请求失败**，
       不静默降级成「只有内置工具」。用户过滤复用 `skills_repo::list` 的 `user_id`。
+- [x] 界面如实显示「模型看不看得见」—— 2026-10-06 完成。`GET /api/extensions/skills`
+      每条带 `model_can_see`，挂不上时带 `not_mounted_reason`。判断走
+      `tools::skill_visibility`，与 `with_skills` **同一个函数**（两处各判一次必然漂）。
+      界面文案里「技能包尚未挂进对话的工具表」这句已过时的假话已改掉。见 ISSUE-009。
 - [ ] MCP 协议层已接（`rmcp`），`GET /api/extensions/mcp` 的 `connected` 不再恒为 false
-- [x] 全量门禁 0 failed —— 2026-10-06：`cargo test --workspace` 907 passed / 0 failed、
-      `ui/web` 60 passed、`i18n-check` 0 问题、`library-check` 334/334
+- [x] 全量门禁 0 failed —— 2026-10-06：`cargo test --workspace` 913 passed / 0 failed、
+      `ui/web` 62 passed、`typecheck` 干净、`i18n-check` 0 问题、`library-check` 334/334
 
 ## 进度
 
