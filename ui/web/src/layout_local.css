@@ -62,3 +62,32 @@
   font-size: 9px;
   font-weight: 450;
 }
+
+/*
+ * .draft-badge / .draft-banner -- ISSUE-010。
+ *
+ * 草稿是前端本地状态，保存之前服务端里根本没有这一行。曾经它与已保存行
+ * 渲染得一模一样，用户以为存好了就关掉标签页，这条配置就永远丢了。
+ * 所以「未保存」这件事必须在**这一行自己身上**看得见，不能只写在页面顶部。
+ *
+ * 颜色只用 vendor 已有的 CSS 变量，不新增色值 —— index.css 是移植基准，
+ * 一字都不能动；本地覆盖全在这个文件里做。
+ */
+.draft-badge {
+  border: 1px solid var(--faint);
+  border-radius: 999px;
+  color: var(--faint);
+  font-size: 9px;
+  font-weight: 450;
+  margin-left: 6px;
+  padding: 0 6px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.draft-banner {
+  border-left: 2px solid var(--faint);
+  color: var(--faint);
+  margin: 0;
+  padding-left: 10px;
+}

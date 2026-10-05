@@ -96,6 +96,60 @@ export function mcpServersOf(body: McpServerList | undefined): McpServerConfig[]
   return body?.servers ?? []
 }
 
+/**
+ * 一行在**渲染那一刻**到底存没存。
+ *
+ * - `saved`   服务端里有，且内容一模一样。
+ * - `changed` 服务端里有同名行，但内容被草稿改过（**保存后才会生效**）。
+ * - `new`     服务端里根本没有这一行（**只存在于本地草稿**）。
+ *
+ * ISSUE-010：草稿曾经与已保存行渲染成**一模一样**的卡片，用户以为存好了
+ * 就关掉标签页，这条配置就永远丢了 —— 界面上没有一句在说这行还没落库。
+ *
+ * **只在有草稿时才用**：`hasDraft === false` 时所有行都必然是 `saved`，
+ * 这就把「服务端归一化过的字段与表单字段长得不一样」造成的误判，
+ * 限制在「用户手上正有未保存改动」这个窗口内。
+ */
+export type McpRowState = 'saved' | 'changed' | 'new'
+
+export function mcpRowState(
+  row: McpServerConfig,
+  saved: McpServerConfig[],
+  hasDraft: boolean,
+): McpRowState {
+  if (!hasDraft) return 'saved'
+  const same = saved.find((item) => item.name === row.name)
+  if (!same) return 'new'
+  return normalizeRow(same) === normalizeRow(row) ? 'saved' : 'changed'
+}
+
+/**
+ * 把一行压成一个可比较的字符串。
+ *
+ * `undefined` / `null` / `''` 在可选字段上**语义相同**（没填），
+ * 归到一起，否则刚加载就会把没动过的行误判成 `changed`。
+ * `env` / `headers` 按键排序，字段顺序不该被当成「用户改过了」。
+ */
+function normalizeRow(row: McpServerConfig): string {
+  return JSON.stringify([
+    row.name,
+    row.transport,
+    row.enabled_capabilities ?? null,
+    row.command ?? '',
+    row.args ?? [],
+    row.cwd ?? '',
+    sortedPairs(row.env),
+    row.url ?? '',
+    sortedPairs(row.headers),
+    row.max_concurrent_calls ?? '',
+  ])
+}
+
+function sortedPairs(value: Record<string, string> | undefined): string {
+  const entries = Object.entries(value ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+  return JSON.stringify(entries)
+}
+
 /** 按名字取某台服务器的实测状态。没有记录时返回 `undefined`——**不是**「已连接」。 */
 export function mcpStatusOf(
   body: McpServerList | undefined,

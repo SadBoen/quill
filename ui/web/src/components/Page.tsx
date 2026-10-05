@@ -32,15 +32,21 @@ export function Card({
   actions,
   children,
   tone,
+  testId,
+  rowState,
 }: {
   title?: ReactNode
   description?: string
   actions?: ReactNode
   children: ReactNode
   tone?: 'danger'
+  /** 测试定位用。MCP 卡片靠它断言「界面渲染了几条 == 服务端返回了几条」。 */
+  testId?: string
+  /** 这一行在界面上**存没存**（`saved` / `changed` / `new`）。 */
+  rowState?: string
 }): ReactNode {
   return (
-    <section className={`card${tone ? ` card-${tone}` : ''}`}>
+    <section className={`card${tone ? ` card-${tone}` : ''}`} data-testid={testId} data-row-state={rowState}>
       {title || description || actions ? (
         <header className="card-header">
           <div>

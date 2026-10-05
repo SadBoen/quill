@@ -6,9 +6,11 @@ import { Card, ErrorNotice, PageHeader } from '../components/Page'
 import {
   MCP_ROUTE,
   listMcpServers,
+  mcpRowState,
   mcpServersOf,
   mcpStatusOf,
   saveMcpServers,
+  type McpRowState,
   type McpServerConfig,
   type McpServerList,
   type McpServerStatus,
@@ -37,6 +39,60 @@ export type DiscoveredServer = {
 
 function serverAddress(server: McpServerConfig): string {
   return server.transport === 'stdio' ? server.command ?? '' : server.url ?? ''
+}
+
+/**
+ * ISSUE-010：草稿曾经与已保存行渲染成**一模一样**的卡片 —— 同样的图标、
+ * 同样的传输方式、同样的「编辑 / 删除」。用户以为存好了就关掉标签页，
+ * 这条配置就永远丢了（实测：`curl /api/extensions/mcp` 里根本没有它）。
+ *
+ * 现在草稿行必须挂上「未保存」标记，而且删除按钮的文案要跟着变：
+ * 对一条**服务端根本没有**的行说「删除」，文案本身就在骗人 ——
+ * 那个按钮只把本地草稿里那一项拿掉。
+ */
+function unsavedBadge(state: McpRowState, t: (key: string, opt?: Record<string, unknown>) => string): ReactNode {
+  if (state === 'saved') return null
+  return (
+    <span className="draft-badge" data-testid="mcp-unsaved-badge" data-state={state} role="status">
+      {state === 'new'
+        ? t('mcp.unsavedNew', { defaultValue: '未保存（新增）' })
+        : t('mcp.unsavedChanged', { defaultValue: '未保存（有改动）' })}
+    </span>
+  )
+}
+
+/** 把「关掉这个标签页就丢了」说在前面，而不是等用户自己撞上。 */
+function draftBanner(count: number, t: (key: string, opt?: Record<string, unknown>) => string): ReactNode {
+  if (count <= 0) return null
+  return (
+    <p className="draft-banner" data-testid="mcp-unsaved-banner" role="status">
+      {t('mcp.pendingBanner', {
+        count,
+        defaultValue: '有 {{count}} 条改动还没保存，关掉这个标签页就丢了。下一步：点右上角「保存 MCP 配置」。',
+      })}
+    </p>
+  )
+}
+
+/** 删除按钮的文案必须跟着「这行存没存」变，三种状态三句话。 */
+function deleteLabel(
+  state: McpRowState,
+  name: string,
+  t: (key: string, opt?: Record<string, unknown>) => string,
+): string {
+  if (state === 'new') {
+    return t('mcp.discardDraftNamed', { name, defaultValue: '丢弃草稿 {{name}}' })
+  }
+  if (state === 'changed') {
+    return t('mcp.deletePendingNamed', { name, defaultValue: '删除 {{name}}（保存后才生效）' })
+  }
+  return t('mcp.deleteNamed', { name, defaultValue: '删除 {{name}}' })
+}
+
+/** 没草稿时恒为 0 —— 避免服务端归一化过的字段被误判成「用户改过了」。 */
+function countUnsaved(rows: McpServerConfig[], saved: McpServerConfig[], hasDraft: boolean): number {
+  if (!hasDraft) return 0
+  return rows.filter((row) => mcpRowState(row, saved, hasDraft) !== 'saved').length
 }
 
 function mcpServerQuery() {
@@ -210,6 +266,12 @@ export function DeviceListPage(): ReactNode {
   const [editing, setEditing] = useState<McpEditing | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
   const servers = draft?.servers ?? mcpServersOf(config.data)
+  // **服务端真正存着的那些**。草稿和它们拼在同一个数组里渲染，
+  // 界面上要能分清哪一行还没落库 —— 否则 ISSUE-010 那种「以为存好了」就会发生。
+  const savedServers = mcpServersOf(config.data)
+  const hasDraft = draft !== null
+  const stateOf = (server: McpServerConfig): McpRowState => mcpRowState(server, savedServers, hasDraft)
+  const unsavedCount = countUnsaved(servers, savedServers, hasDraft)
 
   const save = useMutation({
     mutationFn: (current: McpDraft) => saveMcpServers(current.servers),
@@ -263,17 +325,20 @@ export function DeviceListPage(): ReactNode {
       />
       <div className="settings-stack">
         <ErrorNotice error={config.error ?? save.error} />
+        {draftBanner(unsavedCount, t)}
         <McpLinkStatus body={config.data} route={MCP_ROUTE} />
         <div className="card-grid">
-          {servers.map((server) => (
-            <article className="device-card" key={server.name}>
+          {servers.map((server) => {
+            const state = stateOf(server)
+            return (
+            <article className="device-card" data-testid="mcp-card" data-row-state={state} key={server.name}>
               <div className="device-card-top">
                 <span className="device-glyph" aria-hidden="true">{transportGlyph(server.transport)}</span>
                 <span className="mcp-summary">
                   <span>{formatCapabilityMode(server.enabled_capabilities, t)}</span>
                 </span>
               </div>
-              <h2>{server.name}</h2>
+              <h2>{server.name} {unsavedBadge(state, t)}</h2>
               <p><code>{serverAddress(server)}</code></p>
               <McpProbeStatus status={mcpStatusOf(config.data, server.name)} />
               <dl className="compact-stats">
@@ -303,14 +368,17 @@ export function DeviceListPage(): ReactNode {
                 </button>
                 <button
                   className="danger-link"
-                  aria-label={t('mcp.deleteNamed', { name: server.name, defaultValue: '删除 {{name}}' })}
+                  aria-label={deleteLabel(state, server.name, t)}
                   onClick={() => updateDraft(servers.filter((item) => item.name !== server.name))}
                 >
-                  {t('common.delete', { defaultValue: '删除' })}
+                  {state === 'new'
+                    ? t('mcp.discardDraft', { defaultValue: '丢弃草稿' })
+                    : t('common.delete', { defaultValue: '删除' })}
                 </button>
               </div>
             </article>
-          ))}
+            )
+          })}
         </div>
         {config.isPending ? <p className="empty-state">{t('devices.loading', { defaultValue: '加载中…' })}</p> : null}
         {!config.isPending && !servers.length ? <p className="empty-state">{t('devices.empty', { defaultValue: '还没有配置 MCP 服务。' })}</p> : null}
@@ -370,6 +438,11 @@ export function DeviceMcpPage(): ReactNode {
   const [editing, setEditing] = useState<McpEditing | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
   const servers = draft?.servers ?? mcpServersOf(config.data)
+  // 与 DeviceListPage 同一个口径：草稿与服务端真存的那份分开算。
+  const savedServers = mcpServersOf(config.data)
+  const hasDraft = draft !== null
+  const stateOf = (server: McpServerConfig): McpRowState => mcpRowState(server, savedServers, hasDraft)
+  const unsavedCount = countUnsaved(servers, savedServers, hasDraft)
 
   const save = useMutation({
     mutationFn: (current: McpDraft) => saveMcpServers(current.servers),
@@ -422,11 +495,16 @@ export function DeviceMcpPage(): ReactNode {
       />
       <ErrorNotice error={config.error ?? save.error} />
       <div className="settings-stack">
+        {draftBanner(unsavedCount, t)}
         <McpLinkStatus body={config.data} route={MCP_ROUTE} />
-        {servers.map((server) => (
+        {servers.map((server) => {
+          const state = stateOf(server)
+          return (
           <Card
             key={server.name}
-            title={server.name}
+            testId="mcp-card"
+            rowState={state}
+            title={<>{server.name} {unsavedBadge(state, t)}</>}
             description={server.transport}
             actions={(
               <>
@@ -441,9 +519,12 @@ export function DeviceMcpPage(): ReactNode {
                 </button>
                 <button
                   className="danger-link"
+                  aria-label={deleteLabel(state, server.name, t)}
                   onClick={() => setDraft({ servers: servers.filter((item) => item.name !== server.name) })}
                 >
-                  {t('common.delete', { defaultValue: '删除' })}
+                  {state === 'new'
+                    ? t('mcp.discardDraft', { defaultValue: '丢弃草稿' })
+                    : t('common.delete', { defaultValue: '删除' })}
                 </button>
               </>
             )}
@@ -453,7 +534,8 @@ export function DeviceMcpPage(): ReactNode {
               <span>{formatCapabilityMode(server.enabled_capabilities, t)}</span>
             </div>
           </Card>
-        ))}
+          )
+        })}
         <Card
           title={t('mcp.addOrReplace', { defaultValue: '添加或替换 MCP 服务' })}
           description={t('mcp.replaceHelp', { defaultValue: '改动先落在草稿里，确认后再保存。' })}
