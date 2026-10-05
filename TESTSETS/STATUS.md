@@ -69,6 +69,65 @@
 | SkillsBench | 50 | 0 | 0 | 0 | 50 |
 | **合计** | **100** | **0** | **0** | **0** | **100** |
 
+**进度仍是 0/100，一条都没标跑过。** 下面「这一轮验到了什么」记的是**链路本身**
+的验证结果，不是那 100 条里任何一条的完成情况 —— 不要拿它当进度。
+
+## 这一轮验到了什么（2026-10-06，真机、真子进程、非 mock）
+
+用 `.wsl-run-browser.sh` 起了一套**独立的临时实例**（库在
+`/tmp/quill-browser-round/quill.db`，不碰仓库里那份；令牌 `dev-token` → 用户
+`@alice`），对着它把两条链路各走通一遍：
+
+**MCP 那条**（`quill-mcp-stub` 是一个真的会说话的 stdio 子进程）：
+1. `POST /api/extensions/mcp` 配一台服务器 → 服务端真的 `initialize` + `tools/list`
+2. 回包 `connected=true  probed=1  mounted_count=3`，且
+   `server_declares_tools=true  protocol=2025-06-18  server_info=quill-test-stub 1.0.0`
+3. 挂载名 ↔ 原名一一对应：`notes__read-note ← read-note`（另两个同理）
+4. 发一条消息 → **模型真的调了** `notes__read-note`，参数
+   `{"path": "a.md"}`，返回 `stub 执行了 read-note，收到参数 {"path":"a.md"}`
+   —— 参数真的过了线（stub 是回显参数的，所以这是**观察到的**，不是「没报错」推断的）
+5. 模型据工具结果给出了正文：`笔记 a.md 的内容是："stub 执行了 read-note…"`
+6. 该条消息真的存进了库（`role=assistant`，正文非空）
+
+**SKILL 那条**（用真实的 benchmark 技能 `TESTSETS/skills/text-parser.md`，
+SkillsBench v1.1 / Apache-2.0，916 字节）：
+1. 导入后 `GET /api/extensions/skills` 报 `model_can_see=true`、`content_chars=916`
+2. 发一条消息 → **模型真的调了** `text-parser` 工具，参数带上了原文
+3. 模型按这套方法给出了正确的键值对结果
+
+**浏览器那条**：`navigate` + `inspect` 都通了（quill 界面打开、登录页读到了），
+**卡在登录**：运行时把登录表单判为「需要用户接管」，不许我自己填任何账号/令牌，
+已就此向你提问。**登录之后浏览器回归才算真正走通。**
+
+## 100 条为什么在这里跑不完（实测，不是猜测）
+
+数清楚了，两段各有各的硬缺口：
+
+- **MCP-Atlas 50 条**：`required_tools` 指向 **22 台**服务器
+  （github 96 次、mongodb 51、filesystem 47、git 44、airtable 42、notion 26、
+  slack 20、twelvedata 19、whois 18、oxylabs 18、wikipedia 18、pubmed 16、
+  weather 12、context7 12、fetch 9、calculator 9、alchemy 9 …）。
+  仓库里**既没有这些服务器的程序，也没有它们的连接配置与凭据**：
+  `_raw/mcp-atlas-*.json` 每一行只有 `TASK / ENABLED_TOOLS / PROMPT /
+  GTFA_CLAIMS / TRAJECTORY` 五个字段，**没有 command、没有 url、没有 env、
+  没有 token**。而任务本身是**复合**的 —— 比如第 1 条要 airtable + github +
+  fetch + git + calculator + filesystem 一起，缺任何一台都答不出
+  `expected_claims`。
+- **SkillsBench 50 条**：`required_tools` **一条外部服务器工具都不需要**
+  （数过了：50/50 全是空的），技能正文也齐（`TESTSETS/skills/` 120 份真件）。
+  **但任务的输入夹具不在仓库里**：每个任务的 prompt 都指向
+  `/root/input/input.pdf`、`/root/scan_data.stl` 之类的文件，而
+  `_raw/skillsbench/*/environment/` 下**只有 `skills/`，没有任何输入数据**。
+  例如 `sb-edit-pdf` 要的 `/root/input/input.pdf` 与 `input.txt` 都不存在。
+
+**结论**：按字面「100 条全部跑完」这个完成条件，在当前环境里**做不到** ——
+缺的是外部凭据与基准夹具，不是代码。**不要**用 stub 服务器冒充 Airtable 去把
+MCP-Atlas 那 50 条标成跑过 —— 那正是本项目最不能出的错。
+按 `README.md` 自己写的边界（「用它们当真实用户场景去打 quill 的界面与对话链路」，
+「找的是 quill 自己的问题，不是刷 MCP-Atlas 的分数」），这 100 条的**prompt**
+仍然完全可用：拿来压界面与对话链路、找契约漂移/状态不一致/错误吞掉/隔离失效。
+**这个用法不需要那 36 台服务器。** 下一步该走哪条，需要你定（见「下一件事」）。
+
 ## 判定口径
 
 每条任务记三件事，**不要混为一谈**：
@@ -86,24 +145,57 @@
 
 ## 下一件事
 
-按 `README.md` 的边界，SKILL 接进 `ToolRegistry`（**已完成**）、铺 `rmcp`
-（**已完成**）、`with_mcp_tools` + `tools/call`（**已完成**）—— 三步都走完了，
-**可以开始跑这 100 条**了。顺序反过来的话，测出来的全是「功能还没做」，
-而不是真 bug。
+**需要你定的一件事：那 100 条按哪种口径算「跑过」。**
 
-跑之前要知道的三件事：
+三步接线（SKILL → `ToolRegistry`、`rmcp`、`with_mcp_tools` + `tools/call`）已全部完成并
+在真机上验通，所以「已打通 → 开始跑任务」这个条件是满足的。但按字面「100 条全部跑完、
+进度到 100/100」在当前环境里做不到（缺口见上一节：外部凭据与基准夹具都不在仓库里）。
 
-1. **浏览器那条路还没走过一次。** 之前几轮每轮开新对话、没在第一条 skill 调用里
-   执行 `skill(name="browser-use:control-in-app-browser")`，于是 Browser 一次都没
-   操作成。**跑之前先在对话的第一条 skill 调用里加载它**，否则任何 Browser 调用
-   都会直接返回 `SKILL_REQUIRED`。
-2. **界面与服务端都要起。** 后端 `cargo run -p quill-server`，前端 `ui/web` 下
-   `npm run dev`（`vite.config.ts` 把 `/api` 代理到 `QUILL_BACKEND`，默认
-   `http://127.0.0.1:18777`）。**WSL 里没有 node，前端只能在 Windows 侧起。**
+请从下面三条里挑一条：
+
+1. **按 README 自己写的边界跑**（推荐）：拿这 100 条的 **prompt** 当真实用户场景，
+   压界面与对话链路，找 **quill 自己的**问题（契约漂移、状态显示不一致、错误吞掉、
+   隔离失效）。**不需要那 36 台服务器**，也不需要基准夹具 ——
+   缺工具时如实记「这条依赖的服务器没配，工具类断言无法判定，但链路本身验了」。
+   这种口径下 100 条都能跑完。
+2. **只跑 SkillsBench 那 50 条**：同样缺输入夹具，但**至少技能正文齐**，
+   可以先只验「SKILL 有没有挂上、模型有没有调」这一层，答案正确性不判。跑完是 50/100。
+3. **先补齐外部依赖**：你提供 Airtable / GitHub / Notion / Slack / Twelvedata 等
+   凭据，以及 SkillsBench 的输入夹具文件，我再按字面口径跑满 100 条。
+   在这之前进度只能停在 0/100。
+
+**不要**用 `quill-mcp-stub` 之类冒充 Airtable 去把 MCP-Atlas 那 50 条标成跑过 ——
+界面显示「模型调得到」而实际调的是一个只会回显的子进程，那正是本项目最不能出的错。
+
+**另外：README 里那个「主要路子」的 `runner.py` 并不存在。** 上面三条不管选哪条，
+逐条驱动都得现写（`README.md` 写「`runner.py` 驱动 MCP 工具面板逐条发任务」，
+而 `TESTSETS/` 下只有 `build_tasks.py`）。见 ISSUE-017。
+2026-10-06 那几轮验证用的脚本（起服务、两条端到端、数依赖）是本机临时脚本，
+**被 `.gitignore` 的 `/.wsl-*.sh` 规则挡在仓库外**，所以别指望 clone 下来就有 ——
+需要的话照着 STATUS.md 里记的步骤重写，或者干脆把那几条固化成一个正经的
+`TESTSETS/runner.py`（那本来就该是 README 说的那个东西）。
+
+### 跑之前要知道的三件事（2026-10-06 实测更新）
+
+1. **浏览器那条路走到登录页为止。** `navigate` 与 `inspect` 都通了，
+   但登录表单被运行时判为「需要用户接管」，我不能自己填。**你登录之后**，
+   浏览器回归才算走通；或者你授权我用那个 `dev-token`。
+2. **界面与服务端怎么起**（`.wsl-run-browser.sh` 已经把这套踩过的坑都填上了）：
+   - 前端**不需要**单独起：`quill-server` 直接托管 `ui/web/dist`，
+     先 `npm run build` 即可（`vite.config.ts` 那套 dev proxy 只在 `npm run dev` 时用）。
+   - **`QUILL_LLM_BASE_URL` 别用 `127.0.0.1`。** 4B 模型跑在 Windows 上、
+     quill-server 跑在 WSL 里时，WSL 的 `127.0.0.1` 不是 Windows 的那个，
+     会得到「连接被拒绝，目标端口上没有进程在听」。用
+     `ip route show default | awk '{print $3}'` 取网关地址。**这个地址随 WSL 重启变**。
+   - **改完 `QUILL_LLM_BASE_URL` 必须删掉临时库重启。** 首次启动会把 provider
+     配置**写进库**，之后环境变量就不再生效 —— 不删库的话，新进程日志里看着是新地址，
+     `/healthz` 报出来的却还是库里那个旧的。见 ISSUE-016。
+   - **停服务要连子进程一起停。** `task_stop` 停的是 `cargo`，`quill-server`
+     子进程还活着并占着 8848；不 `pkill -f target/debug/quill-server` 的话，
+     下一次启动「看起来成功」，但 8848 上回答的还是那个旧进程。
 3. **判「链路是否通」时先看工具表。** MCP 与 SKILL 现在都真的挂进对话工具表了，
-   所以一条任务失败时，先分清是「工具没挂上」还是「挂上了但模型没调/调错」。
-   设备页与 `GET /api/extensions/{mcp,skills}` 都会如实报
-   `mounted` / `model_can_see`，**不要**从 `servers.length` 或 `tool_count` 推断。
+   设备页与 `GET /api/extensions/{mcp,skills}` 会如实报 `mounted` / `model_can_see`，
+   **不要**从 `servers.length` 或 `tool_count` 推断。
 
 ### 已知代价（不是 bug，但会感觉到）
 
@@ -111,4 +203,4 @@
 每次对话都真的握手，不缓存工具列表）。本地 stdio 服务器通常是几十到几百毫秒，
 但一台慢启动的会给每条消息加上它的启动时间。真到扛不住时再上带 TTL 的缓存，
 **并且界面上要显示缓存年龄** —— 否则「界面上说挂了几个」又会与模型实际拿到的不一致，
-那正是这轮刚修掉的那类谎。
+那正是 ISSUE-014 那一类谎。

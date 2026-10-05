@@ -376,45 +376,6 @@
 
 ---
 
-## ISSUE-015 · `tools/call` 的失败原因不带「下一步」，用户在界面上无从动手
-
-**状态**：已修（2026-10-06，写 `with_mcp_tools` 时被新写的测试当场抓住）
-
-- **严重度**：严重（违反红线「面向用户的文案全简体中文；错误必须带『下一步：…』」）
-- **现象**（实测，不是推演）：写完 `tools/call` 之后加了一条
-  「服务器在 `tools/call` 时退出不许报成功」的测试，断言里顺手要求错误带「下一步」，
-  当场红了：
-  ```
-  ---- a_server_that_dies_on_tools_call_is_not_reported_as_success stdout ----
-  面向用户的错误必须带「下一步」：tools/call 失败：Transport closed
-
-  服务器 stderr 末尾：
-  stub: 握手来自 "quill"
-  stub: 按要求在 tools/call 时退出
-  ```
-  也就是说：`Transport closed` 这句话会被**原样回灌给模型**（工具结果的 `Err`
-  文本进上下文），也会经 `note`/`error` 进界面。模型看到它无从判断该重试还是放弃，
-  用户看到它更无从判断该查什么。
-- **根因**：`invoke` 里的错误是照着 `handshake` 的既有写法写的
-  （`format!("tools/call 失败：{e}")`），而那套写法本来就没带「下一步」——
-  这条红线在协议层那一轮（`probe`）就没有被完整执行。加断言才把它暴露出来。
-- **已修**：
-  - `invoke` 的 `tools/call` 失败分支补上「下一步」，并说明
-    **不替它猜原因**（`Transport closed` 不区分「服务器崩了 / 管道断了 /
-    它自己关了 stdio」，三者回的都是这一句），只把「怎么查」说清楚 + 附上
-    服务器自己的 stderr。
-  - `invoke` 的 `initialize` 失败分支同样补上「下一步」。
-  - `call_tool` 的「这台服务器这一轮没发起过连接」分支补上「下一步」
-    （原来直接拼 `not_probed_reason` 的原文，而「已停用」那句本身没有「下一步」）。
-- **回归**：
-  - `mcp_stdio_protocol::a_server_that_dies_on_tools_call_is_not_reported_as_success`
-    —— 断言 `err.contains("下一步")`。这条断言是**修完之后**才绿的；
-    修之前它是红的，红的原因就是本条 ISSUE。
-  - `mcp_stdio_protocol::a_server_that_self_reports_no_tools_capability_reports_zero_not_its_list`
-    与 `..._declares_none_is_refused_with_a_next_step` 也都断言了「下一步」。
-
----
-
 ## ISSUE-014 · 服务器自报「我没有 tools 能力」，界面仍算它有 3 个工具
 
 **状态**：已修（2026-10-06，接 `with_mcp_tools` 时一并修掉）
@@ -483,3 +444,92 @@
 
 跑 100 条任务时新发现的问题往这里追加，编号接着往下排。
 **不要**把新问题混进上面已修的条目里 —— 它们的回归测试不同。
+## ISSUE-015 · `tools/call` 的失败原因不带「下一步」，用户在界面上无从动手
+
+**状态**：已修（2026-10-06，写 `with_mcp_tools` 时被新写的测试当场抓住）
+
+- **严重度**：严重（违反红线「面向用户的文案全简体中文；错误必须带『下一步：…』」）
+- **现象**（实测，不是推演）：写完 `tools/call` 之后加了一条
+  「服务器在 `tools/call` 时退出不许报成功」的测试，断言里顺手要求错误带「下一步」，
+  当场红了：
+  ```
+  ---- a_server_that_dies_on_tools_call_is_not_reported_as_success stdout ----
+  面向用户的错误必须带「下一步」：tools/call 失败：Transport closed
+
+  服务器 stderr 末尾：
+  stub: 握手来自 "quill"
+  stub: 按要求在 tools/call 时退出
+  ```
+  也就是说：`Transport closed` 这句话会被**原样回灌给模型**（工具结果的 `Err`
+  文本进上下文），也会经 `note`/`error` 进界面。模型看到它无从判断该重试还是放弃，
+  用户看到它更无从判断该查什么。
+- **根因**：`invoke` 里的错误是照着 `handshake` 的既有写法写的
+  （`format!("tools/call 失败：{e}")`），而那套写法本来就没带「下一步」——
+  这条红线在协议层那一轮（`probe`）就没有被完整执行。加断言才把它暴露出来。
+- **已修**：
+  - `invoke` 的 `tools/call` 失败分支补上「下一步」，并说明
+    **不替它猜原因**（`Transport closed` 不区分「服务器崩了 / 管道断了 /
+    它自己关了 stdio」，三者回的都是这一句），只把「怎么查」说清楚 + 附上
+    服务器自己的 stderr。
+  - `invoke` 的 `initialize` 失败分支同样补上「下一步」。
+  - `call_tool` 的「这台服务器这一轮没发起过连接」分支补上「下一步」
+    （原来直接拼 `not_probed_reason` 的原文，而「已停用」那句本身没有「下一步」）。
+- **回归**：
+  - `mcp_stdio_protocol::a_server_that_dies_on_tools_call_is_not_reported_as_success`
+    —— 断言 `err.contains("下一步")`。这条断言是**修完之后**才绿的；
+    修之前它是红的，红的原因就是本条 ISSUE。
+  - `mcp_stdio_protocol::a_server_that_self_reports_no_tools_capability_reports_zero_not_its_list`
+    与 `..._declares_none_is_refused_with_a_next_step` 也都断言了「下一步」。
+
+---
+
+## ISSUE-016 · `/healthz` 报 `llm.configured: true`，而模型端点其实连不上
+
+**状态**：待修（2026-10-06 第一次真机起服务时实测发现）
+
+- **严重度**：中等（不是说谎，但很容易被读成「模型能用」）
+- **现象**（实测，不是推演）：quill-server 跑在 WSL 里，4B 模型跑在 Windows 上，
+  而 `llm::DEFAULT_BASE_URL` 是 `http://127.0.0.1:18080/v1`。WSL 的 `127.0.0.1`
+  不是 Windows 的 `127.0.0.1`，于是：
+  ```
+  GET /healthz  →  "llm": { "base_url": "http://127.0.0.1:18080/v1",
+                            "configured": true, ... }      "status": "ok"
+  POST …/messages →  503 provider_unavailable
+                    「连不上 LLM 服务 …/chat/completions：连接被拒绝，
+                      目标端口上没有进程在听」
+  ```
+  也就是说 `configured: true` 只表示**配置项填了**，不表示**端点活着**。
+  照字面读会以为模型是通的，真正报错要等到发第一条消息。
+- **根因**：`LlmConfig` 只校验「有没有填」，没有任何一步去探活。
+  这个字段名本身没说清自己只是「已配置」。
+- **注意（这一条是好的，别改坏）**：那条 503 的错误信封是**合格**的 ——
+  如实说了「连接被拒绝」、给了最可能的原因（llama-server 没起）、
+  给了可复制的 `curl`，并且 `next_step` 单独成段。红线「错误必须带下一步」
+  在这条路径上是满足的，**不要**为了修这条 ISSUE 去动它的措辞。
+- **修复方向（未定）**：`/healthz` 里加一个**实测**的可达性字段
+  （比如 `llm.reachable` 与 `llm.probe_error`），或者把 `configured`
+  改名成不让人误读的名字。**不要**把探活做成阻塞式的 ——
+  `/healthz` 会被前端轮询，一次几十秒的探活会把页面拖死。
+- **回归**：无（尚未修）。修的时候必须有一条「端点不可达时 `healthz` 如实说不可达」
+  的测试，且要真的去连一个不存在的端口，不能拿 `configured` 冒充探活结果。
+
+## ISSUE-017 · README 的「怎么跑」指向 `runner.py`，而那个文件不存在
+
+**状态**：待修（2026-10-06 第一次真要跑那 100 条时发现）
+
+- **严重度**：低（文档问题，但挡着唯一的「主要路子」）
+- **现象**：`TESTSETS/README.md` 的「怎么跑」写的是
+  「**浏览器模拟真实用户**（主要路子）：`runner.py` 驱动 MCP 工具面板逐条发任务」，
+  而 `TESTSETS/` 下只有 `build_tasks.py`，**没有 `runner.py`**
+  （`Test-Path TESTSETS/runner.py` → False）。
+- **为什么值得记**：那 100 条的**主要**跑法就是它。它不存在，意味着
+  「按 README 跑」这条路从一开始就是断的 —— 而 README 读起来像是跑得通的。
+  这与 ISSUE-003/005/012 是同一类病：**界面/文档替后端说了一件没发生的事**。
+- **修复方向（未定）**：要么把 `runner.py` 写出来，要么把 README 改成
+  说清「目前只能手工逐条跑」。**不许**留着一个指向不存在文件的「主要路子」——
+  那比明说「还没做」更坏，因为它让人以为只是没找到。
+- **回归**：无（文档没有自动测试）。加一条检查：README 里提到的每个
+  `路径/文件` 都必须真实存在。
+
+---
+
