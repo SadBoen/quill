@@ -27,13 +27,47 @@
 - **prefill 那一列不作数**：预热调用把同样的提示词灌进 KV 缓存了，第二次
   `timings.prompt_n` 只剩 4，量的是缓存命中不是真实预填。要比 prefill 得换
   每次都不同的提示词。**别拿这列下结论。**
-- **结论：维持纯 CPU，不要开 Vulkan，也不要换 LM Studio。**
-  780M 是核显，4B Q4 这种小模型 decode 阶段吃不过 DDR5 内存带宽，
-  再叠加 Vulkan 的调度开销。换 LM Studio 换的是同一套 llama.cpp 底座，
-  不开 GPU 卸载一样是纯 CPU —— **换不掉这个问题**。
+- **结论：维持纯 CPU，不要开 Vulkan。** 780M 是核显，4B Q4 这种小模型 decode 阶段
+  吃不过 DDR5 内存带宽，再叠加 Vulkan 的调度开销。
 - 复现脚本：`.start-vulkan.ps1`（起对照实例）、`.bench-llm.ps1`（两边对打）。
   **注意**：这两个是 `.ps1`，必须**纯 ASCII**——Windows PowerShell 5.1 会把无 BOM 的
   UTF-8 按 ANSI 读，中文注释会把换行吃掉、直接语法报错。
+
+## 本机 LLM 环境已归集（2026-10-06）
+
+- **统一到 LM Studio。** CLI 在 `%USERPROFILE%\.lmstudio\bin\lms.exe`（CLI commit
+  07b7252），子命令含 `load / unload / ls / ps / import / server / get / runtime`。
+  顶层的 `C:\Users\Boen\AppData\Local\Programs\LM Studio\resources\app\.webpack\lms.exe`
+  那个不要用 —— 认准 `%USERPROFILE%\.lmstudio\bin\lms.exe`。
+- **模型目录已经就是 `D:\97_LLM_Models`**（LM Studio 自己的配置，不是我们猜的）。
+  它按 `<user>/<repo>/` 组织，**不是**平铺在根目录。两个模型已按结构就位：
+  `D:\97_LLM_Models\local\minicpm5-1b\MiniCPM5-1B-Q8_0.gguf`（1.15 GB）
+  `D:\97_LLM_Models\local\qwen35-4b\Qwen3.5-4B-Q4_K_M.gguf`（2.74 GB）
+  原来散在 `D:\00_ProgramFiles\llama-b10068\models\`，已用 `Move-Item` 移走（不是复制，
+  没有双份占盘）。`lms ls` 认得到：`minicpm5-1b  1B  Llama  1.15 GB`、
+  `qwen35-4b  4B  qwen35  2.74 GB`。
+- LM Studio 自带 `llama.cpp-win-x86_64-vulkan-avx2` 后端，`lms load --gpu` 支持
+  `off` / `max` / `0~1` 的卸载比例，**默认自动决定卸载比例**。
+- LM Studio 起服务的两条命令（起完 quill 的 provider 不用改配置，端口对齐即可）：
+  ```powershell
+  lms load minicpm5-1b --gpu off -c 8192 --parallel 1 -y   # 加载 2.59 秒
+  lms server start --port 18080
+  ```
+
+### 模型选型实测（同一条提示词，都预热两次再计时，纯 CPU）
+
+| | 入 tok | 出 tok | 墙钟 ms | 解码 tok/s |
+|---|---|---|---|---|
+| Qwen3.5-4B（llama.cpp） | 29 | 372 | 23190 | 16.04 |
+| MiniCPM5-1B（LM Studio） | 26 | 400 | 8342 | **47.95** |
+
+长提示词（1418 字真实 BGP 任务）：4B 端到端 6399 ms，1B 4434 ms。
+
+**1B 快约 3 倍**（解码），长提示词快约 1.4 倍。代价是能力明显更弱 ——
+**小模型答不上来不算 bug**（见 `README.md` 判定边界）。
+
+**测 prefill 的坑**：拿同一条提示词先预热再计时，第二次 `timings.prompt_n` 只剩 4
+（KV 缓存命中），量出来的是缓存不是预填。要比 prefill 必须每次换不同提示词。
 
 ## 前置条件（不满足就别开始跑）
 
