@@ -178,6 +178,18 @@
 - **修复**：**未修**。SKILL 目前只是「一套方法」不真的调工具，所以暂时不构成安全问题；
   但 b 线把 MCP 工具接进来之后，这就是一个**用户以为有限制、实际没有**的字段 ——
   与本项目「不许显示成接上了」的原则冲突。**b 线开始前必须处理。**
+- **2026-10-06 补充（读执行路径后的新发现，原文的修复方向可能是错的）**：
+  这条**没有消费方，不只是「忘了接」**。SKILL 在本项目里是
+  `as_tool_spec` 把正文塞进工具描述 + `skill_handler` 只回一句「已加载这套方法」，
+  也就是说 **SKILL 根本不执行工具调用**。而 `api_chat` 的工具循环是扁平的
+  （`while !reply.tool_calls.is_empty()`，上限 `MAX_TOOL_ROUNDS`），
+  **没有任何「当前是哪个技能在驱动这一轮」的归因**。所以「这个技能只能调 A、B」
+  在今天的架构里**没有可以落地的执行点**。
+  据此建议：要么先给工具循环补一层 per-turn 作用域再谈执行（b 线之后的事），
+  要么就承认这个字段是**存着但不生效**，在 `GET /api/extensions/skills` 上如实报
+  「`tool_allowlist` 尚未生效」—— 照 ISSUE-014 那条「别让界面替后端说谎」的口径处理。
+  **不要**在没想清楚语义之前把它悄悄改成会话级工具表裁剪：那会把「这个技能只能用 X」
+  变成「只要装了这个技能，整个会话都只能用 X」，是另一种骗人。
 - **回归**：无（尚未修）。
 - **状态**：待修
 
@@ -250,6 +262,154 @@
      顶部写清「这 N 条还没写入服务器」。
   3. 无论选哪个，都要有一条测试钉住：**界面渲染出的卡片数 == 服务端返回的条数**，
      草稿单独计数，不许混算。
+- **回归**：无（尚未修）。
+
+---
+
+## ISSUE-011 · 「能力全开」被当成「一个能力都没列」，工具数永远是 0
+
+**状态**：已修（2026-10-06，b 线铺 MCP 协议层时由端到端测试抓到）
+
+- **现象**：一台 stdio MCP 服务器**真的握手成功了**（界面显示已连上、协议版本
+  与实现名都对），但工具数是 **0**。用户看到的是「连上了，可是没工具」，
+  于是去检查自己装的东西、去看服务器文档 —— 而服务器明明报了三个工具。
+- **严重度**：严重
+- **根因**：`mcp_client::tools_capability_on` 写成
+  `row.enabled_capabilities.iter().any(|c| c == "tools")`，
+  把三态压成了「列表里有没有 tools」。`mcp_repo` 定义的语义是三态：
+  `None` = 全禁、**`Some(vec![])` = 全开**、`Some(v)` = 精确列举。
+  空数组的 `any` 恒为 `false`，于是**全开被判成全禁**。
+  而默认配置（`enabled_capabilities: []`，即界面上的「全部」选项）正好落在这一态，
+  所以每台按默认配的服务器都会中招。
+- **复现**：
+  1. 存一台 stdio 服务器，`enabled_capabilities: []`（全开）。
+  2. `GET /api/extensions/mcp` —— `connected: true`、`protocol_version: 2025-06-18`、
+     `server_info` 齐全。
+  3. 同一行的 `tool_count` 是 **0**，而 `tools/list` 真的返回了 3 个。
+- **修复**：`tools_capability_on` 显式分叉空与非空：
+  `None => false` / `Some(v) if v.is_empty() => true` / 其余按名字匹配（大小写不敏感）。
+  注释里写明「空数组在这里是『没有例外』，不是『一个都没给』」。
+  **为什么不用 `v.is_empty() || v.any(...)` 一句写完**：三态是这个模块的核心口径，
+  合并成一行之后下一次有人「顺手简化」就会把这条守卫弄丢，而这正是本次出错的形状。
+- **回归**：
+  - `mcp_client::tests::the_capability_gate_keeps_all_three_states_apart`（三态逐态断言）
+  - `mcp_stdio_protocol::a_real_stdio_server_..._reports_its_tools`（真握手后 `tool_count == 3`）
+  - `mcp_stdio_protocol::the_capability_gate_zeroes_the_tool_count_without_faking_a_connection`
+    （`connected` 仍为 true 而 `tool_count` 为 0 —— 两件事必须分开报）
+
+---
+
+## ISSUE-012 · 协议层接好之后，前端把「已经接好」说成「还没接」
+
+**状态**：已修（2026-10-06，b 线铺 MCP 协议层时发现）
+
+- **现象**：`devices/api.ts` 里 `connected` 的注释写着
+  「协议层（rmcp）还没接，所以现在恒为 `false`。**不要**拿它当装饰」；
+  `capabilityGaps.ts` 里 MCP 那一条的 `detail` 写着
+  「配置能存能读；协议层（rmcp）未接，tools/list 还拿不到」。
+  协议层铺好之后，这两处都成了**假话** —— 界面会告诉用户「一条工具都拿不到」，
+  而实际上 `tools/list` 真的拿到了。
+- **严重度**：严重（与 ISSUE-009 同一类：界面替后端说谎）
+- **根因**：`capabilityGaps.ts` 自己写着「改后端路由或挂接逻辑时必须同步改这里」，
+  但没有任何机制强制执行 —— 这次的旧文案是被**前端测试**挡下来的
+  （`capabilityGaps.test.ts` 断言 detail 必须提到「协议层」，
+  `LibraryTab.test.tsx` 断言渲染出的文案），
+  它们本来是防「谎报已接通」的护栏，协议层一落地反而变成了「谎报没接通」的固化器。
+- **复现**：
+  1. 铺好 rmcp 协议层，`GET /api/extensions/mcp` 返回 `connected: true`、`tool_count: 3`。
+  2. 打开「专家库 → 人格原文提到的能力」，MCP 那一条仍写
+     「配置能存能读；协议层（rmcp）未接，tools/list 还拿不到」。
+- **修复**：
+  1. `capabilityGaps.ts` 的 MCP `detail` 改成实话：
+     「stdio 服务器真的握手并 tools/list 了；这些工具还没挂进对话的工具表」。
+     缺的**换成了下一环**，不是协议层。
+  2. `devices/api.ts` 的 `connected` 注释改成现在的语义（真值，且一台都没探测时为 false），
+     并新增 `status` / `probed` / `connected_count` / `failed_count` 四个字段。
+  3. 界面按 `probed` 把「没查过」与「查了没通」分开显示 —— 这两种的下一步完全不同。
+  4. **反向断言也一起改**：`capabilityGaps.test.ts` 那条原本钉「必须说缺协议层」的断言
+     改成「必须说缺挂进工具表这一步」，并**新增**一条断言
+     `not.toMatch(/协议层（未接|没接|还没）/)` —— 护栏方向要能双向用，
+     否则下一次落地新环节时又会被旧断言挡成假话。
+- **回归**：`ui/web` 全量 62 passed / 0 failed（其中 `capabilityGaps.test.ts` 6 条、
+  `LibraryTab.test.tsx` 6 条）；`i18n-check` 0 问题；`typecheck` 干净。
+
+---
+
+## ISSUE-013 · 门禁的 `failed` 从写出来那天起就恒等于 0
+
+**状态**：已修已回归（2026-10-06）
+
+- **现象**：`.wsl-verify-persona.sh` 打印 `TOTAL passed=N failed=0`，
+  而同一次运行里 `cargo` 明确报了 `error: test failed, to rerun pass -p quill-server --lib`。
+  实测一次：脚本说 `passed=939 failed=0`，实际有 1 个用例红了。
+- **严重度**：阻断（对**纪律**而言）。cron 的硬要求是「全量门禁 0 failed 才算这一步做完」，
+  而这个检查**物理上不可能报出任何非零失败数** —— 它一直在给每一次红灯开绿灯。
+- **根因**（三个，逐层）：
+  1. `awk -F'[ ;]' '{p+=$4; f+=$6}'` 数失败。`-F'[ ;]'` 把 `; ` 当成**两个**分隔符，
+     中间多出一个空字段，所以 `test result: FAILED. 151 passed; 7 failed;` 的字段是
+     `$4=151 $5=passed $6= $7=7` —— 失败数在 **`$7`**，脚本读的是 `$6`（恒为空），
+     `f += ""` 恒为 0。**这不是「某些情况漏报」，是恒等为零。**
+  2. 整套测试**跑两遍**（一遍求和、一遍抓失败）。两遍之间代码可能已经变了，
+     于是脚本能自己跟自己打架：头一遍 `failed=0`，第二遍 `error: test failed`。
+  3. 中途 bail 时（某个测试目标红了，cargo 停住不跑其余目标），
+     它照样把「只跑到一半」的条数印成一个笃定的 `TOTAL`。
+- **复现**：`echo 'test result: FAILED. 151 passed; 7 failed; ...' | awk -F'[ ;]' '{p+=$4; f+=$6}'`
+  → `passed=151 failed=0`。
+- **修复**：
+  1. 解析改成**按标签找它前面那个数**，不认字段位置（空字段从此不再是问题）。
+  2. 只跑一遍，输出、退出码、数字全部来自**同一次运行**；加 `--no-fail-fast`，
+     一个目标红了也把其余跑完，否则总数永远是「跑到一半的数」。
+  3. 以 cargo 的**退出码**为准；退出码非 0 却一个失败都没数到时，
+     判「运行不完整」并退出 1，**不许**把那个不完整的数字当通过率印出去。
+- **回归**：`.scripts/gate-selftest.sh`（入库），四个场景（全过 / 真红 / 中途 bail 0 失败 / 连
+  `test result` 都没打出来）结论全对，且场景 2 额外钉住**数字本身**
+  （`failed=1` 必须被数出来，不能只是碰巧判了失败）。
+  **反向验证**：把判定换回旧写法后自测变红（已复现并撤回）——
+  旧写法下场景 2 报 `passed=302 failed=0`。
+- **附带发现**：门禁脚本 `.wsl-verify-persona.sh` **根本不在版本库里** ——
+  `.gitignore` 第 69 行把 `/.wsl-*.sh` 归为「本地临时验证脚本」。
+  也就是说，把关全项目「0 failed」纪律的那道检查，**从未被第二个人看过一眼**，
+  上面那个恒等于 0 的解析就是这么活下来的。门禁按约定留在本地没问题，
+  但「它必须怎么判」得入库，所以自测放进了 `.scripts/`。
+- **注意**：本条修的是**门禁自己**，不是产品代码。修好之后 b 线那次真实门禁
+  立刻报出 `passed=939 failed=1`（隔壁会话正在改 `mcp_client.rs` 造成的瞬时红）。
+
+---
+
+## ISSUE-014 · 服务器自报「我没有 tools 能力」，界面仍算它有 3 个工具
+
+**状态**：待修（2026-10-06 铺 b 线时实测发现）
+
+- **现象**（两个方向，都会说谎）：
+  1. 一台服务器在 `initialize` 里自报 `capabilities: {}`（**没有 tools**），
+     quill 照样把它的 `tools/list` 结果算成 `tool_count: 3`。
+     界面上会显示「3 个工具可用」，而服务器自己说它一个工具都没提供。
+  2. 反过来更常见：真实的 MCP 服务器**只提供 resources / prompts**，
+     它对 `tools/list` 会回一个 JSON-RPC 错误（`-32601`）。
+     现在的 `probe` 会把这条错误当成连接失败，界面上显示成**红色失败** ——
+     而这台服务器完全正常，它只是没有工具。
+- **严重度**：严重（对用户说谎，且会把人引到错误的排查方向上）
+- **根因**：`mcp_client::probe` 只读**本地配置**的 `row.enabled_capabilities`
+  （`tools_capability_on`），**从不读 `initialize` 结果里服务器自报的能力**。
+  本地开关与服务器自报是两件事，现在只判了前者。
+  注意这与 ISSUE-011 **不是同一条**：011 是本地三态被压扁（`Some([])` 全开被判成全禁），
+  这一条是服务器自报的那一半根本没人看。
+- **复现**（已实测，不是推演）：
+  ```
+  printf '%s\n%s\n' \
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{...}}' \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+    | ./target/debug/quill-mcp-stub --caps-off
+  ```
+  实测输出：initialize 回 `"capabilities":{}`（没有 tools），
+  紧接着 `tools/list` 照样回了 3 个工具。`probe` 只会把这 3 个算进去。
+- **为什么一直没被抓到**：`mcp_stub.rs` 的用法注释里**已经写了 `--caps-off`**，
+  但整个测试套件里**没有任何一条测试用到它** —— 一个没人用的测试夹具，
+  正好盖住了它本该盖住的那个洞。
+- **修复方向**（未定）：`probe` 要把 `ServerPeerInfo.capabilities` 一起纳入判定，
+  并把「服务器没这个能力」与「服务器调用 tools/list 失败」**分成两种不同的报告** ——
+  前者是正常状态（`connected: true`、工具数 0、附一句白话），
+  后者才是失败。修的时候必须给 `--caps-off` 补一条端到端测试。
 - **回归**：无（尚未修）。
 
 ---
