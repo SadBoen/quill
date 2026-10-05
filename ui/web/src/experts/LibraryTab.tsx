@@ -265,7 +265,7 @@ export function LibraryTab(): ReactNode {
                       </p>
                       <p className="experts-lib-gap-hint">
                         {t('experts.libGapHint', {
-                          defaultValue: '人格原文提到了下面这些能力。标「部分接通」的是存储层已经能用、但对话里还调不到；标「未接通」的是路由压根不存在。表单里都没有对应开关——选它们不会有任何效果。',
+                          defaultValue: '人格原文提到了下面这些能力。标「部分接通」的是已经有一部分真的能用、但还缺一块；标「未接通」的是路由压根不存在。表单里都没有对应开关——选它们不会有任何效果。',
                         })}
                       </p>
                       <ul className="experts-lib-gap-list">

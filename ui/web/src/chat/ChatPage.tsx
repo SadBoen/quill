@@ -432,7 +432,7 @@ export function ChatPage(_props: ChatPageProps): ReactNode {
                       </p>
                       <p className="chat-tools-hint">
                         {t('chat.tools.hint', {
-                          defaultValue: 'MCP 与技能包已能存能读，但对话里还调不到；插件与定时任务的路由压根不存在。这里只标出真实状态与路由，不放点了没反应的按钮。',
+                          defaultValue: '技能包已挂进对话的工具表，模型能在对话里调用；MCP 还没接协议层，对话里调不到；插件与定时任务的路由压根不存在。这里只标出真实状态与路由，不放点了没反应的按钮。',
                         })}
                       </p>
                       <ul className="chat-tools-list">

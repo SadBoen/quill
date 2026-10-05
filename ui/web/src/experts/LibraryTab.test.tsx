@@ -121,15 +121,20 @@ it('没做到能用的能力只给路由名，不在表单里放假开关', asyn
 
 it('MCP 与技能包标「部分接通」，不标 501 —— 它们的路由是 200', async () => {
   // 这两条路由真的存在且返回 200（`GET /api/extensions/mcp` /
-  // `GET /api/extensions/skills`），只是对话里还调不到。写成 501 等于
-  // 让用户去「接」一个早就接好的东西，比不说还糟。
+  // `GET /api/extensions/skills`）。写成 501 等于让用户去「接」一个早就接好
+  // 的东西，比不说还糟。技能包这条是 2026-10-06 改的：它已经挂进对话工具表了，
+  // 所以文案必须说「已挂进」，说成「还调不到」就是把能用的说成不能用。
   renderTab([])
   await waitFor(() => expect(within(card()).getByRole('button', { name: '生成专家' })).toBeInTheDocument())
   fireEvent.click(within(card()).getByRole('button', { name: '生成专家' }))
   await waitFor(() => expect(within(card()).getByText('GET /api/extensions/mcp')).toBeInTheDocument())
 
   expect(within(card()).getByText(/部分接通 · 配置能存能读/)).toBeInTheDocument()
-  expect(within(card()).getByText(/部分接通 · 能存能读/)).toBeInTheDocument()
+  expect(
+    within(card()).getByText(/部分接通 · 已挂进对话工具表/),
+    '技能包已挂进工具表，文案不许再写「能存能读」',
+  ).toBeInTheDocument()
+  expect(within(card()).queryByText(/尚未挂进|还调不到/)).toBeNull()
   // 路由压根不存在的那两条才是「未接通」。
   expect(within(card()).getByText('未接通 · 501')).toBeInTheDocument()
   expect(within(card()).getByText('未接通 · 路由未注册')).toBeInTheDocument()

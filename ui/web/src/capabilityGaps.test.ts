@@ -51,9 +51,31 @@ describe('能力缺口表必须与后端路由对齐', () => {
   it('部分接通的每一行都要说清「哪一环没接」，而不只是给个状态词', () => {
     // 「部分接通」四个字本身没用：用户不知道要等协议层还是等工具表。
     // 只写状态码的话，两种情况在界面上长得一模一样。
+    // 措辞允许几种（未接 / 尚未 / 还没有），但必须**指名缺的是哪一环**。
     for (const gap of CAPABILITY_GAPS.filter((item) => item.status === 'partial')) {
-      expect(gap.detail, `${gap.route} 的 detail 没说要接什么`).toMatch(/未接|尚未/)
+      expect(gap.detail, `${gap.route} 的 detail 没说要接什么`).toMatch(/未接|尚未|还没有/)
       expect(gap.detail.length, `${gap.route} 的 detail 太短，说不清差在哪`).toBeGreaterThan(6)
     }
+  })
+
+  it('技能包已经挂进对话工具表了 —— 文案不许再说「尚未挂进」', () => {
+    // `ToolRegistry::with_skills` 已经把启用的 SKILL 挂进对话的工具表
+    // （crates/quill-server/src/tools.rs），每条 SKILL 还能通过
+    // `model_can_see` 告诉界面「模型这次看不看得见」。
+    // 文案停留在旧状态，就是在把已经能用的东西说成不能用 —— 和把没用的
+    // 说成能用一样，是这个项目最不能出的错。
+    const skills = CAPABILITY_GAPS.find((item) => item.route === 'GET /api/extensions/skills')
+    expect(skills).toBeDefined()
+    const detail = skills!.detail
+    expect(detail, '技能包已挂进工具表，不该再说尚未挂进').not.toMatch(/尚未挂进|还调不到/)
+    expect(detail, '要说清已经挂进工具表了').toMatch(/挂进/)
+    // 仍标 partial 是对的：MCP 来的工具一条都还没有。
+    expect(detail, 'MCP 工具还没有，partial 仍然成立').toMatch(/MCP/)
+  })
+
+  it('MCP 仍然标 partial，且必须说清缺的是协议层', () => {
+    const mcp = CAPABILITY_GAPS.find((item) => item.route === 'GET /api/extensions/mcp')
+    expect(mcp?.status).toBe('partial')
+    expect(mcp!.detail, 'MCP 缺的是协议层，不是存储').toMatch(/协议层|rmcp/)
   })
 })
