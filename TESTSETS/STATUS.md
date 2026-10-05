@@ -3,6 +3,38 @@
 100 条真实任务（50 MCP-Atlas + 50 SkillsBench），来源与许可见 `README.md`。
 生成时间：2026-10-06。
 
+## 本机 LLM 跑在哪、要不要开 GPU（2026-10-06 实测，别再重问）
+
+- **跑在 Windows 本机**，不在 WSL。`llama-server.exe`（build b11146，PID 16664，
+  已连续运行 19 小时），模型 `Qwen3.5-4B-Q4_K_M.gguf`，`--host 0.0.0.0 --port 18080
+  -c 8192 -t 14 --reasoning off`。quill-server 在 WSL，隔网关
+  `ip route show default | awk '{print $3}'`（本机当时是 `172.18.48.1`）访问它。
+- **硬件**：AMD Ryzen 7 PRO 8845HS（8 核 16 线程）/ 61.8 GB 内存 /
+  **AMD Radeon 780M 核显，无 N 卡**（`nvidia-smi` 不存在）。
+- **现状：启动参数里没有 `-ngl`、也没选设备，所以一直纯 CPU 在跑。**
+  `llama-server --list-devices` 明明能看到 `Vulkan0: AMD Radeon 780M Graphics`。
+  这个 build 选后端用 `-dev <名字>`，**不是** `--vulkan`（后者报
+  `error: invalid argument: --vulkan`）。
+- **实测（同一份 1418 字真实提示词，同一模型，先预热一次再计时）**：
+
+  | 模式 | 生成 t/s | 生成耗时 | 端到端 |
+  |---|---|---|---|
+  | CPU（现有，18080） | **13.36** | 4341 ms | **4842 ms** |
+  | GPU（`-dev Vulkan0 -ngl 99`，18081） | 10.18 | 5695 ms | 6163 ms |
+
+  Vulkan 侧启动日志确认 `offloaded 33/33 layers to GPU`，66 个 tensor 全在 Vulkan0 ——
+  **卸载是真的，不是假装在 GPU 上**。结论：**核显上反而慢约 27%**。
+- **prefill 那一列不作数**：预热调用把同样的提示词灌进 KV 缓存了，第二次
+  `timings.prompt_n` 只剩 4，量的是缓存命中不是真实预填。要比 prefill 得换
+  每次都不同的提示词。**别拿这列下结论。**
+- **结论：维持纯 CPU，不要开 Vulkan，也不要换 LM Studio。**
+  780M 是核显，4B Q4 这种小模型 decode 阶段吃不过 DDR5 内存带宽，
+  再叠加 Vulkan 的调度开销。换 LM Studio 换的是同一套 llama.cpp 底座，
+  不开 GPU 卸载一样是纯 CPU —— **换不掉这个问题**。
+- 复现脚本：`.start-vulkan.ps1`（起对照实例）、`.bench-llm.ps1`（两边对打）。
+  **注意**：这两个是 `.ps1`，必须**纯 ASCII**——Windows PowerShell 5.1 会把无 BOM 的
+  UTF-8 按 ANSI 读，中文注释会把换行吃掉、直接语法报错。
+
 ## 前置条件（不满足就别开始跑）
 
 - [x] SKILL 已通过 `skills_repo::as_tool_spec` 挂进 `ToolRegistry`（对话里能真的调）
