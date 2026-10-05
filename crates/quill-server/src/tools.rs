@@ -129,85 +129,109 @@ impl ToolRegistry {
         // 克隆是廉价的引用计数递增，不会复制任何运行状态。
         let app2 = Arc::clone(&app);
 
-        r.register(
-            ToolSpec::new(
-                "list_experts",
-                "列出当前可用的专家（角色）。当你不知道有哪些专家可选时调用。",
-            )
-            .with_parameters(json!({
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "可选。按名称或描述做关键词过滤，省略则返回全部。"
-                    }
-                },
-                "required": []
-            })),
-            Arc::new(move |args: &Value| {
-                let query = args
-                    .get("query")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .trim()
-                    .to_lowercase();
-                let list = crate::api_experts::list_for_tools(&app, uid)?;
-                let mut names = Vec::new();
-                for e in list {
-                    let name = e.display_name().to_lowercase();
-                    let desc = e.description().to_lowercase();
-                    if query.is_empty() || name.contains(&query) || desc.contains(&query) {
-                        names.push(format!("{}（{}）", e.display_name(), e.id()));
-                    }
-                }
-                if names.is_empty() {
-                    return Ok("没有匹配的专家。".to_string());
-                }
-                Ok(names.join("、"))
-            }),
-        );
+        // **一个专家都没有时，这两个工具一律不挂。**
+        //
+        // 实测（2026-10-06，跑 50 条 SkillsBench）：这台库上专家数是 **0**，
+        // 于是 `list_experts` 每一条请求都挂着，而它**永远只能返回
+        // 「没有匹配的专家。」**；`get_expert_detail` 也必然失败。
+        // 4B 模型在这两个工具上反复重试（轨迹里连着三四个 `list_experts`），
+        // 直到 `MAX_TOOL_ROUNDS` 用尽 —— 于是一条本来能答的任务被判成
+        // 「连续 4 轮只调工具不给正文」。
+        //
+        // 给一个永远产不出东西的用户挂上这两个工具，是**纯粹的噪音**：
+        // 既占工具表的 token，又把模型往一个必然空手的分支上引。
+        //
+        // **查库失败时不因此少挂** —— 那是 quill 自己的存储出问题，
+        // 静默少挂两个工具会变成「模型好像没学过专家」且毫无迹象。
+        let has_experts = match crate::api_experts::list_for_tools(&app, uid) {
+            Ok(list) => !list.is_empty(),
+            Err(e) => {
+                eprintln!("[tools] 判断是否挂载专家工具时读库失败，按「有专家」挂上：{e}");
+                true
+            }
+        };
 
-        r.register(
-            ToolSpec::new(
-                "get_expert_detail",
-                "按名称查看某个专家的专长介绍。选专家之前想了解它擅长什么时调用。",
-            )
-            .with_parameters(json!({
-                "type": "object",
-                "properties": {
-                    "name": {
-                        "type": "string",
-                        "description": "专家名称，取自 list_experts 的返回值。"
+        if has_experts {
+            r.register(
+                ToolSpec::new(
+                    "list_experts",
+                    "列出当前可用的专家（角色）。当你不知道有哪些专家可选时调用。",
+                )
+                .with_parameters(json!({
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "可选。按名称或描述做关键词过滤，省略则返回全部。"
+                        }
+                    },
+                    "required": []
+                })),
+                Arc::new(move |args: &Value| {
+                    let query = args
+                        .get("query")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .trim()
+                        .to_lowercase();
+                    let list = crate::api_experts::list_for_tools(&app, uid)?;
+                    let mut names = Vec::new();
+                    for e in list {
+                        let name = e.display_name().to_lowercase();
+                        let desc = e.description().to_lowercase();
+                        if query.is_empty() || name.contains(&query) || desc.contains(&query) {
+                            names.push(format!("{}（{}）", e.display_name(), e.id()));
+                        }
                     }
-                },
-                "required": ["name"]
-            })),
-            Arc::new(move |args: &Value| {
-                let name = args
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .ok_or("缺少参数 name。")?
-                    .trim()
-                    .to_string();
-                if name.is_empty() {
-                    return Err("name 不能是空串。".to_string());
-                }
-                let list = crate::api_experts::list_for_tools(&app2, uid)?;
-                let found = list
-                    .into_iter()
-                    .find(|e| e.display_name().eq_ignore_ascii_case(&name))
-                    .ok_or(format!("没有名为「{name}」的专家。"))?;
-                Ok(format!(
-                    "{}：{}",
-                    found.display_name(),
-                    if found.description().trim().is_empty() {
-                        "（没有写简介）"
-                    } else {
-                        found.description()
+                    if names.is_empty() {
+                        return Ok("没有匹配的专家。".to_string());
                     }
-                ))
-            }),
-        );
+                    Ok(names.join("、"))
+                }),
+            );
+
+            r.register(
+                ToolSpec::new(
+                    "get_expert_detail",
+                    "按名称查看某个专家的专长介绍。选专家之前想了解它擅长什么时调用。",
+                )
+                .with_parameters(json!({
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "专家名称，取自 list_experts 的返回值。"
+                        }
+                    },
+                    "required": ["name"]
+                })),
+                Arc::new(move |args: &Value| {
+                    let name = args
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .ok_or("缺少参数 name。")?
+                        .trim()
+                        .to_string();
+                    if name.is_empty() {
+                        return Err("name 不能是空串。".to_string());
+                    }
+                    let list = crate::api_experts::list_for_tools(&app2, uid)?;
+                    let found = list
+                        .into_iter()
+                        .find(|e| e.display_name().eq_ignore_ascii_case(&name))
+                        .ok_or(format!("没有名为「{name}」的专家。"))?;
+                    Ok(format!(
+                        "{}：{}",
+                        found.display_name(),
+                        if found.description().trim().is_empty() {
+                            "（没有写简介）"
+                        } else {
+                            found.description()
+                        }
+                    ))
+                }),
+            );
+        } // if has_experts —— 一个专家都没有时，上面这两个工具根本不进工具表
 
         r
     }
@@ -267,7 +291,7 @@ impl ToolRegistry {
     /// 代价是每条消息都要把用户配的进程拉起来一遍 —— 这笔账记在 STATUS.md 的
     /// 「已知代价」里，真到扛不住时再上带 TTL 的缓存，并且**界面上要显示缓存年龄**。
 
-pub async fn with_mcp_tools(
+    pub async fn with_mcp_tools(
         mut self,
         db: &crate::db::DbBridge,
         uid: quill_adapters::UserId,
@@ -299,14 +323,21 @@ pub async fn with_mcp_tools(
         for (row, d) in rows.iter().zip(found.iter()) {
             if !d.probe.connected {
                 // 「没连上」与「连上了但没工具」是两回事，不合并成一条日志。
-                eprintln!("[tools] MCP 服务器 {} 没挂上工具：{}", row.name, d.probe.error.as_deref().unwrap_or("（无原因）"));
+                eprintln!(
+                    "[tools] MCP 服务器 {} 没挂上工具：{}",
+                    row.name,
+                    d.probe.error.as_deref().unwrap_or("（无原因）")
+                );
                 continue;
             }
             for tool in &d.tools {
                 match mcp_tool_visibility(&self.specs, &row.name, tool) {
                     McpToolVisibility::Visible => {}
                     McpToolVisibility::NotMounted(why) => {
-                        eprintln!("[tools] 跳过 MCP 工具 {}/{}：{why}", row.name, tool.remote_name);
+                        eprintln!(
+                            "[tools] 跳过 MCP 工具 {}/{}：{why}",
+                            row.name, tool.remote_name
+                        );
                         continue;
                     }
                 }
@@ -450,9 +481,7 @@ pub fn mcp_tool_visibility(
     tool: &crate::mcp_client::RemoteTool,
 ) -> McpToolVisibility {
     match mcp_tool_name(server, &tool.remote_name) {
-        None => McpToolVisibility::NotMounted(
-            "服务器给的名字里没有能用的字母或数字，归一后是空串",
-        ),
+        None => McpToolVisibility::NotMounted("服务器给的名字里没有能用的字母或数字，归一后是空串"),
         Some(name) => {
             if existing.iter().any(|s| s.name == name) {
                 // `register` 是「同名替换」：顶掉之后模型看到的是 MCP 的工具，
@@ -738,7 +767,10 @@ mod tests {
         let r = with_one_tool();
         let huge = "字".repeat(MAX_RESULT_CHARS + 500);
         let text = r.render_result(&call("echo"), Ok(huge));
-        assert!(text.contains("已截断"), "截断必须告知模型，否则它会以为看到的是全部");
+        assert!(
+            text.contains("已截断"),
+            "截断必须告知模型，否则它会以为看到的是全部"
+        );
         assert!(
             text.chars().count() < MAX_RESULT_CHARS + 200,
             "截断后长度仍应明显短于原文"
@@ -748,7 +780,10 @@ mod tests {
     #[test]
     fn registering_the_same_name_twice_replaces_rather_than_duplicates() {
         let mut r = with_one_tool();
-        r.register(ToolSpec::new("echo", "新的回显"), Arc::new(|_| Ok("新".into())));
+        r.register(
+            ToolSpec::new("echo", "新的回显"),
+            Arc::new(|_| Ok("新".into())),
+        );
         assert_eq!(
             r.specs().iter().filter(|s| s.name == "echo").count(),
             1,
@@ -762,7 +797,10 @@ mod tests {
         let h = skill_handler("code-review");
         let out = h(&json!({ "task": "审一下 x.rs 里的下拉" })).expect("应成功");
         assert!(out.contains("code-review"), "要说清用的是哪套方法：{out}");
-        assert!(out.contains("审一下 x.rs 里的下拉"), "任务要回给模型：{out}");
+        assert!(
+            out.contains("审一下 x.rs 里的下拉"),
+            "任务要回给模型：{out}"
+        );
         assert!(
             out.chars().count() < MAX_RESULT_CHARS,
             "回执必须短到不被 render_result 截断，否则模型会拿到半截方法"
@@ -810,8 +848,8 @@ mod tests {
         // 模型看到的是 SKILL 的方法，界面上却还显示着原来的工具。
         let mut r = with_one_tool();
         let specs = r.specs();
-        let why = veto(&specs, &skill_row_named("echo"), "一套叫 echo 的方法")
-            .expect("同名必须否决");
+        let why =
+            veto(&specs, &skill_row_named("echo"), "一套叫 echo 的方法").expect("同名必须否决");
         assert!(why.contains("顶掉"), "要说清后果：{why}");
         r.register(
             ToolSpec::new("read-file", "模拟一个 MCP 工具"),
@@ -830,7 +868,10 @@ mod tests {
         let mut row = skill_row_named("off");
         row.enabled = false;
         let specs = with_one_tool().specs();
-        assert_eq!(skill_visibility(&specs, &row, "有正文"), SkillVisibility::Disabled);
+        assert_eq!(
+            skill_visibility(&specs, &row, "有正文"),
+            SkillVisibility::Disabled
+        );
         assert!(!skill_visibility(&specs, &row, "有正文").model_can_see());
     }
 

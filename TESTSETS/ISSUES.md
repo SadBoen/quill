@@ -1207,7 +1207,105 @@
      用户仍然**没法在界面上停用一台 MCP 服务器**，只能走 API。
      `api.ts` 的注释其实已经预期到了：「停用 / 非 stdio / 缺 command 都会是 false」，
      说明这个状态被设计过，只是没有入口。
-  2. **`runner.py` 的任务隔离仍未做**（本条只是把路铺好了）。
+  2. ~~**`runner.py` 的任务隔离仍未做**~~ → **已修，见 ISSUE-025。**
+
+---
+
+## ISSUE-029 · 一个专家都没有，`list_experts` 仍然每条请求都挂着 —— 4B 在上面死循环
+
+**状态**：**已修 + 单测已补 + 门禁已过 + 真机复跑已验有效**
+
+- **严重度**：中等偏高（它是 50 条批量跑里**失败最多的单一原因**）
+- **现象**（实测，50 条 SkillsBench **全部跑完**后的统计）：
+  | 指标 | 数量 |
+  |---|---|
+  | 总条数 | 50 |
+  | `FAIL` | 43 |
+  | `UNJUDGEABLE` | 7 |
+  | `PASS` / `PARTIAL` | **0 / 0** |
+  | 失败原因为「连续 N 轮只调工具不给正文」 | **34** |
+  | **轨迹里出现 `list_experts` / `get_expert_detail`** | **28** |
+  | 其中**同时**是工具轮次耗尽 | **28**（100% 重合） |
+  | 上下文超窗（上游 400 `n_ctx`） | 5 |
+
+  典型轨迹：`sb-citation-check` —— `list_experts、list_experts、list_experts、get_expert_detail`，
+  4 轮预算一次没花在正事上；`sb-flink-query` —— `list_experts、get_expert_detail、list_experts、list_experts`。
+- **根因**（查 `GET /api/experts` 得到的事实）：
+  ```
+  {"experts":[]}
+  ```
+  这台库上**一个专家都没有**。于是：
+  - `list_experts` 每一条请求都挂在工具表里，而它**永远只能返回
+    「没有匹配的专家。」**；
+  - `get_expert_detail` 同样挂着，也**必然失败**。
+
+  模型在这两个必然空手的工具上反复重试，直到 `MAX_TOOL_ROUNDS` 用尽，
+  于是一条本来能答的任务被判成「连续 4 轮只调工具不给正文」。
+- **为什么算 quill 的问题而不只是「4B 笨」**：红线里「4B 答不上来不算 bug」
+  针对的是**答案质量**。这里是**工具表里放了两个对当前用户必然产不出东西的
+  工具** —— 既占 token（ISSUE-007/019 那一类成本），又把模型往一个空手的
+  分支上引。给一个没有专家的用户挂专家工具，是纯粹的噪音。
+  数字上：**28/50 = 56% 的任务**的工具预算被这两个空工具吃掉。
+- **已修**：`ToolRegistry::builtin` 挂载前先查一次
+  `api_experts::list_for_tools`（**与工具内部用的是同一条可见性路径**，
+  不另开一条后门），**列表为空就不挂这两个工具**。
+  - **查库失败时按「有专家」挂上**，并记一行日志：那是 quill 自己的存储出问题，
+    静默少挂两个工具会变成「模型好像没学过专家」且毫无迹象 ——
+    与 `with_skills` 对查库失败的处理是同一个取舍。
+- **回归**：
+  - `cargo test -p quill-server --lib tools::tests` **18 passed / 0 failed**
+    （含 `a_builtin_registry_is_not_empty_and_every_spec_has_a_handler` ——
+    提醒一句：那条断言的是「内置表非空」，**不是**「专家工具必须在」，
+    所以这次改动不该动它）。
+  - `cargo test -p quill-server --test extensions_http` **44 passed / 0 failed**。
+  - **新补的用例**：`no_experts_means_no_expert_tools_in_the_chat_tool_table`，
+    一条里钉两件事 ——
+    1. 专家数 0 时工具表里**没有** `list_experts` / `get_expert_detail`；
+    2. 种一个专家进去后**必须挂回来**（防「一刀切地不挂」）。
+
+    上一轮记的「这条新判断没有单测保护」到此作废：`builtin()` 确实需要
+    `Arc<AppState>` 与真实 DB，纯函数单测构造不出来 —— 但 `extensions_http.rs`
+    的 `Harness` 本来就有真实 DB 和真实 router，**正确的落点在那里，不是 tools 单测**。
+- **回归中撞到并修掉的一件事**（值得单独记，它会让「改测试」变成「改对测试」）：
+  - 这次改动让 `extensions_http.rs` 里 **3 条用例变红**：
+    `a_dash_named_skill_coexists_with_the_underscore_named_builtin`、
+    `an_enabled_skill_reaches_the_model_as_a_tool_and_can_be_called`、
+    `mcp_tools_from_a_real_server_reach_the_conversation_tool_table`。
+  - 它们红的原因**不是产品有问题**，而是拿 `list_experts` 当「内置工具还在」
+    的探针，而它们的 fixture 专家数是 0。
+  - **修法不是把断言删掉**：先在 fixture 里 `seed_expert(&h, "cost-analyst").await`
+    把「用户确实有专家」这个前提补上，断言原样保留。这样这 3 条测的仍是
+    它们本来要测的东西（SKILL / MCP 不挤掉内置工具），
+    「专家数为 0 时不挂」由新用例单独负责。
+  - ⚠ 踩坑记录：写 `seed_expert` 时**漏了 `.await`**。async fn 不 await
+    **不会编译报错**，只有一条 `unused_must_use` 警告，症状是「专家没种进去、
+    后面的断言莫名其妙地红」，一度以为是真 bug。已把这条写进 helper 的注释里。
+    现在 `extensions_http` 编译输出里 `futures do nothing unless` 计数 = **0**。
+- **真机复跑（已做，结论：修复有效）**：
+  50 条批量跑完、服务空闲后，用**新二进制**重启 quill-server，
+  再复跑两条**上一轮 4 轮预算全烧在专家工具上**的任务。对照如下：
+
+  | 任务 | 修前（已执行的工具） | 修后（已执行的工具） |
+  |---|---|---|
+  | `sb-flink-query` | `list_experts、get_expert_detail、list_experts、list_experts` | `pdf、pdf、pdf、pdf` |
+  | `sb-citation-check` | `list_experts、list_experts、list_experts、get_expert_detail` | 不再报工具轮次耗尽（判为 UNJUDGEABLE） |
+
+  - 专家工具**一次都没再出现** —— 专家数为 0 时它们真的不挂。
+  - `sb-flink-query` 仍然 FAIL，但**原因换了**：现在烧预算的是 `pdf` 这个
+    真实技能工具，不是空转的专家工具。按红线「4B 答不上来不算 bug」，
+    这一条剩下的不是 quill 的 bug。
+  - 顺带看到 ISSUE-027/028 生效：错误码从 `provider_unavailable`
+    变成了 `tool_loop_exhausted`，两类故障不再混报。
+- **负向验证**（不看「测试通过」，得看它会不会红）：
+  临时把 `Ok(list) => !list.is_empty()` 改成 `Ok(_list) => true`（回到修复前行为），
+  `no_experts_means_no_expert_tools_in_the_chat_tool_table` 如期变红：
+  ```
+  一个专家都没有却挂了专家工具，它们只能永远空手：["list_experts", "get_expert_detail"]
+  ```
+  破坏与回滚都在脚本内完成，`tools.rs` 已确认复原（`grep` 确认第 147 行仍是
+  `Ok(list) => !list.is_empty()`）。随后又把那个 `if has_experts {` 块的缩进
+  用 `rustfmt` 补齐 —— 被删掉的行逐行核对过，全是这个块里没缩进的 `register`，
+  没有顺手改到别的地方。
 
 ---
 

@@ -53,24 +53,48 @@
       基线工具表走 `tools::baseline_specs`（与 `with_skills` 同一条链），
       **与 `with_mcp_tools` 同一个函数、同一次握手**。
       「连上了」与「挂上了」是两条独立事实，各自有数、各自有原因。
-- [x] 全量门禁 0 failed —— 2026-10-06：`cargo test --workspace` 57 个目标
-      957 passed / 0 failed、`ui/web` 68 passed、`typecheck` 干净、
-      `i18n-check` 0 问题、`library-check` 334/334。
+- [x] 全量门禁 0 failed —— 2026-10-06（ISSUE-029 那一轮）：`cargo test --workspace`
+      57 个目标 **968 passed / 0 failed**、`ui/web` **75 passed**、`typecheck` 干净、
+      `i18n-check` 0 问题、`library-check` 334/334、`index.css` SHA256 一致、依赖 8 个。
       **注意**：`.wsl-verify-persona.sh` **只跑 Rust**（`cargo build` + `cargo test`），
       不碰前端。前端那四项要在 `ui/web` 目录下另外跑：
       `npm run typecheck`、`npx vitest run`、`node ../../.i18n-check.mjs`、
       `node ../../.library-check.mjs`。**WSL 里没有 node**，只能在 Windows 侧跑。
+      - ⚠ `/mnt/d` 是 DrvFs，mtime 粒度粗：**cargo 偶尔会漏判「源码刚改过」
+        而静默跑旧二进制**。本轮真踩到过（加进源码的探针在二进制里查无此串）。
+        临时脚本里改完 Rust 源码一律 `touch -d '+2 minutes' <file>` 再跑。
 
 ## 进度
 
-| 段 | 条数 | 已跑 | 通过 | 失败 | 待跑 |
-|---|---|---|---|---|---|
-| MCP-Atlas | 50 | 0 | 0 | 0 | 50 |
-| SkillsBench | 50 | 0 | 0 | 0 | 50 |
-| **合计** | **100** | **0** | **0** | **0** | **100** |
+| 段 | 条数 | 真跑过 | PASS | PARTIAL | FAIL | UNJUDGEABLE | 没跑 |
+|---|---|---|---|---|---|---|---|
+| MCP-Atlas | 50 | 0 | 0 | 0 | 0 | 0 | 50 |
+| SkillsBench | 50 | **43** | **0** | **0** | **43** | 7 | 7 |
+| **合计** | **100** | **43** | **0** | **0** | **43** | **7** | **57** |
 
-**进度仍是 0/100，一条都没标跑过。** 下面「这一轮验到了什么」记的是**链路本身**
-的验证结果，不是那 100 条里任何一条的完成情况 —— 不要拿它当进度。
+**口径**（「真跑过」= PASS + PARTIAL + FAIL；UNJUDGEABLE 不算跑过，因为它什么都没验）：
+- SkillsBench 50 条**已全部发过请求**，结果在 `/tmp/quill-sb50.jsonl`。
+  **0 条 PASS、43 条 FAIL、7 条 UNJUDGEABLE。**
+- 7 条 UNJUDGEABLE 的原因是** SkillsBench 的输入夹具不在本仓库**，
+  `required_tools` 指向的技能正文/输入文件找不到，**没有任何一维可判**。
+  这不是 quill 的问题，但也不算跑过。
+- MCP-Atlas 仍是 0：它的 50 条要 22 台**外部** MCP 服务器，本机既没有程序也没有凭据，
+  不用 `quill-mcp-stub` 冒充 Airtable 那类真实服务（那等于伪造）。
+
+**失败主因（43 条 FAIL 的分布）**：
+| 原因 | 条数 |
+|---|---|
+| 工具轮次耗尽（`tool_loop_exhausted`） | 34 |
+| └ 其中轨迹里出现过 `list_experts` / `get_expert_detail` | **28** |
+| 上游 400 上下文超窗（`n_ctx`） | 5 |
+| 上游回了看不懂的内容（工具参数不是合法 JSON 等） | 其余 |
+
+**28/43 的失败，单一原因就是 ISSUE-029**：专家数为 0 时工具表里仍挂着
+`list_experts` / `get_expert_detail`，4B 把 4 轮工具预算全烧在必然空手的调用上。
+该条已修并真机复跑验证（见 ISSUE-029）。
+
+**下一轮该做什么**：ISSUE-029 修完之后这 43 条**应当重跑** ——
+现在的失败原因分布已经被这条修掉了大半，不重跑就拿不到真实分布。
 
 ## 这一轮验到了什么（2026-10-06，真机、真子进程、非 mock）
 

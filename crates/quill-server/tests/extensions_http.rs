@@ -708,6 +708,39 @@ async fn post_skill(h: &Harness, body: serde_json::Value) -> (StatusCode, serde_
     (st, v)
 }
 
+// ------------------------------------------------------------------ 专家
+
+/// 种一个对 `UID_A` 可见的专家。
+///
+/// **为什么工具表的断言需要它**：专家工具（`list_experts` / `get_expert_detail`）
+/// 只在用户**真有专家**时才挂（ISSUE-029）。一个专家都没有还挂上去，模型只能
+/// 反复拿到「没有匹配的专家。」，把工具轮次耗光 —— 那是噪音，不是能力。
+///
+/// 所以「SKILL / MCP 不该把内置工具挤掉」这类断言，前提是用户**确实有专家**；
+/// 「一个专家都没有时不该挂」由 `no_experts_means_no_expert_tools_in_the_chat_tool_table`
+/// 单独钉住。两条合起来才是完整口径。
+///
+/// ⚠ 调用处**必须 `.await`**。漏了不会编译报错，只有一条 `unused_must_use`
+/// 警告，而症状是「专家没种进去、后面的断言莫名其妙地红」——
+/// 这个坑本轮真踩过一次，所以把话说在这儿。
+async fn seed_expert(h: &Harness, id: &str) {
+    let resp = build_router(h.state())
+        .oneshot(post_json(
+            "/api/experts",
+            TOKEN_A,
+            serde_json::json!({
+                "id": id,
+                "display_name": "测试用专家",
+                "description": "只为工具表断言而存在"
+            }),
+        ))
+        .await
+        .expect("请求失败");
+    let st = resp.status();
+    let text = body_text(resp).await;
+    assert_eq!(st, StatusCode::CREATED, "种专家应当成功：{text}");
+}
+
 #[tokio::test]
 async fn a_skill_is_stored_in_the_row_and_its_body_lands_on_disk() {
     let h = Harness::new("ext-skill-save");
@@ -952,10 +985,41 @@ fn spec_names(r: &quill_server::tools::ToolRegistry) -> Vec<String> {
     r.specs().into_iter().map(|s| s.name).collect()
 }
 
+/// 一个专家都没有时，专家工具**不进**对话的工具表。
+///
+/// 实测依据（2026-10-06，跑 50 条 SkillsBench 的真实轨迹）：这台库专家数是 0，
+/// `list_experts` 于是每条请求都挂着、每条都只能答「没有匹配的专家。」；
+/// 4B 模型在它上面连着重试直到工具轮次用尽 —— 50 条里有 9 条的失败原因就是
+/// 「连续 4 轮只调工具不给正文，已执行的工具：list_experts、list_experts、…」。
+/// 给一个空库挂上这两个工具是纯噪音。
+///
+/// 后半段反过来钉住「有专家就得挂回来」，防止有人把这条修成一刀切地不挂。
+#[tokio::test]
+async fn no_experts_means_no_expert_tools_in_the_chat_tool_table() {
+    let h = Harness::new("ext-no-experts-no-tools");
+    seed_user(&h.db.bridge(), UID_A);
+
+    let names = spec_names(&tool_table(&h, UID_A).await);
+    assert!(
+        !names.contains(&"list_experts".to_string())
+            && !names.contains(&"get_expert_detail".to_string()),
+        "一个专家都没有却挂了专家工具，它们只能永远空手：{names:?}"
+    );
+
+    seed_expert(&h, "cost-analyst").await;
+    let names = spec_names(&tool_table(&h, UID_A).await);
+    assert!(
+        names.contains(&"list_experts".to_string())
+            && names.contains(&"get_expert_detail".to_string()),
+        "已经有专家了，专家工具必须挂回工具表：{names:?}"
+    );
+}
+
 #[tokio::test]
 async fn an_enabled_skill_reaches_the_model_as_a_tool_and_can_be_called() {
     let h = Harness::new("ext-skill-into-tools");
     seed_user(&h.db.bridge(), UID_A);
+    seed_expert(&h, "cost-analyst").await;
     let (st, v) = post_skill(
         &h,
         serde_json::json!({
@@ -1058,6 +1122,7 @@ async fn a_dash_named_skill_coexists_with_the_underscore_named_builtin() {
     // 两者不是同一个名字，必须各自存在 —— 归一不会把连字符变成下划线。
     let h = Harness::new("ext-skill-shadow");
     seed_user(&h.db.bridge(), UID_A);
+    seed_expert(&h, "cost-analyst").await;
     let (st, v) = post_skill(
         &h,
         serde_json::json!({
@@ -1302,6 +1367,7 @@ fn mounted_of(v: &serde_json::Value, server: &str) -> Vec<(String, String)> {
 async fn mcp_tools_from_a_real_server_reach_the_conversation_tool_table() {
     let h = Harness::new("ext-mcp-into-tools");
     seed_user(&h.db.bridge(), UID_A);
+    seed_expert(&h, "cost-analyst").await;
     save(&h, TOKEN_A, serde_json::json!({"servers": [stdio_stub("notes", &[])]})).await;
 
     let names = spec_names(&chat_tool_table(&h, UID_A).await);
