@@ -258,6 +258,29 @@ MCP 那一半**当时做不了**，是因为 quill 侧 `enabled` 只存不用（
 与 ISSUE-018 同一族，且 `ProviderRejected` 的建议在这里也不合适
 （什么都没报错）。**4B 打转本身不算 bug**，算 bug 的是建议指错了地方。
 
+**已修**：新增 `ApiError::ToolLoopExhausted { detail, advice }` ——
+「连不上 / 被拒 / 不收敛」是三件不同的事，错误码分成
+`provider_unavailable` / `provider_rejected` / `tool_loop_exhausted`。
+status 仍是 503（确实没拿到正文）。**detail 一字未改**（它本来就写得对），
+只把结构化 `next_step` 换成与它同向的那句。967 passed / 0 failed。
+
+## 50 条 SkillsBench 全量跑（2026-10-06，本轮进行中）
+
+隔离修好之后，这是第一次**大批量**跑。结果写在 `/tmp/quill-sb50.jsonl`。
+**注意：这批跑的是修 ISSUE-027 之前的二进制**，所以其中「模型连续 4 轮
+都在请求调用工具」那几条仍报 `provider_unavailable` —— 重跑之后应是
+`tool_loop_exhausted`。**这不是数据矛盾，是二进制版本差异，已记在此。**
+
+已经能看出来的两点：
+
+1. **隔离立刻见效**：`sb-ada-bathroom-plan-repair` 之前因为上下文溢出判 FAIL
+   （9804 token > 8192），隔离掉多余技能之后判 **UNJUDGEABLE** ——
+   链路通了，只是三个维度都判不了。**同一个任务，环境一干净就过��。**
+2. 失败原因**高度集中**在两类：`provider_rejected`（上下文超了）与
+   「模型连续 4 轮只调工具不给正文」。后者占多数，且已执行的工具里
+   **反复出现 `list_experts`** —— 这是内置工具，值得单独查一下
+   是不是它把模型带进了循环（尚未成 ISSUE，先记在这里观察）。
+
 ## 100 条为什么在这里跑不完（实测，不是猜测）
 
 数清楚了，两段各有各的硬缺口：

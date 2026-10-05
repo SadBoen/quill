@@ -593,9 +593,14 @@ pub async fn post_message(
     // 工具往返用尽后仍只有 tool_calls、没有正文：这是**没有回答**，
     // 不能当成功返回。`has_answer()` 在这种情况下会返回 true（它只判断
     // 「有内容」），若照它走就会存一条空消息并返回 200 —— 又是内容凭空消失。
-    // 这里明确区分，并在响应里带上已执行的工具轨迹。
+    //
+    // 用 `tool_loop_exhausted` 而不是 `service_unavailable`（ISSUE-027）：
+    // 模型这 `rounds` 轮里**每一轮都回过话**，只是没收敛。用
+    // `service_unavailable` 会附上「确认端点活着 / 启动 llama-server」——
+    // 让用户去查一台正在正常应答的服务，与 detail 里那句
+    // 「换个更直接的问法」当场打架。
     if reply.answer().is_empty() && !reply.tool_calls.is_empty() {
-        return Err(ApiError::service_unavailable(format!(
+        return Err(ApiError::tool_loop_exhausted(format!(
             "模型连续 {} 轮都在请求调用工具，没有给出正文。\
              已执行的工具：{}。\
              下一步：换个更直接的问法，或检查该工具是否满足不了模型的需求。",

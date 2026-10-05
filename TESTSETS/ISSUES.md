@@ -1054,7 +1054,7 @@
 
 ## ISSUE-027 · 「模型连续 N 轮只调工具不给正文」被报成「模型服务不可用」
 
-**状态**：待修（2026-10-06，ISSUE-025 的真机验证里撞见）
+**状态**：已修（2026-10-06）
 **归属**：**quill 的 bug**，与 ISSUE-018 同一族
 
 - **现象**（实测，`sb-3d-scan-calc` 与 `sb-citation-check` 两条）：
@@ -1077,15 +1077,29 @@
 - **与 ISSUE-018 的差别**：`ProviderRejected` 的建议
   （「模型服务**活着**并回了一个错误状态码，它自己的原话在上一段里」）
   在这里**也不合适** —— 什么都没报错，只是没收敛。所以不能直接复用它。
-- **修复方向（未定）**：加一个专用的 `ApiError` 变体（比如
-  `ToolLoopExhausted { detail, advice }`），把「轮次用尽」当成
-  **既不是连不上、也不是被拒**的第三种处境来措辞。code 与 status 待定，
-  但结构化 `next_step` 必须与 detail 里那句「换个更直接的问法」**说同一件事**。
-- **回归**：一条断言「工具轮次用尽时，`next_step` 里不得出现
-  `llama-server` / `确认端点活着`」的测试，外加一条
-  「`next_step` 必须与 detail 里的处置方向一致」。
+- **修复方向（已做）**：加一个专用的 `ApiError::ToolLoopExhausted { detail, advice }`，
+  把「轮次用尽」当成**既不是连不上、也不是被拒**的第三种处境来措辞。
+  - `code()` = **`tool_loop_exhausted`** —— 与 `provider_unavailable` /
+    `provider_rejected` 都不同，界面才分得开这三件事。
+  - `status()` 仍是 **503**（请求确实没拿到正文）。用 502 也许更贴切，
+    但那会改对外状态码，**这一轮不做**，另议。
+  - `advice` 是 `error.rs` 里的 `ADVICE_TOOL_LOOP_EXHAUSTED`，
+    **与 detail 里那句「换个更直接的问法」说同一件事**，并额外点名
+    「先停用这一轮挂着的技能/工具：它们可能让模型觉得还得再查一下」——
+    这条是从 ISSUE-019/025 攒下来的经验，不是编的。
+  - `api_chat` 那一处从 `service_unavailable` 改为 `tool_loop_exhausted`。
+    **detail 一字未改**（它本来就写得对）。
+- **回归**：
+  - `error::tests::a_model_that_never_stops_calling_tools_is_not_an_unreachable_endpoint`
+    —— 断言 `code == "tool_loop_exhausted"`、与另两个 provider 码**都不同**；
+    `next_step` 里**不得**出现「确认端点活着 / 启动 llama-server /
+    回了一个错误状态码」；且**必须**与 detail 同向（含「更直接」）。
+  - `error::tests::every_variant_carries_a_non_empty_next_step`
+    顺带覆盖了新变体（枚举里新增的每个都要有非空下一步）。
+  - `error::tests::a_live_model_that_refuses_must_not_be_reported_as_unreachable`
+    未受影响（ISSUE-018 那条仍然成立）。
 - **注**：4B 小模型在工具上打转**本身**不算 bug（红线里写了「4B 答不上来不算 bug」），
-  算 bug 的是**附带的处置建议指错了地方**。
+  算 bug 的是**附带的处置建议指错了地方**。这条修的是后者。
 
 ---
 

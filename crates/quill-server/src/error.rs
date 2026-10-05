@@ -5,6 +5,19 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::json;
 
+/// 「模型一直调工具、不给正文」时的建议。
+///
+/// 措辞刻意**与 detail 里那句「换个更直接的问法」说同一件事** ——
+/// ISSUE-027 的病根就是两句下一步打架：detail 说「换问法」，
+/// 结构化 `next_step` 却在教用户去重启一个正在正常应答的服务。
+/// 这里**绝不能**出现「确认端点活着 / 启动 llama-server」：
+/// 轮次用尽的时候，模型每一轮都回过话，服务好得很。
+pub const ADVICE_TOOL_LOOP_EXHAUSTED: &str =
+    "模型每一轮都回话了，服务是好的 —— 只是它一直��调工具、一直没给出正文。\
+     下一步：换个更直接的问法（把要什么一次说清楚），\
+     或先停用这一轮里挂着的技能/工具：它们可能让模型觉得'还得再查一下'。\
+     已执行的工具见上面那段。细节跑 `quill doctor`。";
+
 #[derive(Debug, Clone)]
 pub enum ApiError {
     Unauthorized {
@@ -61,6 +74,26 @@ pub enum ApiError {
         detail: String,
         /// 建议客户端等待的秒数。会原样写进 `Retry-After` 响应头。
         retry_after_secs: u64,
+    },
+
+    /// **模型连上了、每轮都回话了，但一直不给出正文**（工具往返用尽）。
+    ///
+    /// 第三种处境：既不是 `ProviderUnavailable`（连不上），
+    /// 也不是 `ProviderRejected`（回了一个错误）。这里**什么都没报错**，
+    /// 模型只是一直在调工具、一直不收敛。
+    ///
+    /// 为什么要单列：这两个已有的建议在��里**都不对**——
+    /// 「确认端点活着 / 启动 llama-server」是在教用户去查一台当场回过话的服务；
+    /// 「回了一个错误状态码」更是凭空捏造了一个不存在的错误。
+    /// 而 detail 里那句「换个更直接的问法」是对的，却被结构化的 `next_step`
+    /// 盖住了，界面上于是出现两句互相打架的下一步。见 ISSUE-027。
+    ///
+    /// 实测（2026-10-06，`sb-3d-scan-calc` / `sb-citation-check`）：
+    /// 模型连续 4 轮都带 tool_calls、没有正文，报成
+    /// 「模型服务不可用」—— 而那 4 轮里它每次都回话了。
+    ToolLoopExhausted {
+        detail: String,
+        advice: &'static str,
     },
 
     Internal {
@@ -136,6 +169,14 @@ impl ApiError {
         }
     }
 
+    /// 工具往返用尽、始终没有正文。见 `ToolLoopExhausted` 的说明。
+    pub fn tool_loop_exhausted(detail: impl Into<String>) -> Self {
+        Self::ToolLoopExhausted {
+            detail: detail.into(),
+            advice: ADVICE_TOOL_LOOP_EXHAUSTED,
+        }
+    }
+
     pub fn storage_unavailable_detail(detail: impl Into<String>) -> Self {
         Self::StorageUnavailable {
             detail: detail.into(),
@@ -186,6 +227,10 @@ impl ApiError {
             // 与 `ProviderUnavailable` 同一个状态码：**请求确实没拿到结果**。
             // 分开的是「下一步」说什么，不是「算不算失败」。
             Self::ProviderRejected { .. } => StatusCode::SERVICE_UNAVAILABLE,
+            // 同样是 503：请求确实没拿到正文。分开的仍然是「下一步」说什么。
+            // 用 502 反而更贴切，但会改动对外状态码，**这一轮不做** ——
+            // 先把最容易误导用户的那句改对，状态码另议。
+            Self::ToolLoopExhausted { .. } => StatusCode::SERVICE_UNAVAILABLE,
             Self::TooManyRequests { .. } => StatusCode::TOO_MANY_REQUESTS,
             Self::Internal { .. } => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -204,6 +249,9 @@ impl ApiError {
             Self::StorageUnavailable { .. } => "storage_unavailable",
             Self::ProviderUnavailable { .. } => "provider_unavailable",
             Self::ProviderRejected { .. } => "provider_rejected",
+            // 与上面两个 provider 码**必须不同**：连不上 / 被拒 / 不收敛
+            // 是三件不同的事，界面要能分开说。见 ISSUE-027。
+            Self::ToolLoopExhausted { .. } => "tool_loop_exhausted",
             Self::TooManyRequests { .. } => "too_many_requests",
             Self::Internal { .. } => "internal_error",
         }
@@ -226,6 +274,7 @@ impl ApiError {
             Self::StorageUnavailable { detail } => detail.clone(),
             Self::ProviderUnavailable { detail } => detail.clone(),
             Self::ProviderRejected { detail, .. } => detail.clone(),
+            Self::ToolLoopExhausted { detail, .. } => detail.clone(),
             Self::TooManyRequests { detail, .. } => detail.clone(),
             Self::Internal { detail } => detail.clone(),
         }
@@ -282,6 +331,9 @@ impl ApiError {
             // 绝不能在这里给一句通用的「去确认端点活着」——模型明明回过话，
             // 让用户去检查一个活着的服务只会把他引到错误的分支上。
             Self::ProviderRejected { advice, .. } => advice,
+            // 轮次用尽：不能说「服务不可用」，也不能说「回了一个错误」——
+            // 模型每一轮都回过话，只是没收敛。见 ISSUE-027。
+            Self::ToolLoopExhausted { advice, .. } => advice,
             Self::Internal { .. } => {
                 "查看服务端 stderr 日志中带请求 ID 的记录定位真实原因（客户端只拿到可读说明，\
                  不会收到内部栈）；然后执行 `quill doctor` 打印完整诊断，修复后用同一请求重试。"
@@ -397,6 +449,38 @@ mod tests {
             let actionable = n.contains('`') || n.contains("下一步") || n.contains("；");
             assert!(actionable, "{:?} 的下一步里没有可执行的动作：{n}", e.code());
         }
+    }
+
+    #[test]
+    fn a_model_that_never_stops_calling_tools_is_not_an_unreachable_endpoint() {
+        // ISSUE-027：模型连续 N 轮都回话了、只是没收敛。
+        // 修之前走的是 `service_unavailable`，附上的建议是
+        // 「确认端点活着 / 启动 llama-server」—— 让用户去查一台
+        // 当场回过话的服务。
+        let e = ApiError::tool_loop_exhausted("模型连续 4 轮都在请求调用工具，没有给出正文。");
+
+        assert_eq!(e.code(), "tool_loop_exhausted");
+        assert_ne!(
+            e.code(),
+            "provider_unavailable",
+            "不收敛与连不上是两件事，错误码必须分开"
+        );
+        assert_ne!(e.code(), "provider_rejected", "这里什么都没报错，别编一个错误出来");
+
+        for wrong in ["确认端点活着", "启动 llama-server", "llama-server", "回了一个错误状态码"] {
+            assert!(
+                !e.next_step().contains(wrong),
+                "「下一步」里不该出现「{wrong}」：{}",
+                e.next_step()
+            );
+        }
+        // 建议必须与 detail 里那句「换个更直接的问法」说同一件事。
+        assert!(
+            e.next_step().contains("更直接"),
+            "下一步要与 detail 里的处置方向一致：{}",
+            e.next_step()
+        );
+        assert!(e.detail().contains("4 轮"), "detail 要如实说清是第几轮用尽的");
     }
 
     #[test]
