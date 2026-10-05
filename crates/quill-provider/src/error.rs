@@ -80,6 +80,47 @@ impl ProviderError {
             Self::Unreachable { .. } | Self::ModelNotFound { .. } => LOCAL_MODELS_PROBE,
         }
     }
+
+    /// **只有发生了什么**，不含 `Display` 追加的那句「→ 下一步：…」。
+    ///
+    /// 为什么要单独开一个出口：错误信封**已经有**一个结构化的 `next_step` 字段
+    /// （`ApiError::next_step()`，`Page.tsx` 把它渲染成独立段落）。如果 detail 又用
+    /// `Display` 把同一句下一步拼进去，界面上就会出现**两条自称「下一步」的段落**，
+    /// 而且两条的具体程度往往差很远 ——
+    /// 实测（2026-10-06，`sb-adaptive-cruise-control`）detail 里那条含糊地说
+    /// 「请先按上面这句把配置改对」，而「上面这句」指的实际是上游那段 JSON。见 ISSUE-020。
+    ///
+    /// **`Display` 本身一个字都没改**：`Display` 仍然带下一步，因为流式、CLI、
+    /// agent 内部这些地方没有 `ApiError::next_step()` 可用，它们靠的就是 `Display`。
+    /// 这次只让 HTTP 信封改用 `message()`，好让「下一步」在信封里**只有一个出口**。
+    pub fn message(&self) -> String {
+        match self {
+            Self::NotConfigured { detail } => format!("LLM 服务还没配置：{detail}"),
+            Self::Unreachable { url, detail } => format!(
+                "连不上 LLM 服务 {url}：{detail}。本地模型最常见的原因是 llama-server 根本没起来"
+            ),
+            Self::Timeout { detail } => format!("调用 LLM 服务超时：{detail}"),
+            Self::Status { code, body } => {
+                let mut s = format!("LLM 服务返回 HTTP {code}：{body}");
+                if *code == 401 || *code == 403 {
+                    s.push_str(
+                        "。401/403 基本都是 API key 缺失或已失效，检查构造 provider 时传的 key",
+                    );
+                }
+                s
+            }
+            Self::ModelNotFound { model, detail } => {
+                format!("LLM 服务上没有名为「{model}」的模型：{detail}")
+            }
+            Self::MalformedResponse { detail } => format!(
+                "LLM 服务回了看不懂的内容：{detail}。这不是重试能解决的，请把这一行连同服务端的日志一起反馈"
+            ),
+            Self::UpstreamRejected { detail } => {
+                format!("LLM 服务在处理请求时拒绝了它：{detail}")
+            }
+            Self::InvalidRequest { detail } => format!("发给 LLM 服务的请求本身不合法：{detail}"),
+        }
+    }
 }
 
 /// Shorten a response body to a single-line excerpt suitable for an error message.
@@ -116,50 +157,13 @@ fn tail(f: &mut fmt::Formatter<'_>, e: &ProviderError) -> fmt::Result {
 }
 
 impl fmt::Display for ProviderError {
+    /// = `message()` + `tail()`。
+    ///
+    /// **不要再在这里另写一份变体文案**：正文只有 `message()` 一个来源，
+    /// 否则两条出口迟早会跑偏（`message()` 是 HTTP 错误信封 detail 用的那个）。
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NotConfigured { detail } => {
-                write!(f, "LLM 服务还没配置：{detail}")?;
-                tail(f, self)
-            }
-            Self::Unreachable { url, detail } => {
-                write!(
-                    f,
-                    "连不上 LLM 服务 {url}：{detail}。本地模型最常见的原因是 llama-server 根本没起来"
-                )?;
-                tail(f, self)
-            }
-            Self::Timeout { detail } => {
-                write!(f, "调用 LLM 服务超时：{detail}")?;
-                tail(f, self)
-            }
-            Self::Status { code, body } => {
-                write!(f, "LLM 服务返回 HTTP {code}：{body}")?;
-                if *code == 401 || *code == 403 {
-                    write!(f, "。401/403 基本都是 API key 缺失或已失效，检查构造 provider 时传的 key")?;
-                }
-                tail(f, self)
-            }
-            Self::ModelNotFound { model, detail } => {
-                write!(f, "LLM 服务上没有名为「{model}」的模型：{detail}")?;
-                tail(f, self)
-            }
-            Self::MalformedResponse { detail } => {
-                write!(
-                    f,
-                    "LLM 服务回了看不懂的内容：{detail}。这不是重试能解决的，请把这一行连同服务端的日志一起反馈"
-                )?;
-                tail(f, self)
-            }
-            Self::UpstreamRejected { detail } => {
-                write!(f, "LLM 服务在处理请求时拒绝了它：{detail}")?;
-                tail(f, self)
-            }
-            Self::InvalidRequest { detail } => {
-                write!(f, "发给 LLM 服务的请求本身不合法：{detail}")?;
-                tail(f, self)
-            }
-        }
+        write!(f, "{}", self.message())?;
+        tail(f, self)
     }
 }
 
@@ -328,5 +332,36 @@ mod tests {
         }
         .to_string();
         assert!(msg.contains("API key"), "401 必须点出 API key：{msg}");
+    }
+
+    /// ISSUE-020 的另一半：拆出 `message()` **只是**为了让 HTTP 信封的 detail
+    /// 不再重复「下一步」，**不是**把下一步删掉。
+    ///
+    /// 流式、CLI、agent 内部那些地方没有 `ApiError::next_step()` 可用，
+    /// 它们靠的就是 `Display`。所以这里钉死：`Display` 仍带下一步，
+    /// `message()` 只带发生了什么。
+    #[test]
+    fn message_drops_the_next_step_but_display_keeps_it() {
+        for e in one_of_each() {
+            let bare = e.message();
+            let shown = e.to_string();
+
+            assert!(
+                !bare.contains("下一步"),
+                "[{}] message() 不该带下一步：\n{bare}",
+                e.code()
+            );
+            assert!(
+                shown.contains("下一步"),
+                "[{}] Display 必须仍带下一步：\n{shown}",
+                e.code()
+            );
+            // Display 只能比 message() 多那一段，多出来的就该是 tail。
+            assert!(
+                shown.starts_with(&bare),
+                "[{}] Display 应以 message() 开头：\n{shown}",
+                e.code()
+            );
+        }
     }
 }

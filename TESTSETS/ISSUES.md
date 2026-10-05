@@ -622,10 +622,11 @@
           或减少这一轮挂着的技能/工具…改完用同一条消息重试；细节跑 `quill doctor`。
   ```
   错误码与建议都在真服务上验过，不是只有单测绿。
-- **残留（不算本条修完）**：detail 里**还嵌着另一句**旧的「下一步：执行
+- **残留**：detail 里**还嵌着另一句**旧的「下一步：执行
   `quill doctor`；重试没有意义，请先按上面这句把配置改对」，界面上会渲染成
   第二个段落。用户看到两条下一步，一条含糊一条具体，且含糊那条的
-  「上面这句」现在指的是上游那段 JSON。**另立 ISSUE-020 跟。**
+  「上面这句」现在指的是上游那段 JSON。→ 另立 ISSUE-020 跟，
+  **ISSUE-020 也已修**（detail 改用 `ProviderError::message()`，不再拼 tail）。
 
 ---
 
@@ -673,7 +674,7 @@
 
 ## ISSUE-020 · 一个错误信封里有**两条**「下一步」，其中一条还藏在 detail 里
 
-**状态**：待修（2026-10-06，验证 ISSUE-018 的修复时撞见）
+**状态**：已修（2026-10-06）
 
 - **严重度**：低到中等（信息都在，但互相打架；用户不知道该照哪句做）
 - **现象**（真机实测，`sb-adaptive-cruise-control` 修复后的返回）：
@@ -701,9 +702,48 @@
   下一步统一由 `ApiError::next_step()` 提供 —— 那个字段本来就是为此存在的。
   改之前要盘一遍有多少调用点把 `ProviderError` 直接 `to_string()` 之后当用户可见文案用，
   那些地方需要显式补 `next_step`，**不许**顺手把下一步删干净。
-- **回归**：一条断言「`detail` 里不含 `→ 下一步`」的测试，外加一条
-  「`ProviderError` 直接 `to_string()` 之后仍带得上下一步」的测试 ——
-  钉住的是「只有一个出口」，不是「没有下一步」。
+- **已修**（2026-10-06）：**没有**照上面那个方向直接砍 `Display` 的 `tail()`，
+  因为砍了会让流式 / CLI / agent 内部那些**没有 `ApiError::next_step()` 可用**的
+  调用点丢掉下一步 —— 那正是红线里最不许发生的那种「顺手删干净」。
+  改成加一个只带正文、不带 tail 的出口：
+  - `quill-provider`：新增 `ProviderError::message()`，只返回「发生了什么」；
+    `Display` 改为 `write!(f, "{}", self.message())? + tail(f, self)`，
+    **行为一个字没变**。让 `Display` 复用 `message()` 而不是两边各写一份，
+    是为了两个出口以后不会各改各的、跑偏。
+  - `quill-server`：`api_chat::provider_failure` 的 detail 改用 `e.message()`。
+    全仓核过，`ProviderError → ApiError` **只有**这一处转换（两个调用点都走它）。
+- **回归**：
+  - `quill_provider::error::tests::message_drops_the_next_step_but_display_keeps_it`
+    —— 8 个变体逐个断言：`message()` **不含**「下一步」、
+    `to_string()` **仍含**「下一步」、且 `Display` **以 `message()` 开头**
+    （钉住的是「只有一个出口」，不是「没有下一步」）。
+  - `api_chat::tests::detail_carries_no_next_step_so_the_envelope_shows_only_one`
+    —— detail 不含「下一步」，但**必须仍带上游原话**（`n_prompt_tokens`），
+    那是用户唯一能照着改的权威依据。
+  - `api_chat::tests::the_structured_next_step_is_the_one_that_survives`
+    —— 结构化那句自带「下一步」标签，且**不含** `llama-server`（ISSUE-018 那条）。
+  - `api_chat::tests::unreachable_still_tells_the_user_how_to_check_the_endpoint`
+    —— 连不上时那句「确认端点活着」**必须还在**（别把一个 bug 修成另一个）。
+- **这几条不是空断言，已验证**：临时把 `provider_failure` 退回 `{e}` 之后，
+  上面 4 条里 **2 条立刻变红**，报错打出来的正是真机上看到的那段重复文本
+  （「…n_prompt_tokens:8525}}\n→ 下一步：执行 `quill doctor`…」），
+  退回修复后重新变绿。
+- **真机复跑**（重新 `cargo build` → 重启 quill-server → 重跑
+  `sb-adaptive-cruise-control`，结果在 `/tmp/quill-fix-020.jsonl`）。runner 打印的是
+  `detail / next_step`，所以同一处对比最直观：
+
+  ```
+  修前  …"n_ctx":8192}}
+        → 下一步：执行 `quill doctor`；重试没有意义，请先按上面这句把配置改对
+        / 下一步：模型服务**活着**并回了一个错误状态码…              ← 两条
+
+  修后  …"n_ctx":8192}}
+        / 下一步：模型服务**活着**并回了一个错误状态码…              ← 只剩一条
+  ```
+
+  上游那段 JSON 原样留在 detail 里（`n_prompt_tokens` / `n_ctx` 都在），
+  「下一步」只剩结构化那一个出口。
+- 全量 `.wsl-verify-persona.sh`：**963 passed / 0 failed**（改前 959，新增 4 条）。
 
 ---
 

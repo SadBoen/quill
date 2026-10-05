@@ -92,9 +92,13 @@ fn storage(e: quill_agent::AgentError) -> ApiError {
 /// 实测踩到过（2026-10-06）：模型上下文 8192，装了 5 个 SKILL 之后请求变成
 /// 8525 token，上游回 `exceed_context_size_error`（`Status { code: 400 }`）。
 /// 界面当时让用户去检查一个**正在正常应答**的服务。见 ISSUE-018。
+///
+/// detail 走的是 `e.message()` 而不是 `{e}`：后者会把「→ 下一步：…」也拼进来，
+/// 而下面每个分支都已经给了**结构化**的 `next_step`，界面把它渲染成独立段落 ——
+/// 两条都自称「下一步」，且 detail 那条含糊。见 ISSUE-020。
 fn provider_failure(e: quill_provider::ProviderError) -> ApiError {
     use quill_provider::ProviderError;
-    let detail = format!("模型调用失败：{e}");
+    let detail = format!("模型调用失败：{}", e.message());
     match e {
         // 没连上：那句「去确认端点活着 / 把 llama-server 起起来」在这里是对的。
         ProviderError::Unreachable { .. }
@@ -970,4 +974,66 @@ async fn ensure_session(
     Err(ApiError::entity_not_found(
         "会话不存在，或不属于当前用户。下一步：先 POST /api/sessions 建一个，再发消息。".to_string(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// ISSUE-020 的回归：**信封里「下一步」只能有一个出口。**
+    ///
+    /// `Page.tsx:65-70` 把 `detail` 与 `next_step` 渲染成两个独立段落。
+    /// detail 曾经用 `format!("{e}")` 拼出 `ProviderError` 的 `Display`，
+    /// 而 `Display` 会追加「→ 下一步：…」，于是界面上出现两条自称「下一步」的段落。
+    fn status_error() -> ApiError {
+        provider_failure(quill_provider::ProviderError::Status {
+            code: 400,
+            body: r#"{"error":{"type":"exceed_context_size_error","n_prompt_tokens":8525}}"#
+                .into(),
+        })
+    }
+
+    #[test]
+    fn detail_carries_no_next_step_so_the_envelope_shows_only_one() {
+        let e = status_error();
+        assert!(
+            !e.detail().contains("下一步"),
+            "detail 里不该再出现「下一步」，它会和结构化 next_step 渲染成两个段落：{}",
+            e.detail()
+        );
+        // 上游的原话必须原样留着 —— 那是用户唯一能照着改的权威依据。
+        assert!(
+            e.detail().contains("n_prompt_tokens"),
+            "detail 必须带上游原话：{}",
+            e.detail()
+        );
+    }
+
+    #[test]
+    fn the_structured_next_step_is_the_one_that_survives() {
+        let e = status_error();
+        assert_eq!(e.code(), "provider_rejected");
+        let n = e.next_step();
+        assert!(n.contains("下一步"), "结构化 next_step 要自带标签：{n}");
+        assert!(
+            !n.contains("llama-server"),
+            "模型回过话了，不该再劝用户去重启它：{n}"
+        );
+    }
+
+    /// 别把 ISSUE-020 修成另一个 bug：把 detail 里的下一步去掉之后，
+    /// **结构化那句必须还在，而且内容不能退化。**
+    #[test]
+    fn unreachable_still_tells_the_user_how_to_check_the_endpoint() {
+        let e = provider_failure(quill_provider::ProviderError::Unreachable {
+            url: "http://127.0.0.1:18080/v1/chat/completions".into(),
+            detail: "connection refused".into(),
+        });
+        assert!(!e.detail().contains("下一步"), "detail：{}", e.detail());
+        assert!(
+            e.next_step().contains("确认端点活着"),
+            "真连不上时这句必须还在：{}",
+            e.next_step()
+        );
+    }
 }

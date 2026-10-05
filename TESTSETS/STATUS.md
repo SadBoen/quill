@@ -124,7 +124,9 @@ SkillsBench v1.1 / Apache-2.0，916 字节）：
    已修并在真机上复跑验过：错误码 `provider_unavailable` → `provider_rejected`，
    建议换成「不要去重启模型服务，它正在正常应答」（ISSUE-018）。
 3. **两条「下一步」打架**：detail 里还嵌着一句旧的含糊建议，和结构化的
-   `next_step` 一起渲染成两个段落（ISSUE-020，**未修**）。
+   `next_step` 一起渲染成两个段落（ISSUE-020，**已修**：detail 改用
+   `ProviderError::message()`，不再拼那句 tail；`Display` 行为一个字没动，
+   免得流式 / CLI 那些没有 `next_step` 字段可用的调用点丢掉下一步）。
 
 **顺带查清、并且不算 bug 的一件事**：`/healthz` 报的
 `compaction_threshold_tokens=8000` 看着像「设了阈值却没拦住 8525 的请求」，
