@@ -241,7 +241,7 @@ export function ChatPage(_props: ChatPageProps): ReactNode {
       ? t('chat.tokenMeter.label', {
           used: formatTokens(usedTokens),
           limit: formatTokens(contextLimit),
-          defaultValue: '本次 {{used}} / 上限 {{limit}}',
+          defaultValue: '本次 {{used}} / 配置上限 {{limit}}',
         })
       : t('chat.tokenMeter.unknownLimit', {
           used: formatTokens(usedTokens),
@@ -459,7 +459,7 @@ export function ChatPage(_props: ChatPageProps): ReactNode {
                           limit: contextLimit,
                           threshold: compactionThreshold || '—',
                           defaultValue:
-                            '上下文上限 {{limit}} tokens（来自 /healthz）。已配置压缩阈值 {{threshold}} tokens，但压缩还没实现：超过上限不会自动摘要，需要自己新建会话。',
+                            '已配置上下文上限 {{limit}} tokens、压缩阈值 {{threshold}} tokens —— 这两个都是 /healthz 里的配置值，不是模型实测值。模型端点的真实窗口可能更小，quill 不去猜它：超了会被模型服务直接拒绝。压缩尚未实现，超过上限不会自动摘要，需要自己新建会话。',
                         })
                       : t('chat.tokenMeter.noLimit', { defaultValue: '/healthz 里还没有 max_context_tokens，上限未知。' })
                   }

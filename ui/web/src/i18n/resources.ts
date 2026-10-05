@@ -217,10 +217,10 @@ export const en = {
       },
       tokenMeter: {
         idle: 'No usage this turn',
-        label: '{{used}} / {{limit}} this turn',
+        label: '{{used}} / configured {{limit}} this turn',
         unknownLimit: '{{used}} this turn (limit unknown)',
         title:
-          'Context limit {{limit}} tokens (from /healthz). A compaction threshold of {{threshold}} tokens is configured, but compaction is not implemented yet: hitting the limit does not summarize anything, so start a new chat yourself.',
+          'Configured context limit {{limit}} tokens and compaction threshold {{threshold}} tokens — both are values from /healthz config, not measured from the model. The endpoint may actually allow fewer: quill does not guess, and a request over its real window gets rejected by the model service. Compaction is not implemented, so nothing is summarized automatically when you go over — start a new chat yourself.',
         noLimit: '/healthz has no max_context_tokens yet, so the limit is unknown.',
       },
     },
@@ -1248,9 +1248,10 @@ export const zhCN = {
       },
       tokenMeter: {
         idle: '本次尚未产生用量',
-        label: '本次 {{used}} / 上限 {{limit}}',
+        label: '本次 {{used}} / 配置上限 {{limit}}',
         unknownLimit: '本次 {{used}}（上限未知）',
-        title: '上下文上限 {{limit}} tokens · 压缩阈值 {{threshold}} tokens（来自 /healthz）',
+        title:
+          '已配置上下文上限 {{limit}} tokens、压缩阈值 {{threshold}} tokens —— 这两个都是 /healthz 里的配置值，不是模型实测值。模型端点的真实窗口可能更小，quill 不去猜它：超了会被模型服务直接拒绝。压缩尚未实现，超过上限不会自动摘要，需要自己新建会话。',
         noLimit: '/healthz 里还没有 max_context_tokens，上限未知。',
       },
     },
