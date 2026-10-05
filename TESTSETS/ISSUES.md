@@ -376,9 +376,48 @@
 
 ---
 
+## ISSUE-015 · `tools/call` 的失败原因不带「下一步」，用户在界面上无从动手
+
+**状态**：已修（2026-10-06，写 `with_mcp_tools` 时被新写的测试当场抓住）
+
+- **严重度**：严重（违反红线「面向用户的文案全简体中文；错误必须带『下一步：…』」）
+- **现象**（实测，不是推演）：写完 `tools/call` 之后加了一条
+  「服务器在 `tools/call` 时退出不许报成功」的测试，断言里顺手要求错误带「下一步」，
+  当场红了：
+  ```
+  ---- a_server_that_dies_on_tools_call_is_not_reported_as_success stdout ----
+  面向用户的错误必须带「下一步」：tools/call 失败：Transport closed
+
+  服务器 stderr 末尾：
+  stub: 握手来自 "quill"
+  stub: 按要求在 tools/call 时退出
+  ```
+  也就是说：`Transport closed` 这句话会被**原样回灌给模型**（工具结果的 `Err`
+  文本进上下文），也会经 `note`/`error` 进界面。模型看到它无从判断该重试还是放弃，
+  用户看到它更无从判断该查什么。
+- **根因**：`invoke` 里的错误是照着 `handshake` 的既有写法写的
+  （`format!("tools/call 失败：{e}")`），而那套写法本来就没带「下一步」——
+  这条红线在协议层那一轮（`probe`）就没有被完整执行。加断言才把它暴露出来。
+- **已修**：
+  - `invoke` 的 `tools/call` 失败分支补上「下一步」，并说明
+    **不替它猜原因**（`Transport closed` 不区分「服务器崩了 / 管道断了 /
+    它自己关了 stdio」，三者回的都是这一句），只把「怎么查」说清楚 + 附上
+    服务器自己的 stderr。
+  - `invoke` 的 `initialize` 失败分支同样补上「下一步」。
+  - `call_tool` 的「这台服务器这一轮没发起过连接」分支补上「下一步」
+    （原来直接拼 `not_probed_reason` 的原文，而「已停用」那句本身没有「下一步」）。
+- **回归**：
+  - `mcp_stdio_protocol::a_server_that_dies_on_tools_call_is_not_reported_as_success`
+    —— 断言 `err.contains("下一步")`。这条断言是**修完之后**才绿的；
+    修之前它是红的，红的原因就是本条 ISSUE。
+  - `mcp_stdio_protocol::a_server_that_self_reports_no_tools_capability_reports_zero_not_its_list`
+    与 `..._declares_none_is_refused_with_a_next_step` 也都断言了「下一步」。
+
+---
+
 ## ISSUE-014 · 服务器自报「我没有 tools 能力」，界面仍算它有 3 个工具
 
-**状态**：待修（2026-10-06 铺 b 线时实测发现）
+**状态**：已修（2026-10-06，接 `with_mcp_tools` 时一并修掉）
 
 - **现象**（两个方向，都会说谎）：
   1. 一台服务器在 `initialize` 里自报 `capabilities: {}`（**没有 tools**），
@@ -406,11 +445,37 @@
 - **为什么一直没被抓到**：`mcp_stub.rs` 的用法注释里**已经写了 `--caps-off`**，
   但整个测试套件里**没有任何一条测试用到它** —— 一个没人用的测试夹具，
   正好盖住了它本该盖住的那个洞。
-- **修复方向**（未定）：`probe` 要把 `ServerPeerInfo.capabilities` 一起纳入判定，
+- **修复方向**（已定）：`probe` 要把 `ServerPeerInfo.capabilities` 一起纳入判定，
   并把「服务器没这个能力」与「服务器调用 tools/list 失败」**分成两种不同的报告** ——
   前者是正常状态（`connected: true`、工具数 0、附一句白话），
   后者才是失败。修的时候必须给 `--caps-off` 补一条端到端测试。
-- **回归**：无（尚未修）。
+- **已修（2026-10-06，接 `with_mcp_tools` 时一并做的）**：
+  - `Probe` 加 `server_declares_tools: Option<bool>`，从 `initialize` 结果里读
+    **服务器自报**的能力（`ServerCapabilities.tools`）。`Probe::not_probed` 记 `None`
+    （没报就是没报，不替它猜）。
+  - `mcp_client::discover` 改成**两道闸门都要过**才把工具交出去：本地
+    `enabled_capabilities`（`tools_capability_on`）**和**服务器自报。
+    任一道关掉都报 `tool_count: 0` 且 `tools` 为空。
+  - `connected` 仍然是 `true`（这是**正常状态**，不是连接失败），原因写在
+    `error` 里并带「下一步」。
+  - `call_tool` 在**同一次握手**里也判这道闸门：自报没有 tools 的服务器，
+    即便侥幸挂上了工具，直接调也拿不到一句白话而只拿到协议错。
+  - `Summary::note` 单独加一句说明「有 N 台自报没有 tools 能力」。
+  - 界面上「连上了但 0 个工具」时把 `error` 显示出来 —— 之前那两个分支
+    （未探测 / 没连上）都走不到，界面上只剩一句「已连上，0 个工具」，
+    用户不知道该改配置还是该换服务器。
+- **回归**（真的跑过，`.wsl-verify-persona.sh` 全量 957 passed / 0 failed）：
+  - `mcp_stdio_protocol::a_server_that_self_reports_no_tools_capability_reports_zero_not_its_list`
+    —— 对着真子进程：`--caps-off` 下 `probed=true`、`connected=true`、
+    `server_declares_tools=Some(false)`、`tool_count=0`、`tools` 为空、原因带「下一步」。
+    这条同时把**一直没人用的 `--caps-off` 夹具**用起来了（见上面「为什么一直没被抓到」）。
+  - `mcp_stdio_protocol::a_server_that_declares_tools_is_mounted_normally`
+    —— 与上一条成对：自报有 tools 时 `tool_count=3`、`tools.len()=3`、`error` 为 `None`。
+    只测「按 0」的话，一个「永远返回 0」的实现也能过。
+  - `mcp_stdio_protocol::calling_a_tool_on_a_server_that_declares_none_is_refused_with_a_next_step`
+    —— 调用侧同一道闸门。
+  - `ui/web/src/devices/DevicesMcpMount.test.tsx` 的
+    「连上了但一个工具都没有时，原因必须显示出来」。
 
 ---
 

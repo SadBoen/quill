@@ -69,21 +69,25 @@ describe('能力缺口表必须与后端路由对齐', () => {
     const detail = skills!.detail
     expect(detail, '技能包已挂进工具表，不该再说尚未挂进').not.toMatch(/尚未挂进|还调不到/)
     expect(detail, '要说清已经挂进工具表了').toMatch(/挂进/)
-    // 仍标 partial 是对的：MCP 来的工具一条都还没有。
-    expect(detail, 'MCP 工具还没有，partial 仍然成立').toMatch(/MCP/)
   })
 
-  it('MCP 仍然标 partial，且必须说清缺的是「挂进工具表」这一步', () => {
-    // 2026-10-06 之前这条断言盯的是「缺的是协议层」；协议层真的铺好之后
-    // （`mcp_client::probe` 真的握手并 tools/list），缺的就换成了
-    // **把 MCP 工具挂进对话的工具表**这一步。再拿「协议层」当缺口写，
-    // 就变成把已经能用的东西说成不能用 —— 和反过来的错一样严重。
+  it('MCP 仍然标 partial，但缺口已经换成「非 stdio 传输还没铺」', () => {
+    // 这一条断言改过两次，每次都是因为**真的接完了一层**：
+    //   1. 2026-10-06 之前盯的是「缺协议层」；
+    //   2. 协议层真的握手并 tools/list 之后，缺的是**挂进对话工具表**这一步；
+    //   3. `ToolRegistry::with_mcp_tools` 与 `tools/call` 都落地之后，
+    //      剩下的缺口是**传输方式**：`streamable_http` 与 `sse` 在
+    //      `mcp_client::discover` 里明确报「还没铺」，这一层不假装连过。
+    // 每一层接完都要回来改这条 —— 拿旧缺口当现状写，就是把能用的说成不能用。
     const mcp = CAPABILITY_GAPS.find((item) => item.route === 'GET /api/extensions/mcp')
     expect(mcp?.status).toBe('partial')
-    expect(mcp!.detail, 'MCP 缺的是挂进工具表，不是存储').toMatch(/挂进对话的工具表/)
-    // 已经做好的那一步也要说清楚，否则用户会以为一条工具都拿不到。
+    // 已经做好的那几步必须说清楚，否则用户会以为一条工具都拿不到。
     expect(mcp!.detail, '要说清 stdio 协议层已经真的握手并 tools/list 了').toMatch(/tools\/list/)
-    // 协议层已经铺了，文案不许再把它说成没接。
-    expect(mcp!.detail, '协议层已落地，不该再说「协议层未接」').not.toMatch(/协议层（未接|没接|还没）/)
+    expect(mcp!.detail, '要说清工具真的挂进对话工具表了').toMatch(/挂进对话工具表/)
+    // 现在真正的缺口是传输方式，不许再拿「挂进工具表」当缺口。
+    expect(mcp!.detail, '工具已挂进工具表，不该再拿这一步当缺口').not.toMatch(/还没挂进对话/)
+    // 已经做好的步骤不许被说成没接。
+    expect(mcp!.detail, '协议层与挂载都已落地').not.toMatch(/协议层（未接|没接|还没）/)
+    expect(mcp!.detail, '要说清剩下的是哪些传输').toMatch(/streamable_http|sse/)
   })
 })

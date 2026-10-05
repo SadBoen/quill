@@ -252,6 +252,252 @@ impl ToolRegistry {
         }
         Ok(self)
     }
+
+    /// 把该用户 MCP 服务器 `tools/list` 报出来的条目挂进工具表。
+    ///
+    /// 与 `with_skills` 的差别，也是这一层最要紧的一条取舍：
+    /// **一台服务器连不上，不让整条对话失败。** `with_skills` 查库失败就 500，
+    /// 因为那是 quill 自己的存储坏了，静默降级会变成「模型好像没学过我的技能」
+    /// 且毫无迹象。而 MCP 服务器是**用户自己在外面起的进程**，它没起、装依赖失败、
+    /// 改配置到一半 —— 这些都是正常状态，不该让聊天整体不可用。
+    /// 所以：查库失败仍然整条请求失败（那是我们的问题），单台服务器失败只记日志跳过。
+    ///
+    /// **每次对话都真的握手一次。** 不缓存工具列表：缓存一旦过期，
+    /// 界面上显示的工具数就会与模型实际拿到的对不上，而那种不一致没法从界面上看出来。
+    /// 代价是每条消息都要把用户配的进程拉起来一遍 —— 这笔账记在 STATUS.md 的
+    /// 「已知代价」里，真到扛不住时再上带 TTL 的缓存，并且**界面上要显示缓存年龄**。
+    pub async fn with_mcp_tools(
+        mut self,
+        db: &crate::db::DbBridge,
+        uid: quill_adapters::UserId,
+        user_key: &str,
+    ) -> Result<Self, String> {
+        let rows = crate::mcp_repo::list(db, uid)
+            .await
+            .map_err(|e| format!("加载 MCP 服务器列表失败：{e}"))?;
+        if rows.is_empty() {
+            return Ok(self);
+        }
+        // 与 `api_extensions::mcp_body` 走的是**同一个** `discover_all`，
+        // 所以「界面说挂了几个」与「模型这一轮真能调几个」出自同一次握手。
+        let found = crate::mcp_client::discover_all(rows.clone()).await;
+        for (row, d) in rows.iter().zip(found.iter()) {
+            if !d.probe.connected {
+                // 「没连上」与「连上了但没工具」是两回事，不合并成一条日志。
+                eprintln!("[tools] MCP 服务器 {} 没挂上工具：{}", row.name, d.probe.error.as_deref().unwrap_or("（无原因）"));
+                continue;
+            }
+            for tool in &d.tools {
+                match mcp_tool_visibility(&self.specs, &row.name, tool) {
+                    McpToolVisibility::Visible => {}
+                    McpToolVisibility::NotMounted(why) => {
+                        eprintln!("[tools] 跳过 MCP 工具 {}/{}：{why}", row.name, tool.remote_name);
+                        continue;
+                    }
+                }
+                let spec = mcp_tool_spec(&row.name, tool);
+                let handler = mcp_handler(row.clone(), tool.remote_name.clone(), user_key);
+                self.register(spec, handler);
+            }
+        }
+        Ok(self)
+    }
+}
+
+/// 这次对话的**基线工具表**：内置工具 + 已启用的 SKILL。
+///
+/// `api_extensions` 要在不构造完整 registry 的前提下知道「哪些名字已被占住」，
+/// 才能与 `with_mcp_tools` 判出**同一个**结果。两处各判一次的话，
+/// 界面上「挂了几个」与模型「真能调几个」迟早漂 —— 而这正是本项目最不能出的错
+/// （与 `skill_visibility` 存在的理由完全一样）。
+pub async fn baseline_specs(
+    app: Arc<crate::state::AppState>,
+    db: &crate::db::DbBridge,
+    uid: quill_adapters::UserId,
+    skill_root: &std::path::Path,
+) -> Result<Vec<ToolSpec>, String> {
+    Ok(ToolRegistry::builtin(app, uid)
+        .with_skills(db, uid, skill_root)
+        .await?
+        .specs())
+}
+
+/// 把 `UserId` 编成给并发闸门当键用的字符串。
+///
+/// 带用户是为了不让两个用户各自配的**同名**服务器共用一个闸门 ——
+/// 那等于让 B 的调用数去限制 A，而界面上谁也看不出来。
+pub fn user_key(uid: quill_adapters::UserId) -> String {
+    uid.as_bytes().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+// ------------------------------------------------------------- MCP 挂载口径
+
+/// 挂上去的工具名最长多少字符。
+///
+/// 64 是本地 4B 模型经 OpenAI 兼容端点转成函数名时的实际上限。超长的名字有两种
+/// 死法：有的后端直接拒掉**整次请求**，回一句与你的工具毫无关系的 400；
+/// 有的截断，而截断之后两个不同的工具可能撞成同一个名字。
+pub const MAX_MCP_TOOL_NAME: usize = 64;
+
+/// 挂载名 = `{服务器}__{工具}`，中间是**两个**下划线。
+///
+/// **为什么是两个而不是一个。** 服务器名被 `mcp_repo::normalize_name` 归一成
+/// `[a-z0-9-]`，**永远不含下划线**，所以 `__` 既是合法的分隔符又是唯一的：
+/// 挂载名与一个 SKILL 同名在结构上就不可能（`skills.name` 的 CHECK 是
+/// `NOT GLOB '*[^a-z0-9-]*'`，连下划线都不许），与内置工具
+/// （`list_experts`）也不可能撞。用单下划线就说不清了：工具名里本来就有
+/// `_`，于是服务器 `a` 的工具 `b_c` 与（假想的）服务器 `a_b` 的工具 `c`
+/// 会拼成同一个名字，谁顶掉谁都说不清。
+///
+/// **原名必须一起留着。** 用户在自己的 MCP 配置里认的是 `read-file`，
+/// 界面上只显示 `filesystem__read-file` 他会认不出来。所以工具描述里带原名，
+/// `GET /api/extensions/mcp` 也把映射报出来。
+///
+/// `None` = 这个名字归一不出来（服务器给的名字里一个能用的字母数字都没有）。
+pub fn mcp_tool_name(server: &str, remote_name: &str) -> Option<String> {
+    // 远端名字允许的字符比模型侧宽（有些服务器会带点、冒号、甚至中文），
+    // 统一压成 `-` 再收窄到 `[A-Za-z0-9_-]`。
+    let head = sanitize(server);
+    let tail = sanitize(remote_name);
+    // 两段都得有内容才有意义。`server` 走的是 `normalize_name`，正常路径下
+    // 不可能为空；这里仍要判，是因为「拼出一个 `__read-file`」这种名字会让
+    // 「这台工具属于哪台服务器」在界面上消失 —— 那是拼出来的，不是真的。
+    if head.is_empty() || tail.is_empty() {
+        return None;
+    }
+    Some(truncate_to_limit(format!("{head}__{tail}")))
+}
+
+/// 压到模型侧能接受的那一套字符，并合并连续的连字符。
+fn sanitize(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut last_dash = false;
+    for c in raw.chars() {
+        if c.is_ascii_alphanumeric() || c == '_' {
+            out.push(c);
+            last_dash = false;
+        } else if c == '-' {
+            // 连续的 `-` 合成一个，免得 `a--b` 与 `a-b` 拼出两个不同却等价的
+            // 名字，然后其中一个被「同名顶掉」那条守卫静默跳过。
+            if !last_dash && !out.is_empty() {
+                out.push('-');
+                last_dash = true;
+            }
+        }
+        // 其它字符（点、冒号、空格、中文…）直接丢掉，不留分隔 ——
+        // 留着会让 `a.b` 与 `ab` 归一成同一个名字。
+    }
+    out.trim_matches('-').to_string()
+}
+
+/// 超长时截断，并补一小段摘要。
+///
+/// **必须补摘要。** 光截断的话，`a…很长的名字1` 与 `a…很长的名字2` 会变成同一个，
+/// 于是第二个工具被「同名顶掉」这条守卫静默跳过 —— 用户看到的是「少了一个工具」，
+/// 而真正的原因（两个名字太长）一个字也没提。补上摘要之后截断仍然是确定的：
+/// 同样的输入永远得到同样的名字。
+fn truncate_to_limit(name: String) -> String {
+    if name.len() <= MAX_MCP_TOOL_NAME {
+        return name;
+    }
+    let digest = crate::db::digest32("mcp.tool_name", &[name.as_bytes()]);
+    let hex: String = digest[..4].iter().map(|b| format!("{b:02x}")).collect();
+    // 留 9 个字符给 `-` 加 8 位摘要。
+    let keep = MAX_MCP_TOOL_NAME - 9;
+    let head: String = name.chars().take(keep).collect();
+    format!("{head}-{hex}")
+}
+
+/// 这次对话里，模型到底看不看得见这个 MCP 工具。
+///
+/// 与 `SkillVisibility` 同一个形状、同一个理由：界面上要报的是「模型看不看得见」，
+/// 不是「服务器报了几个」。判断走 `mcp_tool_visibility` ——
+/// 与 `ToolRegistry::with_mcp_tools` **同一个函数**，两边各判一次必然漂。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum McpToolVisibility {
+    /// 已挂进工具表，模型看得见、也能调。
+    Visible,
+    /// 想挂却没挂上，原因是给用户看的白话。
+    NotMounted(&'static str),
+}
+
+impl McpToolVisibility {
+    pub fn model_can_see(&self) -> bool {
+        matches!(self, McpToolVisibility::Visible)
+    }
+}
+
+/// 判断走的是**挂上去叫什么**，不是远端原名 —— 因为「同名顶掉」这件事
+/// 发生在挂载名上。拿原名去比会漏掉「原名不同、归一后相同」的那一类。
+pub fn mcp_tool_visibility(
+    existing: &[ToolSpec],
+    server: &str,
+    tool: &crate::mcp_client::RemoteTool,
+) -> McpToolVisibility {
+    match mcp_tool_name(server, &tool.remote_name) {
+        None => McpToolVisibility::NotMounted(
+            "服务器给的名字里没有能用的字母或数字，归一后是空串",
+        ),
+        Some(name) => {
+            if existing.iter().any(|s| s.name == name) {
+                // `register` 是「同名替换」：顶掉之后模型看到的是 MCP 的工具，
+                // 前面挂好的那个静默消失 —— 这个后果比「这个工具不生效」难查得多。
+                // 报原名是因为那才是用户在服务器配置里认的东西。
+                return McpToolVisibility::NotMounted("挂载名与已有工具相同，挂进去会顶掉它");
+            }
+            if !is_object_schema(&tool.input_schema) {
+                // 不替它补一个空 schema —— 补了就是编一份「这个工具没有参数」的事实，
+                // 而服务器明明报了别的东西。模型照着错的 schema 传参，症状会出现在
+                // 工具执行阶段，离真正的病因很远。
+                return McpToolVisibility::NotMounted(
+                    "服务器给的 inputSchema 不是 object 类型，模型无从得知该传什么参数",
+                );
+            }
+            McpToolVisibility::Visible
+        }
+    }
+}
+
+/// MCP 规范要求 `inputSchema` 是 object。**判得宽一点**：只认「明确说了不是
+/// object」的情况；缺 `type` 的按 object 放行 —— 有一批真实服务器不写 `type`，
+/// 而它们的参数是能用的，为这个把它们全踢掉是白丢能力。
+fn is_object_schema(schema: &Value) -> bool {
+    match schema.get("type") {
+        Some(Value::String(t)) => t == "object",
+        None => true,
+        Some(_) => false,
+    }
+}
+
+/// MCP 工具的 `ToolSpec`。**schema 原样带过去**，不重写、不补默认值。
+pub fn mcp_tool_spec(server: &str, tool: &crate::mcp_client::RemoteTool) -> ToolSpec {
+    let name = mcp_tool_name(server, &tool.remote_name).unwrap_or_else(|| tool.remote_name.clone());
+    // 描述里带上服务器与原名：模型据此知道这个工具的来路，用户也能在界面上
+    // 把 `filesystem__read-file` 对回自己配置里的 `read-file`。
+    let origin = format!(
+        "（来自 MCP 服务器 {server}，工具原名 {}）",
+        tool.remote_name
+    );
+    let description = if tool.description.trim().is_empty() {
+        // 服务器没写描述就说没写。补一句「暂无描述」比留空好：
+        // 留空的话模型只能从 schema 猜，而空描述在很多端点上会被整条丢掉。
+        format!("{origin} 服务器没有为这个工具写描述，请按下面的参数说明判断要不要用。")
+    } else {
+        format!("{}\n{origin}", tool.description.trim())
+    };
+    ToolSpec::new(name, description).with_parameters(tool.input_schema.clone())
+}
+
+/// MCP 工具的执行体。**每次调用重新握手**，理由见 `mcp_client::call_tool`。
+fn mcp_handler(
+    row: crate::mcp_repo::McpServerRow,
+    remote_name: String,
+    user_key: &str,
+) -> ToolHandler {
+    let user_key = user_key.to_string();
+    Arc::new(move |args: &Value| {
+        crate::mcp_client::call_tool_blocking(&row, &user_key, &remote_name, args)
+    })
 }
 
 /// 模型在这次对话里看不看得见这个 SKILL。

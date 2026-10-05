@@ -22,6 +22,14 @@
 //! quill-mcp-stub --die-on-tools-list 握手成功后立刻退出
 //! quill-mcp-stub --stutter          收到任何请求都不回话（测超时）
 //! quill-mcp-stub --hold-open        stdin 关了也不退出（测子进程有没有被回收）
+//!
+//! 以下几支改的是 `tools/call`，用来测「真的调起来之后」的分支：
+//! quill-mcp-stub --echo-args        把收到的 arguments 原样回进正文（验参数真的过了线）
+//! quill-mcp-stub --call-error       回 isError=true，验失败不会被当成成功
+//! quill-mcp-stub --call-structured  只回 structuredContent，不回任何文本
+//! quill-mcp-stub --call-image       回一个图片块，验非文本不会被悄悄吞掉
+//! quill-mcp-stub --call-die         收到 tools/call 就退出，验不假装成功
+//! quill-mcp-stub --collide-tools    tools/list 报两个归一后同名的工具
 //! ```
 
 use std::io::{BufRead, Write};
@@ -88,7 +96,14 @@ fn main() {
                     continue;
                 }
                 let cursor = req["params"]["cursor"].as_str().unwrap_or("");
-                if has("--one-page") {
+                if has("--collide-tools") {
+                    // 两个名字不同、但归一后挂载名相同（`a.b` 与 `a-b` 都压成 `a-b`）。
+                    // 用来测「同名就跳过而不是顶掉」那条守卫在**真服务器**上走得通。
+                    Ok(json!({"tools": vec![
+                        tool("a.b", "带点的工具名"),
+                        tool("a-b", "带连字符的工具名"),
+                    ]}))
+                } else if has("--one-page") {
                     Ok(json!({"tools": vec![
                         tool("read-note", "读一条笔记"),
                         tool("list-notes", "列出笔记"),
@@ -110,12 +125,49 @@ fn main() {
                     Ok(json!({"tools": vec![tool("echo-third", "第三页工具")]}))
                 }
             }
-            "tools/call" => Ok(json!({
-                "content": [{
-                    "type": "text",
-                    "text": format!("stub 执行了 {}", req["params"]["name"])
-                }]
-            })),
+            "tools/call" => {
+                if has("--call-die") {
+                    eprintln!("stub: 按要求在 tools/call 时退出");
+                    std::process::exit(4);
+                }
+                let name = req["params"]["name"].as_str().unwrap_or("?");
+                if has("--call-error") {
+                    // 失败是**协议内的成功响应 + isError**，不是 JSON-RPC 错误。
+                    // 这两者的区别正是下面那个测试要盯的。
+                    Ok(json!({
+                        "content": [{"type": "text", "text": format!("{name} 故意失败")}],
+                        "isError": true
+                    }))
+                } else if has("--call-structured") {
+                    Ok(json!({
+                        "content": [],
+                        "structuredContent": {"count": 7, "items": ["甲", "乙"]}
+                    }))
+                } else if has("--call-image") {
+                    Ok(json!({"content": [
+                        {"type": "image", "data": "AAAA", "mimeType": "image/png"},
+                        {"type": "text", "text": "上面那张图"}
+                    ]}))
+                } else if has("--echo-args") {
+                    // **把 arguments 原样回进正文。** 这样「参数真的过了线」这件事
+                    // 就是被观察到的，而不是靠「调用没报错」间接推断 ——
+                    // 一个把参数全丢掉的实现同样不会报错。
+                    Ok(json!({"content": [{
+                        "type": "text",
+                        "text": format!(
+                            "stub 执行了 {name}，收到参数 {}",
+                            req["params"]["arguments"]
+                        )
+                    }]}))
+                } else {
+                    Ok(json!({
+                        "content": [{
+                            "type": "text",
+                            "text": format!("stub 执行了 {name}")
+                        }]
+                    }))
+                }
+            }
             other => Err(json!({"code": -32601, "message": format!("stub 不认识 {other}")})),
         };
 

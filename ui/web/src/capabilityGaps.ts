@@ -21,14 +21,21 @@ export const CAPABILITY_GAPS = [
     fallback: 'MCP',
     route: 'GET /api/extensions/mcp',
     status: 'partial',
-    detail: 'stdio 服务器真的握手并 tools/list 了；这些工具还没挂进对话的工具表',
+    // 「还差什么」必须是真的还差着。stdio 与 tools/call 都通了、工具也真的挂进
+    // 对话工具表了，所以剩下的缺口只有传输方式：streamable_http / sse 还没铺。
+    detail: 'stdio 真的 initialize + tools/list + tools/call，工具已挂进对话工具表；streamable_http 与 sse 这两种传输还没铺',
   },
   {
     labelKey: 'chat.tools.skills',
     fallback: '技能包',
     route: 'GET /api/extensions/skills',
     status: 'partial',
-    detail: '已挂进对话工具表（每条带 model_can_see）；MCP 来的工具还没有',
+    // SKILL 本身已经通了（挂进工具表 + 每条带 model_can_see）。partial 成立
+    // 的理由换成了**同族的另外几条路由**：`PATCH /api/extensions/skills/{name}`
+    // 与 `bundle/import`、`bundle/export` 在 routes.rs 里都还没登记。
+    // **点名是哪几条**，而不是甩一个状态码：这一行自己挂的 GET/POST/DELETE
+    // 都是 200，写「501」会让人以为技能包这条路整体没通。
+    detail: '已挂进对话工具表（每条带 model_can_see）；但 PATCH /api/extensions/skills/{name} 与 bundle 导入导出这三条还没登记',
   },
   {
     labelKey: 'chat.tools.plugins',

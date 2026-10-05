@@ -33,6 +33,26 @@ export interface McpServerStatus {
   error?: string | null
   protocol_version?: string | null
   server_info?: string | null
+  /**
+   * 这一轮**真的挂进对话工具表**的工具条数。
+   *
+   * 与 `tool_count` 是两件事：`tool_count` 是服务器自己报了几个（`tools/list`），
+   * `mounted` 是其中有几个模型这一轮调得到。两者不相等时，原因在
+   * `not_mounted` 里逐条写着。
+   *
+   * 少这一个字段，界面上就只能显示「3 个工具可用」，而模型那轮一个都调不到 ——
+   * 没有报错、没有红字，刷新一次还是那样。
+   */
+  mounted?: number
+  /**
+   * 已挂载的工具：`[挂载名, 服务器自己报的原名]`。
+   *
+   * 两个名字都要显示：用户在自己的 MCP 配置里认的是原名，而模型调的是挂载名。
+   * 只给其中一个，用户就没法把界面上这一行对回自己写的那份配置。
+   */
+  mounted_tools?: [string, string][]
+  /** 没挂上的工具：`[原名, 白话原因]`。为空数组表示该挂的都挂了。 */
+  not_mounted?: [string, string][]
 }
 
 /** `GET /api/extensions/mcp` 的响应；servers 字段缺失时按空数组处理。 */
@@ -49,6 +69,12 @@ export interface McpServerList {
   probed?: number
   connected_count?: number
   failed_count?: number
+  /**
+   * 本轮**真的挂进对话工具表**的工具总数（所有服务器加起来）。
+   *
+   * 与 `connected_count` 分开报：连上了不等于模型调得到。
+   */
+  mounted_count?: number
   /** 每台服务器的实测状态，与 `servers` 同序。 */
   status?: McpServerStatus[]
   /** 服务端对当前连通性状态的说明，原样显示，不改写。 */

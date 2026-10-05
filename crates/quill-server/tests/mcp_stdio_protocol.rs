@@ -228,3 +228,243 @@ async fn a_finished_probe_leaves_no_child_process_behind() {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
 }
+
+// --------------------------------------------------------------- tools/call
+//
+// 上面那组盯的是「连得上、报得出工具」。下面这组盯的是**真的调起来**：
+// 参数有没有过线、失败有没有被当成成功、非文本有没有被悄悄吞掉。
+// 全部对着真子进程跑，没有 mock。
+
+/// 真的调一次：参数**原样回到正文里**。
+///
+/// 盯的是「参数真的过了线」这件事被**观察到**，而不是靠「调用没报错」间接推断 ——
+/// 一个把 arguments 整个丢掉的实现同样不会报错。这条是这个文件里唯一
+/// 能区分「调通了」与「调了个空壳」的地方。
+#[tokio::test]
+async fn the_arguments_really_cross_the_wire_and_come_back_echoed() {
+    let r = row("echo", &stub(), &["--echo-args"]);
+    let out = mcp_client::call_tool(&r, "u1", "read-note", &serde_json::json!({
+        "path": "会议纪要.md",
+        "页码": 3
+    }))
+    .await
+    .expect("tools/call 应当成功");
+    assert!(out.contains("read-note"), "正文里要能看到被调用的工具名：{out}");
+    assert!(out.contains("会议纪要.md"), "参数内容必须真的到了对端：{out}");
+    assert!(out.contains('3'), "数字参数也要过去：{out}");
+    // 挂载名与远端原名在这里必须是**不同的两个东西**：协议里发出去的一直是原名，
+    // 发挂载名的话服务器会回一个「没有这个工具」。
+    assert!(
+        !out.contains("echo__read-note"),
+        "协议里必须用远端原名，不能用挂载名：{out}"
+    );
+}
+
+/// `isError: true` 走 **Err**。走 Ok 的话模型会把失败当成功，接着编结论。
+#[tokio::test]
+async fn an_is_error_result_comes_back_as_a_failure_with_the_servers_own_words() {
+    let r = row("boom", &stub(), &["--call-error"]);
+    let err = mcp_client::call_tool(&r, "u1", "read-note", &serde_json::json!({}))
+        .await
+        .expect_err("isError=true 必须当失败");
+    assert!(err.contains("故意失败"), "错误里要带服务器自己的话：{err}");
+}
+
+/// 只回 `structuredContent`、一条文本都没有时，**不能报成「什么都没返回」**。
+#[tokio::test]
+async fn a_structured_only_result_is_still_handed_to_the_model() {
+    let r = row("struct", &stub(), &["--call-structured"]);
+    let out = mcp_client::call_tool(&r, "u1", "count-things", &serde_json::json!({}))
+        .await
+        .expect("应当成功");
+    assert!(out.contains('7'), "结构化结果要变成模型能读的文本：{out}");
+    assert!(out.contains("甲"), "结构化结果的内容不能丢：{out}");
+    assert!(
+        !out.contains("没有返回任何内容"),
+        "有结构化结果时不许说「没有返回任何内容」：{out}"
+    );
+}
+
+/// 非文本块**明说**，不许悄悄吞掉。吞掉的话模型会以为工具什么都没返回。
+#[tokio::test]
+async fn a_non_text_block_is_reported_rather_than_silently_dropped() {
+    let r = row("img", &stub(), &["--call-image"]);
+    let out = mcp_client::call_tool(&r, "u1", "shot", &serde_json::json!({}))
+        .await
+        .expect("应当成功");
+    assert!(out.contains("上面那张图"), "文本块要照给：{out}");
+    assert!(
+        out.contains("这一层还不认识的内容") || out.contains("图片"),
+        "非文本块必须明说：{out}"
+    );
+}
+
+/// 服务器在 `tools/call` 时退出：**不能报成功**，也不能把空字符串当结果。
+#[tokio::test]
+async fn a_server_that_dies_on_tools_call_is_not_reported_as_success() {
+    let r = row("died", &stub(), &["--call-die"]);
+    let err = mcp_client::call_tool(&r, "u1", "read-note", &serde_json::json!({}))
+        .await
+        .expect_err("子进程在调用时退出，必须当失败");
+    assert!(!err.is_empty(), "失败也要说清是什么错：{err}");
+    assert!(err.contains("下一步"), "面向用户的错误必须带「下一步」：{err}");
+}
+
+/// **同步桥在完全没有运行时的线程上也能用。**
+///
+/// 这条是桥本身的验收：`call_tool_blocking` 是给同步的 `ToolHandler` 用的，
+/// 而 `ToolHandler` 在对话链路里跑在一个**已经有 tokio 运行时**的线程上。
+/// 如果这里只写 `#[tokio::test]`，那么「用 `Handle::block_on` 也能过」这种实现
+/// 同样能过测试 —— 而它在 current-thread 运行时（`#[tokio::test]` 的默认值）
+/// 上会 panic，在真服务的 multi-thread 上没事。这种错只有**没有运行时**
+/// 的线程才抓得到，所以这里刻意用裸 `#[test]`。
+#[test]
+fn the_sync_bridge_works_on_a_thread_with_no_runtime_at_all() {
+    let r = row("bridge", &stub(), &["--echo-args"]);
+    let out = mcp_client::call_tool_blocking(
+        &r,
+        "u1",
+        "read-note",
+        &serde_json::json!({"path": "x.md"}),
+    )
+    .expect("没有运行时的线程上也要能调通");
+    assert!(out.contains("x.md"), "参数要真的过线：{out}");
+}
+
+/// 挂载名归一后撞车的两个工具：**第二个被跳过，不许顶掉第一个**。
+///
+/// 撞名在真实服务器上完全可能。`sanitize` 的两条规则各自都能造出撞名：
+/// 连续的 `-` 合成一个，于是 `read--note` 与 `read-note` 一样；点、冒号、空格
+/// 直接丢掉，于是 `read.note` 与 `readnote` 一样。这里用第一对。
+///
+/// 盯的是**跳过**而不是顶掉：顶掉的话模型看到的是 `read-note` 的描述里写着
+/// 「带连字符的工具名」，而用户配的是另一个 —— 症状会出现在模型答错内容上，
+/// 离真正的原因隔了三层。
+#[tokio::test]
+async fn two_tools_that_normalize_to_the_same_name_do_not_overwrite_each_other() {
+    use quill_server::mcp_client::RemoteTool;
+    use quill_server::tools::{mcp_tool_name, mcp_tool_spec, mcp_tool_visibility, McpToolVisibility};
+
+    let mk = |n: &str| RemoteTool {
+        remote_name: n.to_string(),
+        description: format!("{n} 的说明"),
+        input_schema: serde_json::json!({"type": "object", "properties": {}}),
+    };
+    assert_eq!(
+        mcp_tool_name("srv", "read--note"),
+        mcp_tool_name("srv", "read-note"),
+        "这两个名字归一后必须真的相同，否则这条测试测的不是撞名"
+    );
+    // 另一条规则也要真的成立，否则「点被丢掉」这件事没人盯。
+    assert_eq!(
+        mcp_tool_name("srv", "read.note"),
+        mcp_tool_name("srv", "readnote"),
+        "丢掉分隔符这条规则也必须真的把两个名字并到一起"
+    );
+
+    let first = mcp_tool_spec("srv", &mk("read--note"));
+    let taken = vec![first.clone()];
+    match mcp_tool_visibility(&taken, "srv", &mk("read-note")) {
+        McpToolVisibility::NotMounted(why) => {
+            assert!(why.contains("顶掉"), "原因要说清是「会顶掉」：{why}")
+        }
+        other => panic!("撞名了却判成可挂载，第二个会顶掉第一个：{other:?}"),
+    }
+    assert_eq!(taken[0].name, first.name, "跳过的语义是「不动它」，不是「换掉它」");
+}
+
+/// **服务器自报「我没有 tools 能力」时，工具数按 0 报**，哪怕它的 `tools/list`
+/// 真的回了内容。ISSUE-014 的回归。
+///
+/// 这条盯的是「本地开关」与「服务器自报」**两道闸门都要过**。只看本地那道的话，
+/// 这台服务器会被挂出 3 个工具，界面上写「模型调得到」，而模型调过去只会拿到
+/// 一个「方法不存在」—— 界面上没有任何迹象说明这一点。
+///
+/// 顺带把 `--caps-off` 这个夹具用起来：它的用法注释里一直写着这个开关，
+/// 但整个测试套件里没有任何一条测试用到它（见 ISSUE-014 的「为什么一直没被抓到」）。
+#[tokio::test]
+async fn a_server_that_self_reports_no_tools_capability_reports_zero_not_its_list() {
+    let r = as_stub("selfoff", &["--caps-off"]);
+    // 先确认这个夹具真的造出了「自报没有 tools、但 tools/list 照样回内容」：
+    // 下面那两条断言的力度全靠它，否则这条测试可能只是量了一个空壳。
+    let d = mcp_client::discover(&r).await;
+
+    assert!(d.probe.probed, "确实发起了握手：{d:?}");
+    assert!(d.probe.connected, "握手本身是成功的 —— 这是正常状态，不是连接失败：{d:?}");
+    assert_eq!(
+        d.probe.server_declares_tools,
+        Some(false),
+        "服务器自报的能力里没有 tools，必须被读出来：{d:?}"
+    );
+    assert_eq!(
+        d.probe.tool_count, 0,
+        "自报没有 tools 的服务器，工具数必须是 0：{d:?}"
+    );
+    assert!(
+        d.tools.is_empty(),
+        "自报没有 tools 的服务器，一个工具都不许挂进工具表：{d:?}"
+    );
+    // `connected=true` 但工具数 0 的原因必须写清楚，且要给「下一步」。
+    let why = d.probe.error.as_deref().expect("工具数是 0 必须有原因");
+    assert!(why.contains("没有 tools"), "{why}");
+    assert!(why.contains("下一步"), "{why}");
+}
+
+/// 反过来：自报**有** tools 能力的服务器，本地开关也开着，就该正常挂上。
+/// 与上一条成对 —— 只测「按 0」的话，一个「永远返回 0」的实现也能过。
+#[tokio::test]
+async fn a_server_that_declares_tools_is_mounted_normally() {
+    let d = mcp_client::discover(&as_stub("selfon", &[])).await;
+    assert_eq!(d.probe.server_declares_tools, Some(true), "{d:?}");
+    assert_eq!(d.probe.tool_count, 3, "{d:?}");
+    assert_eq!(d.tools.len(), 3, "{d:?}");
+    assert_eq!(d.probe.error, None, "一切正常就不该带原因：{d:?}");
+}
+
+/// 自报没有 tools 的服务器，**直接调它的工具**也要被挡在门外。
+///
+/// 与挂载侧同一道闸门。挂载侧按 0 处理之后，模型正常情况下调不到它；这条盯的是
+/// 「万一挂上了呢」——那时模型拿到的是一个看不懂的协议错，而不是一句白话。
+#[tokio::test]
+async fn calling_a_tool_on_a_server_that_declares_none_is_refused_with_a_next_step() {
+    let r = as_stub("selfoff", &["--caps-off"]);
+    let err = mcp_client::call_tool(&r, "u1", "read-note", &serde_json::json!({}))
+        .await
+        .expect_err("自报没有 tools 的服务器，调用必须被挡住");
+    assert!(err.contains("没有 tools"), "{err}");
+    assert!(err.contains("下一步"), "{err}");
+}
+
+/// 界面上报的「挂了几个」必须与 `with_mcp_tools` 真的挂上去的**逐个相等**。
+///
+/// 这一对是本轮的核心防线：界面说 3 个、模型那轮只调得到 2 个，
+/// 用户没有任何办法发现 —— 除非有一条测试把两边**真的**跑一遍再对齐。
+#[tokio::test]
+async fn the_discovery_tool_list_is_exactly_what_the_mount_decision_sees() {
+    use quill_server::tools::{mcp_tool_name, mcp_tool_spec, mcp_tool_visibility};
+
+    let r = row("notes", &stub(), &[]);
+    let d = mcp_client::discover(&r).await;
+    assert!(d.probe.connected, "先要真的连上：{d:?}");
+    // 分页必须翻完：stub 首页 2 个 + 游标后 1 个。少翻一页的话这里只有 2，
+    // 而 2 看上去也挺像回事。
+    assert_eq!(d.tools.len(), 3, "工具列表必须翻完分页：{d:?}");
+    assert_eq!(d.tools.len(), d.probe.tool_count, "条数与上报的必须一致：{d:?}");
+
+    // 拿一个空的基线表，按 `with_mcp_tools` 的顺序走一遍判定。
+    let mut taken: Vec<quill_provider::ToolSpec> = Vec::new();
+    let mut mounted = Vec::new();
+    for tool in &d.tools {
+        if mcp_tool_visibility(&taken, &d.probe.name, tool).model_can_see() {
+            let spec = mcp_tool_spec(&d.probe.name, tool);
+            mounted.push(spec.name.clone());
+            taken.push(spec);
+        }
+    }
+    let expected: Vec<String> = d
+        .tools
+        .iter()
+        .map(|t| mcp_tool_name(&d.probe.name, &t.remote_name).expect("名字应可归一"))
+        .collect();
+    assert_eq!(mounted, expected, "三个工具都该挂上，且挂载名与原名一一对应");
+}

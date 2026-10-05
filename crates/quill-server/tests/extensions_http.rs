@@ -261,13 +261,23 @@ async fn a_reachable_stdio_server_is_reported_as_connected_with_its_real_tool_co
     assert_eq!(st["server_info"], serde_json::json!("quill-test-stub 1.0.0"));
     assert!(st["error"].is_null(), "连上了就不该带错误：{st}");
 
-    // note 必须说清「连上了 ≠ 模型能调」—— 这是当前最容易骗人的地方。
+    // note 必须说清「连上了」与「模型调得到」是两条独立的事实。
+    //
+    // 2026-10-06 之前这里断言的是「还没有挂进对话的工具表」—— 那句话在
+    // `with_mcp_tools` 接上之后就成了**假话**，继续留着比删掉更坏：
+    // 它会逼着后来的人把真功能改回「没挂」的样子才配得上这条断言。
+    // 现在断言的是新事实：挂了几个、挂在哪，看得见。
     let note = v["note"].as_str().expect("必须有说明");
     assert!(note.contains("1 台 stdio 服务器"), "{note}");
     assert!(
-        note.contains("还没有挂进对话的工具表"),
-        "note 必须说清工具还没进工具表：{note}"
+        note.contains("真的挂进对话工具表的有 3 个"),
+        "note 必须说清挂了几个：{note}"
     );
+    assert!(
+        !note.contains("还没有挂进对话的工具表"),
+        "工具已经挂上去了，这句话是假的：{note}"
+    );
+    assert_eq!(v["mounted_count"], serde_json::json!(3));
 
     // 读回来也一样 —— 不能只在 POST 的响应里诚实。
     let back = list(&h, TOKEN_A).await;
@@ -919,6 +929,25 @@ async fn tool_table(harness: &Harness, uid: &str) -> quill_server::tools::ToolRe
         .expect("挂 SKILL 进工具表必须成功")
 }
 
+/// **和对话链路一模一样**的那一份工具表：内置 + SKILL + MCP。
+///
+/// 刻意复用对话里那条链（`with_mcp_tools`），而不是在测试里另拼一个 registry ——
+/// 另拼的话，这条测试就只在验证测试自己，而不是验证对话。
+async fn chat_tool_table(harness: &Harness, uid: &str) -> quill_server::tools::ToolRegistry {
+    let u = user_id(uid);
+    quill_server::tools::ToolRegistry::builtin(Arc::new(harness.state()), u)
+        .with_skills(harness.db.bridge().as_ref(), u, &harness.skill_dir())
+        .await
+        .expect("挂 SKILL 进工具表必须成功")
+        .with_mcp_tools(
+            harness.db.bridge().as_ref(),
+            u,
+            &quill_server::tools::user_key(u),
+        )
+        .await
+        .expect("挂 MCP 进工具表必须成功")
+}
+
 fn spec_names(r: &quill_server::tools::ToolRegistry) -> Vec<String> {
     r.specs().into_iter().map(|s| s.name).collect()
 }
@@ -1238,4 +1267,175 @@ async fn a_disabled_skill_is_listed_but_not_reported_as_visible() {
         item.get("not_mounted_reason").is_none(),
         "停用是用户自己的选择，不是故障，不该报成「没挂上，原因：…」：{item}"
     );
+}
+
+// ------------------------------------------------- MCP 挂进对话的工具表
+//
+// 核心防线：**界面上报的「挂了几个」必须与对话里真挂上的逐个相等。**
+//
+// 这个不一致是本项目最危险的一种故障：界面上「3 个工具可用」，而模型那一轮
+// 一个都调不到，用户没有任何办法发现 —— 没有报错、没有红字、刷新一次还是那样。
+// 所以下面每一条都**真的把两边各跑一遍再对齐**，不靠推断。
+
+/// 从 `status` 里取出某台服务器的 `mounted_tools`（`[挂载名, 原名]` 的数组）。
+fn mounted_of(v: &serde_json::Value, server: &str) -> Vec<(String, String)> {
+    v["status"]
+        .as_array()
+        .expect("status 必须是数组")
+        .iter()
+        .find(|s| s["name"] == serde_json::json!(server))
+        .unwrap_or_else(|| panic!("status 里没有 {server}：{v}"))["mounted_tools"]
+        .as_array()
+        .expect("mounted_tools 必须是数组")
+        .iter()
+        .map(|p| {
+            (
+                p[0].as_str().expect("挂载名是字符串").to_string(),
+                p[1].as_str().expect("原名是字符串").to_string(),
+            )
+        })
+        .collect()
+}
+
+/// 真服务器 `tools/list` 报的 3 个工具，**真的**进了对话的工具表。
+#[tokio::test]
+async fn mcp_tools_from_a_real_server_reach_the_conversation_tool_table() {
+    let h = Harness::new("ext-mcp-into-tools");
+    seed_user(&h.db.bridge(), UID_A);
+    save(&h, TOKEN_A, serde_json::json!({"servers": [stdio_stub("notes", &[])]})).await;
+
+    let names = spec_names(&chat_tool_table(&h, UID_A).await);
+    for remote in ["read-note", "list-notes", "echo-third"] {
+        let want = format!("notes__{remote}");
+        assert!(
+            names.contains(&want),
+            "模型这一轮的工具表里必须有 {want}：实际有 {names:?}"
+        );
+    }
+    // 内置工具**不许**因为 MCP 而消失。
+    assert!(names.contains(&"list_experts".to_string()), "内置工具被顶掉了：{names:?}");
+}
+
+/// 界面上报的挂载清单与对话里真挂上的**逐个相等**。
+#[tokio::test]
+async fn the_ui_reports_exactly_the_tools_the_conversation_can_really_call() {
+    let h = Harness::new("ext-mcp-ui-matches-tools");
+    seed_user(&h.db.bridge(), UID_A);
+    save(&h, TOKEN_A, serde_json::json!({"servers": [stdio_stub("notes", &[])]})).await;
+
+    let reported = mounted_of(&list(&h, TOKEN_A).await, "notes");
+    let actual = spec_names(&chat_tool_table(&h, UID_A).await)
+        .into_iter()
+        .filter(|n| n.starts_with("notes__"))
+        .collect::<Vec<_>>();
+
+    let reported_names: Vec<String> = reported.iter().map(|(m, _)| m.clone()).collect();
+    assert_eq!(
+        reported_names,
+        actual,
+        "界面说挂了 {:?}，对话里真有 {:?} —— 两边必须逐个相等",
+        reported_names,
+        actual
+    );
+    assert_eq!(reported.len(), 3, "stub 报 3 个工具（分页翻完）：{reported:?}");
+    // 挂载名与原名要能对回去：用户在服务器配置里认的是原名。
+    for (mounted, remote) in &reported {
+        assert_eq!(mounted, &format!("notes__{remote}"), "挂载名与原名的对应不对：{reported:?}");
+    }
+    assert_eq!(list(&h, TOKEN_A).await["mounted_count"], serde_json::json!(3));
+}
+
+/// 能力被关掉：连上了、工具数是 0，**挂上去的也必须是 0**。
+/// 界面上「已连上」与「模型调得到」是两条独立的事实。
+#[tokio::test]
+async fn a_server_with_the_tools_capability_off_mounts_nothing_and_says_so() {
+    let h = Harness::new("ext-mcp-caps-off");
+    seed_user(&h.db.bridge(), UID_A);
+    let mut cfg = stdio_stub("capped", &[]);
+    cfg["enabled_capabilities"] = serde_json::json!(["resources"]);
+    save(&h, TOKEN_A, serde_json::json!({"servers": [cfg]})).await;
+
+    let v = list(&h, TOKEN_A).await;
+    let st = &v["status"][0];
+    assert_eq!(st["connected"], serde_json::json!(true), "握手本身是成功的：{v}");
+    assert_eq!(st["tool_count"], serde_json::json!(0), "模型看不到的工具不该被算进去：{v}");
+    assert_eq!(st["mounted"], serde_json::json!(0), "挂上去的必须是 0：{v}");
+    assert_eq!(v["mounted_count"], serde_json::json!(0));
+
+    let names = spec_names(&chat_tool_table(&h, UID_A).await);
+    assert!(
+        !names.iter().any(|n| n.starts_with("capped__")),
+        "能力关掉的服务器不该挂出工具：{names:?}"
+    );
+}
+
+/// 连不上的服务器：一条工具都不挂，**但界面上不许显示「0 个工具」冒充事实** ——
+/// `probed`/`connected`/`error` 必须照实把「没连上」说出来。
+#[tokio::test]
+async fn an_unreachable_server_mounts_nothing_without_pretending_to_have_zero_tools() {
+    let h = Harness::new("ext-mcp-down");
+    seed_user(&h.db.bridge(), UID_A);
+    save(&h, TOKEN_A, serde_json::json!({"servers": [stdio("dead")]})).await;
+
+    let v = list(&h, TOKEN_A).await;
+    let st = &v["status"][0];
+    assert_eq!(st["probed"], serde_json::json!(true), "真的发起了握手：{v}");
+    assert_eq!(st["connected"], serde_json::json!(false), "拉不起来就是连不上：{v}");
+    assert_eq!(st["mounted"], serde_json::json!(0), "挂不上的必须是 0：{v}");
+    assert_eq!(v["mounted_count"], serde_json::json!(0));
+    assert!(
+        !st["error"].as_str().unwrap_or("").is_empty(),
+        "连不上必须带原因，不能只有一个 0：{v}"
+    );
+
+    let names = spec_names(&chat_tool_table(&h, UID_A).await);
+    assert!(!names.iter().any(|n| n.starts_with("dead__")), "{names:?}");
+}
+
+/// 一台连不上的服务器**不许让整条对话失败**。
+///
+/// 与 `with_skills` 查库失败就 500 正好相反：MCP 服务器是用户自己在外面起的
+/// 进程，它没起是正常状态，不该让聊天整体不可用。
+#[tokio::test]
+async fn one_broken_server_does_not_take_the_whole_conversation_down() {
+    let h = Harness::new("ext-mcp-partial");
+    seed_user(&h.db.bridge(), UID_A);
+    save(
+        &h,
+        TOKEN_A,
+        serde_json::json!({"servers": [stdio("dead"), stdio_stub("notes", &["--echo-args"])]}),
+    )
+    .await;
+
+    let r = chat_tool_table(&h, UID_A).await;
+    let names = spec_names(&r);
+    assert!(
+        names.contains(&"notes__read-note".to_string()),
+        "一台坏了的不该拖垮好的那台：{names:?}"
+    );
+    // 挂上去的工具要真的能调：执行体得在，且调得通。
+    let call = quill_provider::ToolCall::new(
+        "c1",
+        "notes__read-note",
+        serde_json::json!({"path": "某条笔记"}),
+    );
+    let out = r.call(&call).expect("挂上去的 MCP 工具必须真的调得通");
+    assert!(out.contains("某条笔记"), "参数要真的过了线：{out}");
+}
+
+/// 另一个用户的同名服务器不该被算进你的工具表。
+#[tokio::test]
+async fn another_users_mcp_servers_never_reach_your_tool_table() {
+    let h = Harness::new("ext-mcp-cross-user");
+    seed_user(&h.db.bridge(), UID_A);
+    seed_user(&h.db.bridge(), UID_B);
+    save(&h, TOKEN_B, serde_json::json!({"servers": [stdio_stub("secret", &[])]})).await;
+
+    let names = spec_names(&chat_tool_table(&h, UID_A).await);
+    assert!(
+        !names.iter().any(|n| n.starts_with("secret__")),
+        "A 的工具表里出现了 B 配的服务器 —— 跨用户泄露：{names:?}"
+    );
+    let b_names = spec_names(&chat_tool_table(&h, UID_B).await);
+    assert!(b_names.contains(&"secret__read-note".to_string()), "B 自己应当看得见：{b_names:?}");
 }

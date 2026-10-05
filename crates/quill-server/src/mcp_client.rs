@@ -20,13 +20,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rmcp::model::{
-    ClientCapabilities, ClientConfig, Implementation, PaginatedRequestParams, Tool as McpTool,
+    CallToolRequestParams, CallToolResponse, ClientCapabilities, ClientConfig, ContentBlock,
+    Implementation, PaginatedRequestParams, Tool as McpTool,
 };
 use rmcp::transport::TokioChildProcess;
 use rmcp::{ClientHandler, ServiceExt};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
+use tokio::task::JoinHandle;
 
 use crate::mcp_repo::McpServerRow;
 
@@ -47,6 +49,14 @@ pub struct Probe {
     pub protocol_version: Option<String>,
     /// 服务器自报的实现名与版本，例如 `filesystem-server 1.2.0`。
     pub server_info: Option<String>,
+    /// 服务器在 `initialize` 里**自报**的 `tools` 能力。
+    ///
+    /// 与本地 `enabled_capabilities` 是两件事，**都要看**：
+    /// 本地开关说「我允许你用 tools」，服务器自报说「我确实有 tools」。
+    /// 只看前者的话，一台自报没有 tools 能力的服务器照样能被挂出工具，
+    /// 界面上显示「模型调得到」，而模型调过去只会拿到一个方法不存在的错。
+    /// 见 ISSUE-014。
+    pub server_declares_tools: Option<bool>,
 }
 
 impl Probe {
@@ -59,6 +69,7 @@ impl Probe {
             error: Some(why.into()),
             protocol_version: None,
             server_info: None,
+            server_declares_tools: None,
         }
     }
 
@@ -105,62 +116,123 @@ pub fn tools_capability_on(row: &McpServerRow) -> bool {
     }
 }
 
-/// 探测一台服务器。**永远不会 panic、永远返回结构完整的结果** —— 调用方要把它
-/// 直接渲染到界面上，缺字段的话前端就得自己猜「那是什么意思」。
-pub async fn probe(row: &McpServerRow) -> Probe {
+/// 一次探测的完整结果：**状态**加上**真正会交给模型的工具**。
+///
+/// 拆成两个字段，是因为它们回答两个不同的问题：「连上了吗」与「模型能调什么」。
+/// 只报前者的话，界面上就只剩一个连不上的服务器，和一个说不清的 0。
+#[derive(Debug, Clone, PartialEq)]
+pub struct Discovery {
+    pub probe: Probe,
+    /// 按 `enabled_capabilities` 过滤之后真正会挂进工具表的工具。
+    /// 连不上时是空的 —— **空列表不等于「它一个工具都没有」**，原因在
+    /// `probe.error` 里。这条界线得由类型说清楚，否则调用方会顺手把
+    /// 「没连上」渲染成「0 个工具」。
+    pub tools: Vec<RemoteTool>,
+}
+
+/// 探测一台服务器，**并把工具带回来**。
+///
+/// 设备页与聊天链路走的是**同一个**函数。两边各握手一次的话，
+/// 「界面上说挂了几个」与「模型这一轮真能调几个」迟早对不上，而那种不一致
+/// 恰恰是本项目最不能出的错（同一个道理见 `tools::mcp_tool_visibility`）。
+///
+/// **只握手一次。** 探测会真的把用户配的那个进程拉起来，拉两遍不是「多花一点
+/// 时间」，而是让一个慢启动的服务器在每次刷新设备页时多占一份内存，并且
+/// 两次结果可能不一样 —— 界面上显示的工具数就会和模型实际拿到的对不上。
+///
+/// **永远不会 panic**，返回的 `probe` 字段永远完整。
+pub async fn discover(row: &McpServerRow) -> Discovery {
+    if let Some(why) = not_probed_reason(row) {
+        return Discovery { probe: Probe::not_probed(row, why), tools: Vec::new() };
+    }
+
+    let command = row.command.as_deref().unwrap_or("").trim().to_string();
+    let budget = probe_budget(row.timeout_ms);
+    match tokio::time::timeout(budget, handshake(row)).await {
+        Ok(Ok(listed)) => {
+            // **两道闸门，都要过。** 本地 `enabled_capabilities` 说「我允许你用
+            // tools」，服务器自报说「我确实有 tools」。只看本地那道的话，一台
+            // 自报没有 tools 能力的服务器照样能被挂出工具 —— 界面上写「模型
+            // 调得到」，而模型调过去只会拿到一个「方法不存在」的错。见 ISSUE-014。
+            //
+            // 「报 0 而不是报真实条数」：`tools/list` 回了几个是**服务器的行为**，
+            // 模型能不能调是**另一件事**，两者在服务器说谎时必须分开报。
+            let blocked_by_local = !tools_capability_on(row);
+            let blocked_by_server = listed.declares_tools == Some(false);
+            let tools = if blocked_by_local || blocked_by_server {
+                Vec::new()
+            } else {
+                listed.tools
+            };
+            let mut probe = Probe {
+                name: row.name.clone(),
+                probed: true,
+                connected: true,
+                tool_count: tools.len(),
+                error: None,
+                protocol_version: Some(listed.info.0),
+                server_info: Some(listed.info.1),
+                server_declares_tools: Some(listed.declares_tools.unwrap_or(false)),
+            };
+            // 「服务器没这个能力」是**正常状态**，不是失败：`connected` 仍然是
+            // true。区别由 `error` 这一栏说清，别把它混进连接失败里。
+            if blocked_by_local {
+                probe.error = Some(format!(
+                    "本地 enabled_capabilities 里没有 tools，所以一个工具都不给模型。\
+                     下一步：在设备页把 tools 加进能力列表，或清空该列表表示全开。"
+                ));
+            } else if blocked_by_server {
+                probe.error = Some(format!(
+                    "服务器在 initialize 里自报的能力里**没有 tools** —— 它自己说它不提供工具，\
+                     所以工具数按 0 报（即使它的 tools/list 回了内容）。\
+                     下一步：确认这台服务器是否该提供工具；若它本该提供，那是它 initialize 的问题，\
+                     把它的协议版本与实现名连同这段现象反馈给它。"
+                ));
+            }
+            Discovery { probe, tools }
+        }
+        Ok(Err(why)) => Discovery { probe: Probe::failed(row, why), tools: Vec::new() },
+        Err(_) => Discovery {
+            probe: Probe::failed(
+                row,
+                format!(
+                    "握手加 tools/list 在 {} 毫秒内没跑完（已按上限截断）。\
+                     下一步：先在命令行里手动跑一次 `{command}`，它自己都不回话就别指望协议层能连上。",
+                    budget.as_millis()
+                ),
+            ),
+            tools: Vec::new(),
+        },
+    }
+}
+
+/// 这一行**根本没资格发起握手**时的白话原因。`None` = 该去连了。
+///
+/// 抽出来是因为「不探测」的原因要出现在**两处**（`probed=false` 的那一条，
+/// 与聊天链路挂不上工具的那一条），两处各写一遍迟早措辞漂移。
+fn not_probed_reason(row: &McpServerRow) -> Option<String> {
     if !row.enabled {
-        return Probe::not_probed(
-            row,
-            "已停用（你自己关掉的），本轮没有发起任何连接。",
-        );
+        return Some("已停用（你自己关掉的），本轮没有发起任何连接。".to_string());
     }
     if row.transport != "stdio" {
-        return Probe::not_probed(row, format!(
+        return Some(format!(
             "传输方式 {} 的协议层还没铺，本轮只铺了 stdio —— 这不是连接失败，是还没做。",
             row.transport
         ));
     }
-    let command = row.command.as_deref().unwrap_or("").trim();
-    if command.is_empty() {
-        return Probe::not_probed(
-            row,
+    if row.command.as_deref().unwrap_or("").trim().is_empty() {
+        return Some(
             "stdio 配置里没有 command，没法拉起本地进程。\
-             下一步：在这一行填上可执行文件名，例如 `npx`。",
+             下一步：在这一行填上可执行文件名，例如 `npx`。"
+                .to_string(),
         );
     }
+    None
+}
 
-    let budget = probe_budget(row.timeout_ms);
-    match tokio::time::timeout(budget, handshake(row)).await {
-        Ok(Ok(tools)) => {
-            let info = tools.info;
-            let tool_count = if tools_capability_on(row) {
-                tools.tools.len()
-            } else {
-                // 连上了、但能力被关掉，报 0 而不是报真实条数：模型看不到的工具
-                // 不该被算成「可用的工具」。原因写在 note 里。
-                0
-            };
-            Probe {
-                name: row.name.clone(),
-                probed: true,
-                connected: true,
-                tool_count,
-                error: None,
-                protocol_version: Some(info.0),
-                server_info: Some(info.1),
-            }
-        }
-        Ok(Err(why)) => Probe::failed(row, why),
-        Err(_) => Probe::failed(
-            row,
-            format!(
-                "握手加 tools/list 在 {} 毫秒内没跑完（已按上限截断）。\
-                 下一步：先在命令行里手动跑一次 `{}`，它自己都不回话就别指望协议层能连上。",
-                budget.as_millis(),
-                command_line(row)
-            ),
-        ),
-    }
+/// 只要状态、不要工具。设备页与既有调用方用这个。
+pub async fn probe(row: &McpServerRow) -> Probe {
+    discover(row).await.probe
 }
 
 /// 探测一批。**并发**，且是**并发地去连真实的用户进程**：一台起不起来的服务器
@@ -169,22 +241,30 @@ pub async fn probe(row: &McpServerRow) -> Probe {
 /// 返回值与 `rows` **同序**：调用方按下标对齐，不用按名字再查一遍（名字已归一，
 /// 但按名字查会把「哪台对不上」的错误藏起来）。
 pub async fn probe_all(rows: Vec<McpServerRow>) -> Vec<Probe> {
+    discover_all(rows).await.into_iter().map(|d| d.probe).collect()
+}
+
+/// `probe_all` 的全量版本：除状态外还带回真正会挂进工具表的工具。
+///
+/// 同样并发、同样同序。`probe_all` 建在它之上，所以「界面上看到的工具数」与
+/// 「模型这一轮真能调的工具」出自**同一次**握手。
+pub async fn discover_all(rows: Vec<McpServerRow>) -> Vec<Discovery> {
     let names: Vec<String> = rows.iter().map(|r| r.name.clone()).collect();
     if rows.is_empty() {
         return Vec::new();
     }
     let mut set = tokio::task::JoinSet::new();
     for (idx, row) in rows.into_iter().enumerate() {
-        set.spawn(async move { (idx, probe(&row).await) });
+        set.spawn(async move { (idx, discover(&row).await) });
     }
     // **先按输入顺序占好位，再按完成顺序填。** `JoinSet::join_next` 是谁先跑完
     // 先给谁，直接 push 的话返回顺序会随机器负载抖动 —— 而调用方是拿这个下标去
     // 对齐 `servers` 的，顺序一乱，「哪台服务器的工具数」就全串位了。
-    let mut slots: Vec<Option<Probe>> = names.iter().map(|_| None).collect();
+    let mut slots: Vec<Option<Discovery>> = names.iter().map(|_| None).collect();
     while let Some(joined) = set.join_next().await {
         match joined {
-            Ok((idx, p)) => slots[idx] = Some(p),
-            // 探测任务自己不会 panic（`probe` 内部没有 unwrap）。真出了 join 错误，
+            Ok((idx, d)) => slots[idx] = Some(d),
+            // 探测任务自己不会 panic（`discover` 内部没有 unwrap）。真出了 join 错误，
             // 也不能让整个接口 500 —— 那是「一个用户进程有问题」变成「整页 MCP 打不开」。
             // 槽位留着 None，下面按名字填成一条「没探测成」的记录。
             Err(e) => eprintln!("[mcp] 探测任务没能跑完：{e}"),
@@ -193,14 +273,18 @@ pub async fn probe_all(rows: Vec<McpServerRow>) -> Vec<Probe> {
     slots
         .into_iter()
         .zip(names)
-        .map(|(slot, name)| slot.unwrap_or_else(|| Probe {
-            name,
-            probed: false,
-            connected: false,
-            tool_count: 0,
-            error: Some("探测任务没能跑完（见服务端日志）".to_string()),
-            protocol_version: None,
-            server_info: None,
+        .map(|(slot, name)| slot.unwrap_or_else(|| Discovery {
+            probe: Probe {
+                name,
+                probed: false,
+                connected: false,
+                tool_count: 0,
+                error: Some("探测任务没能跑完（见服务端日志）".to_string()),
+                protocol_version: None,
+                server_info: None,
+                server_declares_tools: None,
+            },
+            tools: Vec::new(),
         }))
         .collect()
 }
@@ -214,36 +298,16 @@ struct HandshakeTools {
     tools: Vec<RemoteTool>,
     /// `(协议版本, 实现名 版本)`
     info: (String, String),
+    /// 服务器在 `initialize` 里自报有没有 `tools` 能力。`None` = 它没报。
+    ///
+    /// `None` 与 `Some(false)` 分开，是因为「没报能力」和「明确说没有工具」
+    /// 面对的是两种不同的服务器：前者有一批老实现根本不写 `capabilities`
+    /// 却照样能调 `tools/list`，照着 `Some(false)` 处理会把它们全打成 0。
+    declares_tools: Option<bool>,
 }
 
 async fn handshake(row: &McpServerRow) -> Result<HandshakeTools, String> {
-    let command = row.command.clone().unwrap_or_default();
-    let mut cmd = Command::new(command.trim());
-    cmd.args(&row.args);
-    if let Some(cwd) = row.cwd.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
-        cmd.current_dir(cwd);
-    }
-    for (k, v) in &row.env {
-        cmd.env(k, v);
-    }
-    // stdin/stdout 由传输层接管。**stderr 单独接走**：stdio 服务器启动失败的信息
-    // 几乎全在 stderr 上，继承到服务端日志的话，用户在界面上只会看到一句
-    // 「连不上」——而那句话对「少装一个依赖」和「地址写错」是同一个答案。
-    let (transport, child_stderr) = TokioChildProcess::builder(cmd)
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| spawn_hint(row, e))?;
-    let stderr: Arc<StderrTail> = Arc::new(StderrTail::default());
-    // 必须有人**同时**在读 stderr：不读的话管道写满（Linux 64KB）之后子进程会
-    // 阻塞在 write 上，握手就永远等不到 —— 表现为「每台服务器都超时」。
-    let drain = child_stderr.map(|mut s| {
-        let sink = Arc::clone(&stderr);
-        tokio::spawn(async move {
-            let mut raw = Vec::new();
-            let _ = s.read_to_end(&mut raw).await;
-            sink.set(&String::from_utf8_lossy(&raw));
-        })
-    });
+    let (transport, stderr, drain) = spawn_stdio(row)?;
 
     let service = match QuillClient.serve(transport).await {
         Ok(s) => s,
@@ -255,20 +319,32 @@ async fn handshake(row: &McpServerRow) -> Result<HandshakeTools, String> {
 
     // 协议版本与实现名都是**服务器报什么我们就存什么**。报不出来就说报不出来 ——
     // 拿默认值填上会让「这服务器是谁」看起来像真的。
-    let info = service.peer_info().map_or_else(
+    //
+    // 顺手把服务器**自报的能力**也读出来（ISSUE-014）：本地开关说「我允许你用
+    // tools」，服务器自报说「我确实有 tools」，两者都要看。只看本地那道，
+    // 一台自报没有 tools 的服务器会被挂出工具，界面上写「模型调得到」。
+    let (info, declares_tools) = service.peer_info().map_or_else(
         || {
             (
-                "（服务器没报协议版本）".to_string(),
-                "（服务器没报实现名）".to_string(),
+                (
+                    "（服务器没报协议版本）".to_string(),
+                    "（服务器没报实现名）".to_string(),
+                ),
+                // 没报 peer_info 就无从知道它报没报能力 —— 记成「没报」，
+                // 而不是替它猜一个 false。
+                None,
             )
         },
         |i| {
             (
-                i.protocol_version.to_string(),
-                match &i.server_info {
-                    Some(s) => format!("{} {}", s.name, s.version),
-                    None => "（服务器没报实现名）".to_string(),
-                },
+                (
+                    i.protocol_version.to_string(),
+                    match &i.server_info {
+                        Some(s) => format!("{} {}", s.name, s.version),
+                        None => "（服务器没报实现名）".to_string(),
+                    },
+                ),
+                Some(i.capabilities.tools.is_some()),
             )
         },
     );
@@ -323,11 +399,395 @@ async fn handshake(row: &McpServerRow) -> Result<HandshakeTools, String> {
     if let Some(h) = drain {
         let _ = h.await;
     }
-    Ok(HandshakeTools { tools, info })
+    Ok(HandshakeTools { tools, info, declares_tools })
 }
 
 /// `tools/list` 最多翻几页。`nextCursor` 存在但翻满了还没完，就当它有问题。
 const MAX_PAGES: usize = 8;
+
+/// 拉起一个 stdio 子进程，并**同时**开始排空它的 stderr。
+///
+/// 探测与 `tools/call` 走的是**同一个**拉起函数。分成两份的话，「探测时用的
+/// cwd/env」与「真正调用工具时用的 cwd/env」就会漂，而那种漂移只在某一个
+/// 特定工具上发作，极难查。
+///
+/// 返回 `(传输层, stderr 累积器, 排空任务句柄)`。排空句柄是 `Option`：
+/// 传输层在没接 stderr 时不会给我们一个。
+fn spawn_stdio(
+    row: &McpServerRow,
+) -> Result<(TokioChildProcess, Arc<StderrTail>, Option<JoinHandle<()>>), String> {
+    let command = row.command.clone().unwrap_or_default();
+    let mut cmd = Command::new(command.trim());
+    cmd.args(&row.args);
+    if let Some(cwd) = row.cwd.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+        cmd.current_dir(cwd);
+    }
+    for (k, v) in &row.env {
+        cmd.env(k, v);
+    }
+    // stdin/stdout 由传输层接管。**stderr 单独接走**：stdio 服务器启动失败的信息
+    // 几乎全在 stderr 上，继承到服务端日志的话，用户在界面上只会看到一句
+    // 「连不上」——而那句话对「少装一个依赖」和「地址写错」是同一个答案。
+    let (transport, child_stderr) = TokioChildProcess::builder(cmd)
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| spawn_hint(row, e))?;
+    let stderr: Arc<StderrTail> = Arc::new(StderrTail::default());
+    // 必须有人**同时**在读 stderr：不读的话管道写满（Linux 64KB）之后子进程会
+    // 阻塞在 write 上，握手就永远等不到 —— 表现为「每台服务器都超时」。
+    let drain = child_stderr.map(|mut s| {
+        let sink = Arc::clone(&stderr);
+        tokio::spawn(async move {
+            let mut raw = Vec::new();
+            let _ = s.read_to_end(&mut raw).await;
+            sink.set(&String::from_utf8_lossy(&raw));
+        })
+    });
+    Ok((transport, stderr, drain))
+}
+
+// --------------------------------------------------------------- tools/call
+
+/// 调一次 MCP 工具的预算上限。配置里的 `timeout_ms` 最大 600 秒，但那是**用户**
+/// 给的预算；一次对话请求在工具上吊 10 分钟，比调不到工具更糟。上限取 60 秒，
+/// 超时的话错误里会写清「你配的是多少、按多少截断的」。
+pub const CALL_BUDGET_CEILING_MS: i64 = 60_000;
+
+/// 闸门等待的额外余量。超时判定在 `call_tool` 内部已经做完了，这里多给一点
+/// 是为了让「真的超时了」和「刚好卡在闸门上」这两种错误能被区分开。
+const GATE_SLACK: Duration = Duration::from_millis(500);
+
+/// `max_concurrent_calls` 留空时取几。stdio 服务器靠一对管道应答，并发拉高只会
+/// 让它们互相拖累；而在这台机器上「不限制」实际等于「一个卡死的工具把对话卡死」。
+pub const DEFAULT_MAX_CONCURRENT_CALLS: usize = 4;
+
+/// 每台服务器的并发闸门。键是 `(用户, 服务器名)`。
+///
+/// 键里带用户是必须的：两个用户各自配了一台同名服务器时不该共用一个闸门 ——
+/// 那等于让 B 的调用数去限制 A，而界面上谁也看不出来。
+static GATES: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Semaphore>>>,
+> = std::sync::OnceLock::new();
+
+/// 拿到（或第一次建）某台服务器的闸门。
+fn gate(user_key: &str, row: &McpServerRow) -> Arc<tokio::sync::Semaphore> {
+    let limit = match row.max_concurrent_calls {
+        Some(n) if n >= 1 => n as usize,
+        Some(_) => 1,
+        None => DEFAULT_MAX_CONCURRENT_CALLS,
+    };
+    let key = format!("{user_key}\u{1}{}", row.name);
+    let mut guard = GATES
+        .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    Arc::clone(guard.entry(key).or_insert_with(|| {
+        Arc::new(tokio::sync::Semaphore::new(limit))
+    }))
+}
+
+/// 真的调一次 MCP 工具：`initialize` → `tools/call` → 收正文。
+///
+/// **每次调用都重新拉起一个子进程。** 不复用探测那次的进程是有意的：探测在返回前
+/// 就把子进程收了（`service.cancel()`），而对话可能几分钟后才调这个工具。跨请求
+/// 养着一个子进程意味着要管它的生命周期、崩溃、以及「用户改完配置之后那个进程还
+/// 按旧配置跑着」。stdio 服务器本来就是一次性会话的形态，一次调用一次拉起更贴近
+/// 它的本意，代价是每次调用多付一次进程启动的时间。
+pub async fn call_tool(
+    row: &McpServerRow,
+    user_key: &str,
+    remote_name: &str,
+    args: &Value,
+) -> Result<String, String> {
+    if let Some(why) = not_probed_reason(row) {
+        return Err(format!(
+            "这台服务器这一轮没有发起过连接，它的工具调不到：{why}\
+             下一步：到设备页确认这一行是启用状态、传输方式是 stdio、并且填了 command。"
+        ));
+    }
+    if !tools_capability_on(row) {
+        return Err(format!(
+            "服务器 {} 的 enabled_capabilities 里没有 tools，模型看不到它的工具。\
+             下一步：在设备页把 tools 加进能力列表，或清空该列表表示全开。",
+            row.name
+        ));
+    }
+    let args = match args {
+        Value::Object(o) => o.clone(),
+        other => {
+            return Err(format!(
+                "工具参数必须是一个 JSON 对象，收到的是 {other}。\
+                 下一步：按该工具在 tools/list 里报的 inputSchema 传参。"
+            ))
+        }
+    };
+
+    let semaphore = gate(user_key, row);
+    let permits = semaphore
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|e| format!("并发闸门关不上了：{e}"))?;
+
+    let limit = row.timeout_ms.max(1_000);
+    let budget = Duration::from_millis(limit.min(CALL_BUDGET_CEILING_MS) as u64);
+    let out = tokio::time::timeout(budget, invoke(row, remote_name, args)).await;
+    // **先放闸门再解释结果**：调用已经结束了，闸门没理由还占着 ——
+    // 不放的话，一个超时的工具会把同服务器的其它调用一起堵到超时。
+    drop(permits);
+    match out {
+        Ok(r) => r,
+        Err(_) => Err(format!(
+            "调 `{}` 在 {} 毫秒内没回（按上限截断{}）。\
+             下一步：先在命令行里手动跑一次 `{}` 验证它自己能不能回话；\
+             如果确实要更久，把这一行的超时调大（上限 {} 秒）。",
+            remote_name,
+            budget.as_millis(),
+            if limit > CALL_BUDGET_CEILING_MS {
+                format!("，你配的是 {} 毫秒", limit)
+            } else {
+                String::new()
+            },
+            command_line(row),
+            CALL_BUDGET_CEILING_MS / 1000,
+        )),
+    }
+}
+
+/// `tools/call` 的一次完整往返。**只在这里**收尾进程，握手失败也一样。
+async fn invoke(row: &McpServerRow, remote_name: &str, args: Map<String, Value>) -> Result<String, String> {
+    let (transport, stderr, drain) = spawn_stdio(row)?;
+    let service = match QuillClient.serve(transport).await {
+        Ok(s) => s,
+        // 传输层在这一句之前就被丢掉了，`ChildWithCleanup` 的 Drop 会杀掉子进程。
+        // 故意不 join 排空任务：握手已经失败了，再等它把 stderr 读完只是让失败来得更慢。
+        // 面向用户的错误**一律带「下一步」** —— 这一句会原样进界面。
+        Err(e) => {
+            return Err(with_stderr(
+                format!(
+                    "initialize 失败：{e}。\
+                     下一步：在终端里手动跑一次 `{}`，看它启动后会不会往 stdout 写 JSON-RPC\
+                     （stdio 传输的 stdout 只能是协议内容）；下面附的 stderr 末尾通常就是原因。",
+                    command_line(row)
+                ),
+                &stderr,
+            )
+            .await)
+        }
+    };
+
+    // 调用这一侧**也要**过服务器自报那道闸门（ISSUE-014）。挂载侧已经按 0
+    // 处理了，但工具是模型按名字直接调进来的 —— 一台自报没有 tools 的服务器
+    // 就算侥幸挂上了，调过去也只会拿到一个「方法不存在」。这里在**同一次**
+    // 握手里判，不额外拉进程。
+    if service
+        .peer_info()
+        .is_some_and(|i| i.capabilities.tools.is_none())
+    {
+        let _ = service.cancel().await;
+        return Err(with_stderr(
+            format!(
+                "服务器 {} 在 initialize 里自报的能力里没有 tools，它自己说它不提供工具。\
+                 下一步：确认这台服务器是否该提供工具；若它本该提供，那是它 initialize 的问题。",
+                row.name
+            ),
+            &stderr,
+        )
+        .await);
+    }
+
+    let mut params = CallToolRequestParams::new(remote_name.to_string());
+    params.arguments = Some(args);
+    // 用 `call_tool_once` 而不是 `call_tool`：前者会把「服务器要客户端补输入」
+    // 与「服务器把这次调用变成了一个 task」这两种结果**分别**报出来。
+    // 压成 `call_tool` 的话两者都只剩一句 UnexpectedResponse ——
+    // 而「下一步」在这两种情况下完全不同。
+    let response = match service.call_tool_once(params).await {
+        Ok(v) => v,
+        Err(e) => {
+            let _ = service.cancel().await;
+            // 「Transport closed」这类错误**不区分**是哪一步断的：服务器崩了、
+            // 管道断了、它自己关了 stdio，回来的都是这一句。所以这里不替它猜原因，
+            // 只把「怎么查」说清楚，并把服务器自己的 stderr 附上 ——
+            // 那才是真正写着原因的地方。
+            return Err(with_stderr(
+                format!(
+                    "tools/call 失败：{e}。\
+                     下一步：先在命令行里手动跑一次 `{}` 再发一次同样的调用，\
+                     看它的输出与 stderr；若它自己都会崩，quill 这边修不了，得先修服务器。",
+                    command_line(row)
+                ),
+                &stderr,
+            )
+            .await);
+        }
+    };
+
+    let rendered = render_call_result(remote_name, &response);
+    // 收尾：关掉子进程。不做的话每次调用都会在机器上留一个孤儿进程。
+    let _ = service.cancel().await;
+    if let Some(h) = drain {
+        let _ = h.await;
+    }
+    match rendered {
+        Ok(text) => Ok(text),
+        Err(why) => Err(with_stderr(why, &stderr).await),
+    }
+}
+
+/// 把 `tools/call` 的响应整理成**给模型看的文本**。
+///
+/// **只回文本。** 图片/音频/内嵌资源这一层不处理，如实说一句「这次回了非文本内容」——
+/// 把它们悄悄丢掉的话，模型会以为工具什么都没返回，于是自己编一个结论。
+/// 结构化结果（`structuredContent`）在没有任何文本时顶上，顺序不反过来：
+/// 一个既给了文本又给了结构体的工具，文本才是它想让人读的那份。
+fn render_call_result(remote_name: &str, response: &CallToolResponse) -> Result<String, String> {
+    let result = match response {
+        CallToolResponse::Complete(r) => r,
+        CallToolResponse::InputRequired(_) => {
+            return Err(format!(
+                "服务器 `{}` 要求客户端补充输入才能完成这次调用，这一层还不支持\
+                 （MRTR 多轮输入）。\
+                 下一步：换一条不依赖交互输入的提示词，或换一台不要求补输入的服务器。",
+                remote_name
+            ))
+        }
+        CallToolResponse::Task(_) => {
+            return Err(format!(
+                "服务器 `{}` 把这次调用变成了一个后台任务（tasks 扩展），这一层还不支持轮询它。\
+                 下一步：换一台同步返回结果的服务器，或直接调用它对应的命令行工具。",
+                remote_name
+            ))
+        }
+        // `#[non_exhaustive]`：以后 rmcp 加一种结果类型，这里会先撞上。
+        // 撞上时报「不认识」而不是猜一种 —— 猜错的话就是把一次调用结果
+        // 编成另一种形状再喂给模型。
+        other => {
+            return Err(format!(
+                "服务器 `{}` 回了一种这一层还不认识的结果类型（{other:?}）。\
+                 下一步：升级 quill，或换一台只回文本的服务器。",
+                remote_name
+            ))
+        }
+    };
+
+    let mut parts: Vec<String> = Vec::new();
+    let mut non_text = 0usize;
+    for block in &result.content {
+        match block {
+            ContentBlock::Text(t) => parts.push(t.text.clone()),
+            other => {
+                non_text += 1;
+                let kind = match other {
+                    ContentBlock::Image(_) => "图片",
+                    ContentBlock::Audio(_) => "音频",
+                    ContentBlock::Resource(_) => "内嵌资源",
+                    ContentBlock::ResourceLink(_) => "资源链接",
+                    // 同上：非穷尽。没见过的东西就说「没见过的内容」，
+                    // 不硬套一个已知的名字 —— 套错了模型会照着错的类型理解。
+                    _ => "这一层还不认识的内容",
+                };
+                parts.push(format!("（服务器回了一个{kind}，这一层只把文本喂给模型）"));
+            }
+        }
+    }
+    if parts.is_empty() {
+        if let Some(sc) = &result.structured_content {
+            parts.push(
+                serde_json::to_string_pretty(sc)
+                    .unwrap_or_else(|e| format!("（结构化结果序列化失败：{e}）")),
+            );
+        }
+    }
+    if parts.is_empty() {
+        parts.push("（服务器执行成功，但没有返回任何内容）".to_string());
+    }
+    if non_text > 0 {
+        parts.push(format!(
+            "（本次共 {non_text} 个非文本内容块没有原样传下去，模型只看到了上面这些文字。）"
+        ));
+    }
+
+    let text = parts.join("\n");
+    // `isError` 走 **Err**：错误文本会回灌给模型，让它自己纠正；
+    // 走 Ok 的话模型会把失败当成功，接着编一个基于失败的结论。
+    if result.is_error == Some(true) {
+        return Err(format!("服务器报这次调用失败：{text}"));
+    }
+    Ok(text)
+}
+
+/// `call_tool` 的**同步**入口 —— 给 `ToolHandler` 用。
+///
+/// **为什么另起一条线程，而不是 `Handle::current().block_on`。**
+/// `ToolHandler` 的签名是 `Fn(&Value) -> Result<String, String>`（同步），
+/// 而 `tools/call` 是 async。桥只有三条路：
+///
+/// 1. `Handle::block_on` —— 在 async 上下文里**直接 panic**
+///    （`tokio` 明令不许嵌套驱动），而且 `#[tokio::test]` 默认是
+///    current-thread 运行时，集成测试会当场炸掉。
+/// 2. `block_in_place` + `block_on` —— 在 current-thread 运行时上同样 panic，
+///    测试照样炸；等于把「能不能跑」押在测试怎么配置上。
+/// 3. **自己开一个线程与一个 current-thread 运行时**（这里选的）。它跟外面
+///    的运行时是什么 flavor 无关，多付的代价是一次线程创建（微秒级），
+///    换来的是「在任何地方都能调」。
+///
+/// 代价要说清楚：调用方的那个 worker 线程会**阻塞**在这里等结果
+/// （`ToolHandler` 是同步的，这没法绕开）。`MAX_TOOL_ROUNDS` 与
+/// `CALL_BUDGET_CEILING_MS` 一起给这段时间封了顶。
+pub fn call_tool_blocking(
+    row: &McpServerRow,
+    user_key: &str,
+    remote_name: &str,
+    args: &Value,
+) -> Result<String, String> {
+    let row = row.clone();
+    let user_key = user_key.to_string();
+    let name = remote_name.to_string();
+    let args = args.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    // 错误文案里要用的两样东西，**在 `row` 被 move 进闭包之前**取好。
+    let line = command_line(&row);
+    let wait = Duration::from_millis(row.timeout_ms.max(1_000).min(CALL_BUDGET_CEILING_MS) as u64)
+        + GATE_SLACK;
+
+    let worker = std::thread::Builder::new()
+        .name("quill-mcp-tool".to_string())
+        .spawn(move || {
+            let out = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt.block_on(call_tool(&row, &user_key, &name, &args)),
+                Err(e) => Err(format!(
+                    "起不起执行 MCP 工具的环境：{e}。\
+                     下一步：重启服务再试；若反复出现，检查这台机器的线程/内存是否已耗尽。"
+                )),
+            };
+            let _ = tx.send(out);
+        });
+
+    if let Err(e) = worker {
+        return Err(format!(
+            "起不起执行 MCP 工具的线程：{e}。\
+             下一步：重启服务再试；若反复出现，检查这台机器的线程数是否已耗尽。"
+        ));
+    }
+    // 故意**不 join** 那个线程：它可能正卡在收尾上，等它等于把超时又拖长一遍。
+    // 句柄在这里被丢弃 = 分离，线程自己会结束。
+    match rx.recv_timeout(wait) {
+        Ok(out) => out,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(format!(
+            "执行 `{remote_name}` 的线程在 {} 毫秒内没交回结果。\
+             下一步：先在命令行里手动跑一次 `{line}` 看它能不能回话。",
+            wait.as_millis(),
+        )),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(format!(
+            "执行 `{remote_name}` 的线程没能把结果送回来（它可能在建立连接时就崩了）。\
+             下一步：看服务端日志里这一段，或先在命令行里手动跑一次 `{line}`。"
+        )),
+    }
+}
 
 fn spawn_hint(row: &McpServerRow, e: std::io::Error) -> String {
     let cmd = row.command.clone().unwrap_or_default();
@@ -449,8 +909,13 @@ impl Summary {
         self.probed > 0 && self.failed == 0
     }
 
-    /// `note` 的原话。界面**原样显示**这句话，所以每一句都必须是实话，
-    /// 而且要说清「没挂进工具表」这件事 —— 连上了不等于模型能调。
+    /// `note` 的原话。界面**原样显示**这句话，所以每一句都必须是实话。
+    ///
+    /// 这里**只讲协议层看到的东西**：「挂没挂进工具表」不在这一句里 ——
+    /// 那是 `tools::mcp_tool_visibility` 的判断，由 `api_extensions::mcp_body`
+    /// 拿到挂载结果之后**追加**在后面。分两处讲，是因为「连上了」与
+    /// 「模型调得到」是两个问题，合成一句就会出现「3 个工具可用」而模型
+    /// 一个都调不到的情况。
     pub fn note(&self, probes: &[Probe]) -> String {
         if self.probed == 0 {
             return "本轮没有发起任何协议握手：没有启用的 stdio 服务器。\
@@ -477,7 +942,17 @@ impl Summary {
                  或它自己一个工具都没报。"
             ));
         }
-        s.push_str("注意：这些工具**还没有挂进对话的工具表**，模型这一轮还调不到它们。");
+        // 「服务器自报没有 tools 能力」与上面两种都不是一回事，单独说。
+        let self_declared_off = probes
+            .iter()
+            .filter(|p| p.connected && p.server_declares_tools == Some(false))
+            .count();
+        if self_declared_off > 0 {
+            s.push_str(&format!(
+                "其中 {self_declared_off} 台在 initialize 里自报的能力里**没有 tools** —— \
+                 按 0 个工具报，不管它的 tools/list 回没回内容（ISSUE-014）。"
+            ));
+        }
         s
     }
 }
@@ -494,6 +969,7 @@ pub fn status_json(p: &Probe) -> Value {
         "error": p.error,
         "protocol_version": p.protocol_version,
         "server_info": p.server_info,
+        "server_declares_tools": p.server_declares_tools,
     })
 }
 
@@ -631,6 +1107,7 @@ mod tests {
             error: None,
             protocol_version: Some("2025-06-18".into()),
             server_info: Some("srv 1.0".into()),
+            server_declares_tools: Some(true),
         };
         let mut bad = good.clone();
         bad.name = "b".into();
@@ -644,7 +1121,15 @@ mod tests {
         assert!(!s.all_connected());
         let note = s.note(&[good, bad]);
         assert!(note.contains("2 台 stdio 服务器"), "{note}");
-        assert!(note.contains("还没有挂进对话的工具表"), "{note}");
+        // `Summary::note` **只**讲协议层看到的东西。「挂没挂进工具表」是
+        // `tools::mcp_tool_visibility` 的判断，由 `api_extensions::mcp_body`
+        // 拿到挂载结果之后追加。这里断言它**不**碰那件事 ——
+        // 早先这里写死「还没有挂进对话的工具表」，`with_mcp_tools` 接上之后
+        // 那句话就成了假话，而留着它等于逼着后来的人把真功能改回去。
+        assert!(
+            !note.contains("挂进对话"),
+            "挂载状态由 mcp_body 追加，Summary::note 不该碰这件事：{note}"
+        );
     }
 
     #[test]
@@ -658,6 +1143,7 @@ mod tests {
             error: None,
             protocol_version: Some("2025-06-18".into()),
             server_info: Some("srv 1.0".into()),
+            server_declares_tools: Some(true),
         };
         let s = Summary::of(std::slice::from_ref(&p));
         assert!(s.all_connected());
@@ -684,6 +1170,7 @@ mod tests {
             error: None,
             protocol_version: Some("2025-06-18".into()),
             server_info: Some("srv 1.0".into()),
+            server_declares_tools: Some(true),
         });
         assert_eq!(v["name"], json!("fs"));
         assert_eq!(v["connected"], json!(true));

@@ -473,6 +473,12 @@ pub async fn post_message(
         .with_skills(db.as_ref(), uid, &skill_root)
         .await
         .map_err(|e| ApiError::internal(format!("对话无法开始：{e}")))?;
+    // MCP 同理：`tools/list` 报出来的条目走同一个 registry，所以「内置的」与
+    // 「MCP 来的」在模型看来没有区别。一台服务器连不上只跳过它，不让整条对话失败。
+    let registry = registry
+        .with_mcp_tools(db.as_ref(), uid, &crate::tools::user_key(uid))
+        .await
+        .map_err(|e| ApiError::internal(format!("对话无法开始：{e}")))?;
     let tools = registry.specs();
     let request = crate::llm::build_request(&llm_config, msgs.clone());
     let request = if tools.is_empty() {

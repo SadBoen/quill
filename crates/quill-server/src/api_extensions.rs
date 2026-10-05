@@ -47,7 +47,7 @@ pub async fn list_mcp(
     let rows = mcp_repo::list(db, user.0.user_id)
         .await
         .map_err(|e| map_err("列出 MCP 服务器", e))?;
-    Ok(Json(mcp_body(&rows).await).into_response())
+    Ok(Json(mcp_body(&state, user.0.user_id, &rows).await).into_response())
 }
 
 /// 拼一份响应。`GET` 与 `POST` 共用。
@@ -56,18 +56,126 @@ pub async fn list_mcp(
 /// POST 的响应替换掉列表缓存（`client.setQueryData`）。这里回一个恒假的
 /// `connected`，用户刚存好的服务器在界面上会立刻显示成「没连上」，
 /// 而那不是任何一次真实探测的结果。
-async fn mcp_body(rows: &[McpServerRow]) -> Value {
-    let probes = mcp_client::probe_all(rows.to_vec()).await;
+///
+/// **「连上了」与「模型能调」分开报。** `status` 里每台带 `mounted`：
+/// 这一轮真的挂进对话工具表的工具条数，以及每个工具的**挂载名 ↔ 原名**映射。
+/// 只报 `tool_count`（服务器自己报了几个）的话，界面上就会出现
+/// 「3 个工具可用」而模型那轮一个都调不到 —— 配对没上、能力被关掉、
+/// 与内置工具撞名，这三种原因长得一模一样。
+async fn mcp_body(state: &AppState, uid: quill_adapters::UserId, rows: &[McpServerRow]) -> Value {
+    // **只握手一次。** 状态与挂载名都从这同一批 `Discovery` 里出 ——
+    // 分两次握手的话，用户配的进程会被拉起来两遍，而两遍的工具列表可能不一样，
+    // 于是界面上「已挂载」那一栏会和自己都算不上稳定的第二次握手对不上。
+    let found = mcp_client::discover_all(rows.to_vec()).await;
+    let probes: Vec<mcp_client::Probe> = found.iter().map(|d| d.probe.clone()).collect();
     let summary = mcp_client::Summary::of(&probes);
+    // 挂载口径与 `with_mcp_tools` 共用同一套判断（`tools::mcp_tool_visibility`），
+    // 基线工具表也用 `tools::baseline_specs` 建 —— 界面上报的必须是**真的**挂了什么，
+    // 而不是「如果挂的话大概会挂什么」。
+    let mounted = mount_from(state, uid, &found).await;
+    let status: Vec<Value> = found
+        .iter()
+        .map(|d| {
+            let mut v = mcp_client::status_json(&d.probe);
+            let m = mounted.iter().find(|m| m.server == d.probe.name);
+            if let Some(obj) = v.as_object_mut() {
+                let (tools, skipped) = match m {
+                    Some(m) => (m.tools.clone(), m.skipped.clone()),
+                    None => (Vec::new(), Vec::new()),
+                };
+                obj.insert("mounted".into(), json!(tools.len()));
+                obj.insert("mounted_tools".into(), json!(tools));
+                obj.insert("not_mounted".into(), json!(skipped));
+            }
+            v
+        })
+        .collect();
+    let total_mounted: usize = mounted.iter().map(|m| m.tools.len()).sum();
+    let mut note = summary.note(&probes);
+    if total_mounted > 0 {
+        note.push_str(&format!(
+            " 这一轮真的挂进对话工具表的有 {total_mounted} 个，模型调得到（挂载名与原名的对应见每行的「已挂载」）。"
+        ));
+    } else if summary.connected > 0 {
+        note.push_str(
+            " 但一个都没挂上：逐条原因见每行的「未挂载」。\
+             下一步：按那一条的白话处理，处理完刷新这一页再看。",
+        );
+    }
     json!({
         "servers": rows.iter().map(mcp_repo::to_json).collect::<Vec<Value>>(),
-        "status": probes.iter().map(mcp_client::status_json).collect::<Vec<Value>>(),
+        "status": status,
         "connected": summary.all_connected(),
         "probed": summary.probed,
         "connected_count": summary.connected,
         "failed_count": summary.failed,
-        "note": summary.note(&probes),
+        "mounted_count": total_mounted,
+        "note": note,
     })
+}
+
+/// 一台服务器这一轮**真的**挂上了哪些工具，以及没挂上的那些卡在哪。
+struct MountedFor {
+    server: String,
+    /// 挂上去的工具：`(挂载名, 远端原名)`。
+    tools: Vec<(String, String)>,
+    /// 没挂上的：`(远端原名, 白话原因)`。
+    skipped: Vec<(String, String)>,
+}
+
+/// 从**已经握过一次手**的结果里判挂载。**不再发起任何连接。**
+async fn mount_from(
+    state: &AppState,
+    uid: quill_adapters::UserId,
+    found: &[mcp_client::Discovery],
+) -> Vec<MountedFor> {
+    let Ok(db) = state.db() else {
+        return Vec::new();
+    };
+    let dir = skill_dir(&state.config);
+    // 基线 = 内置 + SKILL。与 `with_mcp_tools` 的前半段完全一致，所以
+    // 「已被占住的名字」在两处是同一份 —— 否则界面上会说一个工具挂上了，
+    // 而对话里它被内置工具顶掉了。
+    let mut taken = match crate::tools::baseline_specs(
+        std::sync::Arc::new(state.clone()),
+        db.as_ref(),
+        uid,
+        &dir,
+    )
+    .await
+    {
+        Ok(specs) => specs,
+        Err(why) => {
+            eprintln!("[mcp] 建基线工具表失败，界面不报挂载数：{why}");
+            return Vec::new();
+        }
+    };
+
+    let mut out = Vec::new();
+    for d in found {
+        let mut tools = Vec::new();
+        let mut skipped = Vec::new();
+        for tool in &d.tools {
+            match crate::tools::mcp_tool_visibility(&taken, &d.probe.name, tool) {
+                crate::tools::McpToolVisibility::Visible => {
+                    let spec = crate::tools::mcp_tool_spec(&d.probe.name, tool);
+                    tools.push((spec.name.clone(), tool.remote_name.clone()));
+                    // 挂上的占住这个名字，后面的要比对它 —— 与 `with_mcp_tools`
+                    // 里 `register` 之后 `self.specs` 变长的效果一致。
+                    taken.push(spec);
+                }
+                crate::tools::McpToolVisibility::NotMounted(why) => {
+                    skipped.push((tool.remote_name.clone(), why.to_string()));
+                }
+            }
+        }
+        out.push(MountedFor {
+            server: d.probe.name.clone(),
+            tools,
+            skipped,
+        });
+    }
+    out
 }
 
 /// `POST /api/extensions/mcp` —— 全量覆盖。
@@ -110,7 +218,7 @@ pub async fn save_mcp(
     let rows = mcp_repo::replace_all(db, user.0.user_id, parsed)
         .await
         .map_err(|e| map_err("保存 MCP 服务器", e))?;
-    Ok(Json(mcp_body(&rows).await).into_response())
+    Ok(Json(mcp_body(&state, user.0.user_id, &rows).await).into_response())
 }
 
 /// `DELETE /api/extensions/mcp/{name}` —— 软删单个。

@@ -130,14 +130,71 @@ function McpProbeStatus({ status }: { status: McpServerStatus | undefined }): Re
     )
   }
   return (
-    <p className="field-help">
-      {t('devices.mcpProbeOk', {
-        defaultValue: '已连上（协议 {{protocol}}，{{server}}），模型可用工具 {{count}} 个。',
-        protocol: status.protocol_version ?? '—',
-        server: status.server_info ?? '—',
-        count: status.tool_count,
-      })}
-    </p>
+    <>
+      <p className="field-help">
+        {t('devices.mcpProbeOk', {
+          defaultValue: '已连上（协议 {{protocol}}，{{server}}），服务器报了 {{count}} 个工具。',
+          protocol: status.protocol_version ?? '—',
+          server: status.server_info ?? '—',
+          count: status.tool_count,
+        })}
+      </p>
+      {/*
+       * 「连上了」与「模型调得到」分开说。`mounted` 是服务端真的挂进工具表的条数，
+       * 与 `tool_count` 不一定相等 —— 能力被关掉、挂载名与已有工具撞上、
+       * schema 不是 object，这三种都会让条数变少，而它们的症状在模型那边一模一样。
+       * 组件里**不许**由 `tool_count` 推断 `mounted`。
+       */}
+      <p className="field-help">
+        <strong>
+          {t('devices.mcpMounted', {
+            defaultValue: '这一轮真的挂进对话工具表的有 {{count}} 个，模型调得到。',
+            count: status.mounted ?? 0,
+          })}
+        </strong>
+      </p>
+      {status.mounted_tools?.length ? (
+        <ul className="mcp-tool-list">
+          {status.mounted_tools.map(([mounted, remote]) => (
+            <li key={mounted} className="mcp-tool-item">
+              <code>{mounted}</code>
+              <span className="mcp-tool-remote">
+                {t('devices.mcpToolRemote', {
+                  defaultValue: '服务器里的原名：{{remote}}',
+                  remote,
+                })}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {/*
+       * **连上了但工具数是 0** 时也要显示原因。这不是连接失败，所以上面两个
+       * 分支都走不到；但原因（本地能力开关没开 tools / 服务器自报没有 tools）
+       * 是用户唯一能看到的线索 —— 少了它，界面上就是一句「已连上，0 个工具」，
+       * 用户无从判断该改自己的配置还是该换服务器。
+       */}
+      {status.connected && status.error ? (
+        <p className="field-help">{status.error}</p>
+      ) : null}
+      {status.not_mounted?.length ? (
+        <div className="mcp-tool-missing">
+          <p className="field-help">
+            {t('devices.mcpNotMountedTitle', {
+              defaultValue: '这些工具没挂上（模型这一轮调不到）：',
+            })}
+          </p>
+          <ul className="mcp-tool-list">
+            {status.not_mounted.map(([remote, why]) => (
+              <li key={remote} className="mcp-tool-item">
+                <code>{remote}</code>
+                <span className="mcp-tool-remote">{why}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </>
   )
 }
 

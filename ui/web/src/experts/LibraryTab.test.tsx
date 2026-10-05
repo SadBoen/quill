@@ -122,14 +122,22 @@ it('没做到能用的能力只给路由名，不在表单里放假开关', asyn
 it('MCP 与技能包标「部分接通」，不标 501 —— 它们的路由是 200', async () => {
   // 这两条路由真的存在且返回 200（`GET /api/extensions/mcp` /
   // `GET /api/extensions/skills`）。写成 501 等于让用户去「接」一个早就接好
-  // 的东西，比不说还糟。技能包这条是 2026-10-06 改的：它已经挂进对话工具表了，
-  // 所以文案必须说「已挂进」，说成「还调不到」就是把能用的说成不能用。
+  // 的东西，比不说还糟。
+  //
+  // 这条断言的文案改过两次，每次都是因为**真的又接完了一层**：
+  //   1. 技能包 2026-10-06 挂进对话工具表 → 文案从「还调不到」改成「已挂进」；
+  //   2. MCP 同日接上 `with_mcp_tools` 与 `tools/call` → 缺口从「还没挂进
+  //      对话的工具表」换成「streamable_http 与 sse 还没铺」。
+  // 拿旧缺口当现状写，就是把能用的说成不能用。
   renderTab([])
   await waitFor(() => expect(within(card()).getByRole('button', { name: '生成专家' })).toBeInTheDocument())
   fireEvent.click(within(card()).getByRole('button', { name: '生成专家' }))
   await waitFor(() => expect(within(card()).getByText('GET /api/extensions/mcp')).toBeInTheDocument())
 
-  expect(within(card()).getByText(/部分接通 · stdio 服务器真的握手并 tools\/list 了/)).toBeInTheDocument()
+  expect(
+    within(card()).getByText(/部分接通 · stdio 真的 initialize \+ tools\/list/),
+    'MCP 的 stdio 链路（握手、tools/list、挂载）已经真的通了，文案要照实说',
+  ).toBeInTheDocument()
   expect(
     within(card()).getByText(/部分接通 · 已挂进对话工具表/),
     '技能包已挂进工具表，文案不许再写「能存能读」',

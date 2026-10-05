@@ -30,3 +30,35 @@
 .form-error-next {
   opacity: 0.85;
 }
+
+/*
+ * .mcp-tool-* -- 设备页里「MCP 工具真的挂进对话工具表了」的清单。
+ *   挂载名与原名要并排显示：用户在自己的 MCP 配置里认的是原名，而模型调的是
+ *   挂载名。只显示其中一个，用户就没法把这一行对回自己写的那份配置。
+ *   不用 <table>：这两列是「同一件东西的两个名字」，不是可逐列比较的数据。
+ */
+.mcp-tool-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+}
+
+.mcp-tool-item {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  line-height: 1.55;
+  padding: 1px 0;
+}
+
+.mcp-tool-item code {
+  font-size: 9px;
+  word-break: break-all;
+}
+
+.mcp-tool-remote {
+  color: var(--faint);
+  font-size: 9px;
+  font-weight: 450;
+}

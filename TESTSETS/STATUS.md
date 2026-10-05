@@ -26,15 +26,40 @@
       端到端测试的对端是**手写的** stdio MCP 服务器 `src/bin/mcp_stub.rs`，
       刻意不用 rmcp 起 server —— 两边共用同一份类型的话，协议层写错会两边一起错。
       `streamable_http` / `sse` 明确报「还没铺」，不假装连过。见 ISSUE-011、ISSUE-012。
-- [ ] **下一步**：`ToolRegistry::with_mcp_tools` —— 把 `tools/list` 的条目挂进对话工具表。
-      MCP 工具名常用连字符（`read-file`），而 `skills` 的 `name` 有
-      `NOT GLOB '*[^a-z0-9-]*'` 的 CHECK，所以挂载时要自己定「挂上去叫什么」，
-      并复用 `tools::skill_visibility` 那种「同名就跳过而不是顶掉」的守卫。
+- [x] **MCP 工具已挂进对话的工具表** —— 2026-10-06 完成。
+      `ToolRegistry::with_mcp_tools`（async，紧挨 `with_skills`），`api_chat.rs` 构造完
+      registry 就调。上一版列的三件事都定了：
+      1. **挂上去叫什么**：`{服务器}__{工具}`，中间**两个**下划线。服务器名被
+         `normalize_name` 归一成 `[a-z0-9-]`、永不含下划线，所以 `__` 既是合法分隔符
+         又是唯一的 —— 挂载名与 SKILL 同名在结构上不可能（`skills.name` 的 CHECK
+         连下划线都不许）。工具侧字符收窄到 `[A-Za-z0-9_-]`，超 64 字符截断并补
+         8 位摘要（光截断会让两个长名撞成一个，然后被「同名顶掉」静默跳过）。
+         **原名一起留着**：描述里带原名，`GET /api/extensions/mcp` 也报
+         `mounted_tools: [[挂载名, 原名], …]`。
+      2. **同名怎么办**：`tools::mcp_tool_visibility`，与 `skill_visibility` 同一个
+         形状、同一个理由。撞名**跳过并报原因**，绝不 `register` 顶掉。
+         撞名在真实数据上可达：`read--note` 与 `read-note` 归一后同名。
+      3. **执行体是同步的**：`mcp_client::call_tool_blocking`。另起一条线程与一个
+         current-thread 运行时，**不**用 `Handle::block_on`（在 async 上下文里 panic，
+         `#[tokio::test]` 的 current-thread 也会炸）。代价是调用方那个 worker 线程
+         会阻塞等结果，由 `MAX_TOOL_ROUNDS` 与 `CALL_BUDGET_CEILING_MS`（60s）封顶。
+         `max_concurrent_calls` 真的生效了：按 `(用户, 服务器名)` 记的 `Semaphore`。
+- [x] **`tools/call` 真的通了** —— `mcp_client::call_tool`。`initialize` → `tools/call`
+      → 收正文，每次调用重新拉起子进程（探测那次的进程在返回前就收了）。
+      `isError: true` 走 `Err`（让模型自己纠正）；`structuredContent` 在没有文本时顶上；
+      非文本块**明说**不悄悄吞；MRTR / task / 未知结果类型各报各的白话。
+- [x] **界面如实报「模型调得到」** —— `status` 里每台带 `mounted` / `mounted_tools` /
+      `not_mounted`，顶层带 `mounted_count`。判断走 `tools::mcp_tool_visibility`，
+      基线工具表走 `tools::baseline_specs`（与 `with_skills` 同一条链），
+      **与 `with_mcp_tools` 同一个函数、同一次握手**。
+      「连上了」与「挂上了」是两条独立事实，各自有数、各自有原因。
 - [x] 全量门禁 0 failed —— 2026-10-06：`cargo test --workspace` 57 个目标
-      940 passed / 0 failed、`ui/web` 62 passed、`typecheck` 干净、`npm run build` 成功、
+      957 passed / 0 failed、`ui/web` 68 passed、`typecheck` 干净、
       `i18n-check` 0 问题、`library-check` 334/334。
-      这一轮的 940 是**修好门禁脚本之后**数出来的 —— 旧脚本的 `failed` 恒为 0，
-      之前那些「0 failed」不算数。见 ISSUE-013。
+      **注意**：`.wsl-verify-persona.sh` **只跑 Rust**（`cargo build` + `cargo test`），
+      不碰前端。前端那四项要在 `ui/web` 目录下另外跑：
+      `npm run typecheck`、`npx vitest run`、`node ../../.i18n-check.mjs`、
+      `node ../../.library-check.mjs`。**WSL 里没有 node**，只能在 Windows 侧跑。
 
 ## 进度
 
@@ -61,26 +86,29 @@
 
 ## 下一件事
 
-按 `README.md` 的边界，先把 SKILL 接进 `ToolRegistry`（**已完成**），再铺 `rmcp`
-（**已完成**），之后才跑这 100 条。顺序反了的话，测出来的全是「功能还没做」，
+按 `README.md` 的边界，SKILL 接进 `ToolRegistry`（**已完成**）、铺 `rmcp`
+（**已完成**）、`with_mcp_tools` + `tools/call`（**已完成**）—— 三步都走完了，
+**可以开始跑这 100 条**了。顺序反过来的话，测出来的全是「功能还没做」，
 而不是真 bug。
 
-**`rmcp` 已铺完，`with_mcp_tools` 还没写。** 现在的状态是：MCP 服务器能真的连上、
-`tools/list` 真的拿到了，界面也如实显示了 —— 但那些工具**还没进对话的工具表**，
-模型这一轮仍然调不到（`note` 里就是这么说的，不许改成听起来更好的说法）。
+跑之前要知道的三件事：
 
-下一件事就是在 `with_skills` 旁边补 `with_mcp_tools`：MCP 服务器 `tools/list`
-返回的条目走同一个 `ToolRegistry`，所以「内置的」与「MCP 来的」在模型看来没有区别。
-三处要一起想清楚，别只做其中一处：
+1. **浏览器那条路还没走过一次。** 之前几轮每轮开新对话、没在第一条 skill 调用里
+   执行 `skill(name="browser-use:control-in-app-browser")`，于是 Browser 一次都没
+   操作成。**跑之前先在对话的第一条 skill 调用里加载它**，否则任何 Browser 调用
+   都会直接返回 `SKILL_REQUIRED`。
+2. **界面与服务端都要起。** 后端 `cargo run -p quill-server`，前端 `ui/web` 下
+   `npm run dev`（`vite.config.ts` 把 `/api` 代理到 `QUILL_BACKEND`，默认
+   `http://127.0.0.1:18777`）。**WSL 里没有 node，前端只能在 Windows 侧起。**
+3. **判「链路是否通」时先看工具表。** MCP 与 SKILL 现在都真的挂进对话工具表了，
+   所以一条任务失败时，先分清是「工具没挂上」还是「挂上了但模型没调/调错」。
+   设备页与 `GET /api/extensions/{mcp,skills}` 都会如实报
+   `mounted` / `model_can_see`，**不要**从 `servers.length` 或 `tool_count` 推断。
 
-1. **挂上去叫什么。** MCP 工具名按规范允许 `a-zA-Z0-9_-` 与点，而 `quill_provider`
-   侧的工具名要过本地 4B 模型的函数名限制；`skills.name` 又有
-   `NOT GLOB '*[^a-z0-9-]*'`。三套规则不重合，得定一个映射并在界面上显示原名。
-2. **同名怎么办。** 与内置工具（`list_experts`）或别的 MCP 服务器撞名时，
-   要**跳过并报原因**，不能像 `ToolRegistry::register` 那样静默顶掉。
-3. **执行体是同步的。** `ToolHandler` 是 `Fn(&Value) -> Result<String, String>`，
-   而 `tools/call` 是 async 且要过一遍超时与 `max_concurrent_calls`。
-   这里需要一个桥（阻塞等待 / 或改 `ToolHandler` 的签名），选哪个都要写清楚理由。
+### 已知代价（不是 bug，但会感觉到）
 
-这三件事没定清楚之前就开始写 `with_mcp_tools`，多半会写出一个「工具挂上了、
-一调就超时」的版本 —— 那比现在诚实地说「还没挂」更糟。
+**每发一条消息，都会把用户配的 MCP 服务器重新拉起来一遍**（`with_mcp_tools`
+每次对话都真的握手，不缓存工具列表）。本地 stdio 服务器通常是几十到几百毫秒，
+但一台慢启动的会给每条消息加上它的启动时间。真到扛不住时再上带 TTL 的缓存，
+**并且界面上要显示缓存年龄** —— 否则「界面上说挂了几个」又会与模型实际拿到的不一致，
+那正是这轮刚修掉的那类谎。
