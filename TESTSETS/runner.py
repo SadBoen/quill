@@ -212,6 +212,150 @@ def configured_servers(q: Quillian, dry: bool) -> dict:
     return out
 
 
+# ---------------------------------------------------------------- 任务隔离
+#
+# 下面这一段是被 ISSUE-025 逼出来的。
+#
+# **原来只有「挂」没有「撤」**：每条任务只把自己需要的技能灌进去，
+# 上一条留下的一个都不动。于是实测到一条 MCP-Atlas 任务里，
+# 模型去调了 SkillsBench 的 `csv-processing` —— 那条任务根本不需要任何技能。
+# 双向受害：撑大每条请求的输入（放大 ISSUE-019），以及把模型带偏。
+#
+# 所以现在每条任务跑之前，把配置**收敛到这条真正需要的集合**，
+# 整轮跑完再**原样恢复**。刻意不做「用完就删」：那会毁掉用户真实的配置，
+# 这即便是专用测试库也该守住的边界。
+
+def snapshot_enabled(q: Quillian, dry: bool) -> dict:
+    """跑之前把当前启用状态记下来，跑完好原样还回去。"""
+    if dry:
+        return {"skills": {}, "servers": {}}
+    skills, servers = {}, {}
+    st, payload = q.get("/api/extensions/skills")
+    if st == 200:
+        for s in payload.get("skills") or []:
+            slug = s.get("slug") or s.get("name")
+            if slug:
+                skills[slug] = bool(s.get("enabled", True))
+    st, payload = q.get("/api/extensions/mcp")
+    if st == 200:
+        for row in payload.get("servers") or []:
+            if row.get("name"):
+                servers[row["name"]] = bool(row.get("enabled", True))
+    return {"skills": skills, "servers": servers}
+
+
+def set_skill_enabled(q: Quillian, slug: str, enabled: bool, description: str = "") -> tuple[bool, str]:
+    """改一个技能的启用状态。
+
+    POST 是**全量 upsert 且 content 不能为空**，所以停用也得把正文带上。
+    正文不在磁盘上（不是 `TESTSETS/skills` 里那份）时**如实报失败**，
+    不硬塞占位文字 —— 那是凭空造数据。
+    """
+    body, why = load_skill(slug)
+    if body is None:
+        return False, why
+    st, payload = q.post(
+        "/api/extensions/skills",
+        {"slug": slug, "description": description, "content": body, "enabled": enabled},
+    )
+    if st in (200, 201):
+        return True, ""
+    return False, "HTTP %s：%s" % (st, err_detail(payload))
+
+
+def set_servers_enabled(q: Quillian, wanted: dict) -> tuple[bool, str]:
+    """按 `wanted`（名字 → 要不要启用）调整 MCP 服务器。
+
+    MCP 那边是**全量 POST**：读回 `servers` 整份、按 `wanted` 改 `enabled`、
+    再整份发回去 —— 没有 PATCH 可用。
+    """
+    if not wanted:
+        return True, ""
+    st, payload = q.get("/api/extensions/mcp")
+    if st != 200:
+        return False, "读 MCP 列表 HTTP %s：%s" % (st, err_detail(payload))
+    servers = payload.get("servers") or []
+    changed = False
+    for row in servers:
+        name = row.get("name")
+        if name in wanted and bool(row.get("enabled", True)) != wanted[name]:
+            row["enabled"] = wanted[name]
+            changed = True
+    if not changed:
+        return True, ""
+    st, payload = q.post("/api/extensions/mcp", {"servers": servers})
+    if st in (200, 201):
+        return True, ""
+    return False, "HTTP %s：%s" % (st, err_detail(payload))
+
+
+def isolate_for(q: Quillian, task: dict, dry: bool) -> dict:
+    """把配置收敛到**这条任务真正需要的集合**，并如实报出收不干净的部分。"""
+    if dry:
+        return {"skills_off": [], "servers": {}, "problem": "dry-run 未发写请求"}
+
+    want_skills = {s["slug"] for s in (task.get("skills") or []) if s.get("slug")}
+    want_servers = {
+        s for s in (tool_server(tool_name(x)) for x in (task.get("required_tools") or [])) if s
+    }
+    problems, off = [], []
+
+    # 技能：不属于这条任务的，一律停用。
+    st, payload = q.get("/api/extensions/skills")
+    if st == 200:
+        for s in payload.get("skills") or []:
+            slug = s.get("slug") or s.get("name")
+            if not slug or slug in want_skills or not s.get("enabled", True):
+                continue
+            ok, why = set_skill_enabled(q, slug, False)
+            if ok:
+                off.append(slug)
+            else:
+                # 收不干净就**如实记下来**：这条任务的输入被上一条污染了，
+                # 它的结果不能当成干净环境下的结论。
+                problems.append("停用技能 %s 失败：%s" % (slug, why))
+    else:
+        problems.append("读技能列表 HTTP %s：%s" % (st, err_detail(payload)))
+
+    # 服务器：这条不需要的，一律停用（ISSUE-026 修好之后这才真正管用）。
+    wanted_servers = {}
+    st, payload = q.get("/api/extensions/mcp")
+    if st == 200:
+        for row in payload.get("servers") or []:
+            if row.get("name"):
+                wanted_servers[row["name"]] = row["name"] in want_servers
+    else:
+        problems.append("读 MCP 列表 HTTP %s：%s" % (st, err_detail(payload)))
+    ok, why = set_servers_enabled(q, wanted_servers)
+    if not ok:
+        problems.append("调整 MCP 服务器失败：%s" % why)
+
+    return {"skills_off": off, "servers": wanted_servers, "problem": "；".join(problems)}
+
+
+def restore(q: Quillian, snap: dict, dry: bool) -> list:
+    """整轮跑完，把启用状态恢复成跑之前的样子。返回恢复失败的原因列表。"""
+    if dry:
+        return []
+    problems = []
+    for slug, was in (snap.get("skills") or {}).items():
+        body, why = load_skill(slug)
+        if body is None:
+            # 磁盘上没有正文就写不回去 —— **如实说**，不假装恢复了。
+            problems.append("恢复技能 %s 失败：%s" % (slug, why))
+            continue
+        st, payload = q.post(
+            "/api/extensions/skills",
+            {"slug": slug, "content": body, "enabled": was},
+        )
+        if st not in (200, 201):
+            problems.append("恢复技能 %s 失败 HTTP %s：%s" % (slug, st, err_detail(payload)))
+    ok, why = set_servers_enabled(q, snap.get("servers") or {})
+    if not ok:
+        problems.append("恢复 MCP 服务器失败：%s" % why)
+    return problems
+
+
 # ---------------------------------------------------------------- 判定
 
 def judge(task: dict, chat: dict, need_servers: dict, servers: dict,
@@ -339,6 +483,10 @@ def verdict(res: dict) -> str:
 def run_task(q: Quillian, task: dict, dry: bool) -> dict:
     tid = task["id"]
     need = sorted({s for s in (tool_server(tool_name(x)) for x in (task.get("required_tools") or [])) if s})
+
+    # **先隔离，再灌技能**：顺序反了的话，刚停用的又会被自己挂回去。
+    iso = isolate_for(q, task, dry)
+
     servers = configured_servers(q, dry)
 
     # 技能：先全灌好，再看它们挂没挂上。挂不上是 quill 的问题，记下来。
@@ -372,6 +520,9 @@ def run_task(q: Quillian, task: dict, dry: bool) -> dict:
         "mounted_servers": {k: v for k, v in servers.items() if k in need},
         "skills": skills,
         "skills_unseeable": unseeable,
+        # 隔离记录随结果一起存：日后看这条结论时，能知道当时**排掉了什么**，
+        # 以及有没有收不干净的地方（`problem` 非空就是收不干净）。
+        "isolation": iso,
         "turn_ms": chat.get("turn_ms"),
         "tool_rounds": chat.get("tool_rounds"),
         "tool_calls": [
@@ -420,6 +571,14 @@ def main() -> int:
         print("dry-run：不发任何写请求，结论一律记 DRY-RUN。")
     print("要跑 %d 条。\n" % len(tasks))
 
+    # 跑之前拍一张启用状态的快照。**整轮跑完原样还回去** ——
+    # 这是专用测试库，但它同时也是一个用户的真实配置，不能被这轮跑坏。
+    snap = snapshot_enabled(q, args.dry_run)
+    if not args.dry_run:
+        print("已记下启用状态：技能 %d 个（启用 %d）、MCP 服务器 %d 台（启用 %d）。"
+              % (len(snap["skills"]), sum(1 for v in snap["skills"].values() if v),
+                 len(snap["servers"]), sum(1 for v in snap["servers"].values() if v)))
+
     results = []
     counts = {}
     t0 = time.time()
@@ -447,9 +606,26 @@ def main() -> int:
             bits.append("断言 %d/%d" % (claims["hit"], claims["total"]))
         for s in (j.get("suspicions") or []):
             bits.append("可疑：" + s)
+        iso = r.get("isolation") or {}
+        if iso.get("skills_off"):
+            bits.append("已隔离技能 %d 个" % len(iso["skills_off"]))
+        if iso.get("problem"):
+            bits.append("隔离不干净：" + iso["problem"][:70])
         if r.get("error"):
             bits.append("err=" + r["error"][:80])
         print("  " + " | ".join(bits))
+
+    # 恢复启用状态。**恢复失败必须喊出来**，不能默默咽下去 ——
+    # 留下一份被这轮跑改坏的配置，比报错难查得多。
+    restore_problems = restore(q, snap, args.dry_run)
+    if restore_problems:
+        print("\n恢复启用状态时出错（%d 条）：" % len(restore_problems), file=sys.stderr)
+        for p in restore_problems:
+            print("  - " + p, file=sys.stderr)
+        print("下一步：照上面逐条处理，或直接用 POST /api/extensions/skills "
+              "把 enabled 改回去。", file=sys.stderr)
+    elif not args.dry_run:
+        print("\n启用状态已恢复成跑之前的样子。")
 
     mode = "a" if (os.path.exists(args.out) and not args.dry_run) else "w"
     with open(args.out, mode, encoding="utf-8") as f:
