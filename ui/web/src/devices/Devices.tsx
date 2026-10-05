@@ -3,7 +3,16 @@ import { type FormEvent, type ReactNode, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Card, ErrorNotice, PageHeader } from '../components/Page'
-import { MCP_ROUTE, listMcpServers, mcpServersOf, saveMcpServers, type McpServerConfig, type McpServerList } from './api'
+import {
+  MCP_ROUTE,
+  listMcpServers,
+  mcpServersOf,
+  mcpStatusOf,
+  saveMcpServers,
+  type McpServerConfig,
+  type McpServerList,
+  type McpServerStatus,
+} from './api'
 import {
   type EditableMcpServer,
   formatMcpSecrets,
@@ -40,33 +49,94 @@ function mcpServerQuery() {
 }
 
 /**
- * 如实标出「配置存下了，但协议层没接通」。
+ * 如实显示这一轮的**实测**连通性。
  *
  * 组件里**不许**出现任何根据 `servers.length` 推断出来的「已连接」「可用」
  * 字样 —— 配了不等于连上了，服务器可能没起、地址可能写错、token 可能过期。
- * 唯一可信的来源是服务端给的 `connected` 与 `note`，原样显示。
+ * 唯一可信的来源是服务端给的 `probed` / `connected` / `note`，原样显示。
  *
- * 顺带修掉一处已经不成立的旧文案：早先这里写的是「服务端会直接回 501」，
- * 而 501 只适用于还没实现处理器的路由。现在处理器是真的了，再留着那句话
- * 就是骗人。
+ * 特别地：**`probed === 0` 时不报「尚未连接验证」**。那是「没查过」，
+ * 与「查了、没连上」是两种完全不同的状态，混成同一句红字就等于替用户
+ * 猜了一个不存在的故障。
  */
 function McpLinkStatus({ body, route }: { body: McpServerList | undefined; route: string }): ReactNode {
   const { t } = useTranslation()
+  const probed = body?.probed ?? 0
   return (
     <p className="field-help">
       {t('devices.apiNote', {
         defaultValue: '配置存在 {{route}}，下面每一行都是服务端返回的原文。',
         route,
       })}
-      {body?.connected === false && (
+      {probed > 0 && body?.connected === true && (
         <>
           {' '}
           <strong>
-            {t('devices.mcpNotConnected', { defaultValue: '尚未连接验证。' })}
+            {t('devices.mcpConnected', {
+              count: body.connected_count ?? probed,
+              probed,
+              defaultValue: '本轮 {{probed}} 台全部连上，{{count}} 台报了工具。',
+            })}
           </strong>
-          {body.note ?? ''}
         </>
       )}
+      {probed > 0 && body?.connected === false && (
+        <>
+          {' '}
+          <strong>
+            {t('devices.mcpNotConnected', {
+              defaultValue: '本轮 {{probed}} 台里 {{failed}} 台没连上。',
+              probed,
+              failed: body.failed_count ?? 0,
+            })}
+          </strong>
+        </>
+      )}
+      {body?.note ?? ''}
+    </p>
+  )
+}
+
+/**
+ * 一台服务器卡片上的实测状态。
+ *
+ * 三种状态分开说，因为它们的下一步完全不同：
+ * 连上了 / 没连上（附服务端给的原因）/ 没探测（附为什么没探测）。
+ * 第三种**不许**显示成「失败」—— 停用的服务器不是故障。
+ */
+function McpProbeStatus({ status }: { status: McpServerStatus | undefined }): ReactNode {
+  const { t } = useTranslation()
+  if (!status) {
+    return (
+      <p className="field-help">
+        {t('devices.mcpNoStatus', { defaultValue: '本轮没有这一台的探测记录。' })}
+      </p>
+    )
+  }
+  if (!status.probed) {
+    return (
+      <p className="field-help">
+        {t('devices.mcpNotProbed', { defaultValue: '未探测：' })}
+        {status.error ?? ''}
+      </p>
+    )
+  }
+  if (!status.connected) {
+    return (
+      <p className="field-help">
+        <strong>{t('devices.mcpProbeFailed', { defaultValue: '没连上：' })}</strong>
+        {status.error ?? ''}
+      </p>
+    )
+  }
+  return (
+    <p className="field-help">
+      {t('devices.mcpProbeOk', {
+        defaultValue: '已连上（协议 {{protocol}}，{{server}}），模型可用工具 {{count}} 个。',
+        protocol: status.protocol_version ?? '—',
+        server: status.server_info ?? '—',
+        count: status.tool_count,
+      })}
     </p>
   )
 }
@@ -148,6 +218,7 @@ export function DeviceListPage(): ReactNode {
               </div>
               <h2>{server.name}</h2>
               <p><code>{serverAddress(server)}</code></p>
+              <McpProbeStatus status={mcpStatusOf(config.data, server.name)} />
               <dl className="compact-stats">
                 <div>
                   <dt>{t('mcp.transport', { defaultValue: '传输方式' })}</dt>

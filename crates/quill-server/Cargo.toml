@@ -13,6 +13,14 @@ path = "src/lib.rs"
 name = "quill-server"
 path = "src/main.rs"
 
+# 测试对端：一个真会说话的 stdio MCP 服务器（见该文件顶部说明）。
+# 集成测试用 `env!("CARGO_BIN_EXE_quill-mcp-stub")` 定位它。
+# **不打进发布**：它只在 `cargo test` 时被 `CARGO_BIN_EXE_*` 用到，
+# 单独 `cargo build --release` 出的包里不包含它。
+[[bin]]
+name = "quill-mcp-stub"
+path = "src/bin/mcp_stub.rs"
+
 [dependencies]
 
 quill-adapters = { path = "../quill-adapters" }
@@ -25,6 +33,8 @@ quill-provider = { path = "../quill-provider" }
 
 axum = { version = "0.8", features = ["http1", "json", "tokio"] }
 
+# stdio MCP 客户端。本轮只铺 stdio：`transport-child-process` 提供子进程传输，
+# `client` 提供 `ServiceExt::serve` 与 `tools/list`。刻意 `default-features = false`
 getrandom = "0.4"
 reqwest = { version = "0.12", default-features = false, features = [
     "json",
@@ -37,11 +47,34 @@ sqlx = { version = "0.8", default-features = false, features = [
 ] }
 
 tower = { version = "0.5", features = ["util"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net"] }
+# `process` 与 `io-util` 是 mcp_client 自己在用的（拉起 stdio 子进程、读它的 stderr），
+# 不靠 rmcp 顺带打开：靠 feature 合并「顺带能用」的话，rmcp 一改 feature 这里就编不过。
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "signal",
+    "net",
+    "process",
+    "io-util",
+] }
 serde_json = "1"
+# stdio MCP 客户端。本轮只铺 stdio：`transport-child-process` 给子进程传输，
+# `client` 给 `ServiceExt::serve` 与 `tools/list`。刻意 `default-features = false`
+# —— 默认那组带 server / macros / base64，客户端一个都用不上。
+rmcp = { version = "3.5.1", default-features = false, features = [
+    "client",
+    "transport-child-process",
+] }
 
 [dev-dependencies]
 
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net"] }
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "signal",
+    "net",
+    "process",
+    "io-util",
+] }

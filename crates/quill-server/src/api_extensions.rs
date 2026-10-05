@@ -1,15 +1,21 @@
 //! `/api/extensions/*` —— MCP 服务器与 SKILL 的管理入口。
 //!
-//! **这一层只做配置管理**：把 `mcp_servers` / `skills` 两张表接上真实现，
-//! 让界面上那些「点了必失败」的按钮变成能存能读。
+//! **这一层管两件事**：把 `mcp_servers` / `skills` 两张表接上真实现，
+//! 以及在读 MCP 配置时**真的去连一次**（`mcp_client::probe`）。
 //!
-//! 刻意**不做**的事：这里不发起任何到 MCP 服务器的连接。理由是保存配置与
-//! 连通性是两件事 —— 服务器没起、地址写错、token 过期，都会让「保存」失败，
-//! 而用户恰恰需要先把配置登记进去才能去排查。所以响应里带 `connected: false`
-//! 与说明，如实告知「已保存、尚未连接验证」，不假装通了。
+//! 仍然刻意**不**做的事：不让「保存配置」依赖「连得上」。保存配置与连通性是两件事 ——
+//! 服务器没起、地址写错、token 过期，都会让「保存」失败，而用户恰恰需要先把配置
+//! 登记进去才能去排查。所以写入只碰库，连接只发生在读的那一侧，并且**读也是尽力而为**：
+//! 一台连不上的服务器会让 `status` 里那一条报错，但不会让整个请求 500。
+//!
+//! 响应里 `connected` 与 `note` 是**实测**出来的，不是配置的回声。2026-10-06 之前
+//! 这两个字段恒为 `false` 并附一句「rmcp 协议层还没落地」；协议层落地之后它们随
+//! 每次真实握手变化，那句说明也随之改掉。见 `mcp_client`。
 //!
 //! 契约抄前端（`ui/web/src/devices/api.ts`，它抄的是 Octop）：全量提交
-//! `{ servers: [...] }`，没有的即软删。
+//! `{ servers: [...] }`，没有的即软删。**只读的状态另放一个 `status` 数组**，
+//! 不混进 `servers` —— 前端会把 `servers` 原样回填进编辑表单再 POST 回来，
+//! 混进只读字段会被 `parse_server` 的字段白名单拒掉。
 
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
@@ -19,6 +25,7 @@ use serde_json::{json, Value};
 use crate::auth::AuthUser;
 use crate::body::JsonBody;
 use crate::error::ApiError;
+use crate::mcp_client;
 use crate::mcp_repo::{self, McpServerRow};
 use crate::skills_repo;
 use crate::state::AppState;
@@ -27,7 +34,11 @@ fn map_err(op: &str, e: quill_agent::AgentError) -> ApiError {
     ApiError::internal(format!("{op}失败（详情见服务端日志）：{e}"))
 }
 
-/// `GET /api/extensions/mcp` —— 列出当前用户的 MCP 服务器配置。
+/// `GET /api/extensions/mcp` —— 列出当前用户的 MCP 服务器配置，**并真的连一次**。
+///
+/// 每台服务器都会走一遍 `mcp_client::probe`：启用且是 stdio 的会真的被拉起来、
+/// 真的握手、真的 `tools/list`。连不上的那台在 `status` 里带一句白话原因，
+/// 但**不会**让整个请求失败 —— 一台用户的服务器起不来，不该让整页 MCP 打不开。
 pub async fn list_mcp(
     State(state): State<AppState>,
     user: AuthUser,
@@ -36,13 +47,27 @@ pub async fn list_mcp(
     let rows = mcp_repo::list(db, user.0.user_id)
         .await
         .map_err(|e| map_err("列出 MCP 服务器", e))?;
-    Ok(Json(json!({
+    Ok(Json(mcp_body(&rows).await).into_response())
+}
+
+/// 拼一份响应。`GET` 与 `POST` 共用。
+///
+/// **POST 也要重测一次**，不能直接回 `connected: false` —— 前端保存成功后会用
+/// POST 的响应替换掉列表缓存（`client.setQueryData`）。这里回一个恒假的
+/// `connected`，用户刚存好的服务器在界面上会立刻显示成「没连上」，
+/// 而那不是任何一次真实探测的结果。
+async fn mcp_body(rows: &[McpServerRow]) -> Value {
+    let probes = mcp_client::probe_all(rows.to_vec()).await;
+    let summary = mcp_client::Summary::of(&probes);
+    json!({
         "servers": rows.iter().map(mcp_repo::to_json).collect::<Vec<Value>>(),
-        "connected": false,
-        "note": "已保存配置，尚未连接验证。\
-                 下一步：接 rmcp 协议层后，这里会变成真实的 tools/list 结果。",
-    }))
-    .into_response())
+        "status": probes.iter().map(mcp_client::status_json).collect::<Vec<Value>>(),
+        "connected": summary.all_connected(),
+        "probed": summary.probed,
+        "connected_count": summary.connected,
+        "failed_count": summary.failed,
+        "note": summary.note(&probes),
+    })
 }
 
 /// `POST /api/extensions/mcp` —— 全量覆盖。
@@ -85,13 +110,7 @@ pub async fn save_mcp(
     let rows = mcp_repo::replace_all(db, user.0.user_id, parsed)
         .await
         .map_err(|e| map_err("保存 MCP 服务器", e))?;
-    Ok(Json(json!({
-        "servers": rows.iter().map(mcp_repo::to_json).collect::<Vec<Value>>(),
-        "connected": false,
-        "note": "配置已保存。连接验证尚未接入（rmcp 协议层还没落地），\
-                 所以这里的 connected 恒为 false —— 这不是失败，是还没做。",
-    }))
-    .into_response())
+    Ok(Json(mcp_body(&rows).await).into_response())
 }
 
 /// `DELETE /api/extensions/mcp/{name}` —— 软删单个。

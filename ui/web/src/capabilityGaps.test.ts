@@ -51,9 +51,9 @@ describe('能力缺口表必须与后端路由对齐', () => {
   it('部分接通的每一行都要说清「哪一环没接」，而不只是给个状态词', () => {
     // 「部分接通」四个字本身没用：用户不知道要等协议层还是等工具表。
     // 只写状态码的话，两种情况在界面上长得一模一样。
-    // 措辞允许几种（未接 / 尚未 / 还没有），但必须**指名缺的是哪一环**。
+    // 措辞允许几种（未接 / 尚未 / 还没有 / 还没），但必须**指名缺的是哪一环**。
     for (const gap of CAPABILITY_GAPS.filter((item) => item.status === 'partial')) {
-      expect(gap.detail, `${gap.route} 的 detail 没说要接什么`).toMatch(/未接|尚未|还没有/)
+      expect(gap.detail, `${gap.route} 的 detail 没说要接什么`).toMatch(/未接|尚未|没有|还没/)
       expect(gap.detail.length, `${gap.route} 的 detail 太短，说不清差在哪`).toBeGreaterThan(6)
     }
   })
@@ -73,9 +73,17 @@ describe('能力缺口表必须与后端路由对齐', () => {
     expect(detail, 'MCP 工具还没有，partial 仍然成立').toMatch(/MCP/)
   })
 
-  it('MCP 仍然标 partial，且必须说清缺的是协议层', () => {
+  it('MCP 仍然标 partial，且必须说清缺的是「挂进工具表」这一步', () => {
+    // 2026-10-06 之前这条断言盯的是「缺的是协议层」；协议层真的铺好之后
+    // （`mcp_client::probe` 真的握手并 tools/list），缺的就换成了
+    // **把 MCP 工具挂进对话的工具表**这一步。再拿「协议层」当缺口写，
+    // 就变成把已经能用的东西说成不能用 —— 和反过来的错一样严重。
     const mcp = CAPABILITY_GAPS.find((item) => item.route === 'GET /api/extensions/mcp')
     expect(mcp?.status).toBe('partial')
-    expect(mcp!.detail, 'MCP 缺的是协议层，不是存储').toMatch(/协议层|rmcp/)
+    expect(mcp!.detail, 'MCP 缺的是挂进工具表，不是存储').toMatch(/挂进对话的工具表/)
+    // 已经做好的那一步也要说清楚，否则用户会以为一条工具都拿不到。
+    expect(mcp!.detail, '要说清 stdio 协议层已经真的握手并 tools/list 了').toMatch(/tools\/list/)
+    // 协议层已经铺了，文案不许再把它说成没接。
+    expect(mcp!.detail, '协议层已落地，不该再说「协议层未接」').not.toMatch(/协议层（未接|没接|还没）/)
   })
 })

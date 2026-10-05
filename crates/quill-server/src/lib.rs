@@ -16,6 +16,7 @@ pub mod error;
 pub mod experts_repo;
 pub mod llm;
 pub mod llm_providers;
+pub mod mcp_client;
 pub mod mcp_repo;
 pub mod middleware;
 pub mod ratelimit;

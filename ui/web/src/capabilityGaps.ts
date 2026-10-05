@@ -5,7 +5,9 @@
  *
  * - `partial`：**有一部分真的能用了，但还缺一块**。技能包已经挂进对话的工具表
  *   （`ToolRegistry::with_skills`），每条 SKILL 用 `model_can_see` 告诉界面
- *   「模型这次看不看得见」；但 MCP 一条工具都还拿不到（协议层没接）。
+ *   「模型这次看不看得见」；MCP 的 stdio 协议层也已经真的握手并 `tools/list`
+ *   （`mcp_client::probe`，每台带真实的 `connected` / `tool_count` / 失败原因），
+ *   但那些工具**还没有挂进对话的工具表**，所以模型这一轮仍然调不到。
  *   这种情况标「501」是撒谎 —— 501 的意思是路由不存在，而这些路由好好地活着。
  * - `not-implemented`：**路由根本不存在**，点了必然失败。
  *
@@ -19,7 +21,7 @@ export const CAPABILITY_GAPS = [
     fallback: 'MCP',
     route: 'GET /api/extensions/mcp',
     status: 'partial',
-    detail: '配置能存能读；协议层（rmcp）未接，tools/list 还拿不到',
+    detail: 'stdio 服务器真的握手并 tools/list 了；这些工具还没挂进对话的工具表',
   },
   {
     labelKey: 'chat.tools.skills',

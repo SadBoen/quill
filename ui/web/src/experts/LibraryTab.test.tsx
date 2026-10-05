@@ -129,7 +129,7 @@ it('MCP 与技能包标「部分接通」，不标 501 —— 它们的路由是
   fireEvent.click(within(card()).getByRole('button', { name: '生成专家' }))
   await waitFor(() => expect(within(card()).getByText('GET /api/extensions/mcp')).toBeInTheDocument())
 
-  expect(within(card()).getByText(/部分接通 · 配置能存能读/)).toBeInTheDocument()
+  expect(within(card()).getByText(/部分接通 · stdio 服务器真的握手并 tools\/list 了/)).toBeInTheDocument()
   expect(
     within(card()).getByText(/部分接通 · 已挂进对话工具表/),
     '技能包已挂进工具表，文案不许再写「能存能读」',

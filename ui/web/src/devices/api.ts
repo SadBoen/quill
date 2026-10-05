@@ -16,16 +16,41 @@ export interface McpServerConfig {
   max_concurrent_calls?: number
 }
 
+/**
+ * 一台 MCP 服务器在**本轮真实探测**里的状态。
+ *
+ * 全部字段都来自服务端真的发起过 `initialize` + `tools/list` 之后的结果，
+ * 没有任何一个是前端推断的。对端是 `mcp_client::probe`。
+ */
+export interface McpServerStatus {
+  name: string
+  /** 本轮是不是真的发起过协议握手。停用 / 非 stdio / 缺 command 都会是 false。 */
+  probed: boolean
+  connected: boolean
+  /** 按 `enabled_capabilities` 过滤之后真正会交给模型的工具条数。 */
+  tool_count: number
+  /** 探测不到时的白话原因，原样显示。 */
+  error?: string | null
+  protocol_version?: string | null
+  server_info?: string | null
+}
+
 /** `GET /api/extensions/mcp` 的响应；servers 字段缺失时按空数组处理。 */
 export interface McpServerList {
   servers?: McpServerConfig[]
   /**
-   * 服务端是否真的连上过这些 MCP 服务器。
+   * 本轮探测过的服务器是不是**全部**连上了。
    *
-   * 协议层（rmcp）还没接，所以现在恒为 `false`。**不要**拿它当装饰：
-   * 界面上任何「已连接 / 可用」的字样都必须读这个字段，而不是自行推断。
+   * 一台都没探测过时是 `false` —— 那不是「都通了」，那是「没查过」。
+   * 靠 `probed` 把这两种情况分开说，别拿这个字段当「已连接」显示。
    */
   connected?: boolean
+  /** 本轮真的发起过握手的台数。 */
+  probed?: number
+  connected_count?: number
+  failed_count?: number
+  /** 每台服务器的实测状态，与 `servers` 同序。 */
+  status?: McpServerStatus[]
   /** 服务端对当前连通性状态的说明，原样显示，不改写。 */
   note?: string
 }
@@ -43,4 +68,12 @@ export function saveMcpServers(servers: McpServerConfig[]): Promise<McpServerLis
 
 export function mcpServersOf(body: McpServerList | undefined): McpServerConfig[] {
   return body?.servers ?? []
+}
+
+/** 按名字取某台服务器的实测状态。没有记录时返回 `undefined`——**不是**「已连接」。 */
+export function mcpStatusOf(
+  body: McpServerList | undefined,
+  name: string,
+): McpServerStatus | undefined {
+  return body?.status?.find((item) => item.name === name)
 }

@@ -1,13 +1,18 @@
 //! MCP 配置与 SKILL 的 HTTP 契约。
 //!
-//! 重点钉三件事：
+//! 重点钉四件事：
 //!
-//! 1. **不伪造连通性。** 协议层（`rmcp`）还没接，所以响应里 `connected` 必须
-//!    恒为 `false`，而且 `note` 要说清下一步接什么。哪天有人为了让界面显示
-//!    「已连接」而把它写死成 `true`，这条测试会红。
+//! 1. **不伪造连通性。** 协议层（`rmcp`）落地之后，`connected` / `status` 里的
+//!    每一项都来自**真的** `initialize` + `tools/list`。连不上的必须说没连上，
+//!    没探测过的必须说没探测（停用、传输方式没铺、缺 command），**不许**把
+//!    「没查」写成「查了没通」。2026-10-06 之前这条契约是反的 —— 那时协议层
+//!    不存在，`connected` 只能恒为 `false`；现在改成真值之后，靠的就是
+//!    `mcp_stdio_protocol.rs` 里那个真会说话的 stdio 服务器来证明它不是编的。
 //! 2. **存得下也读得回。** 前端是全量提交，存进去的每个字段都得原样回来；
 //!    `enabled_capabilities` 的三态（`null` / `[]` / 数组）尤其不能被抹平。
-//! 3. **报错要说清下一步**，并且按用户隔离。
+//! 3. **只读状态不进 `servers`。** 前端会把 `servers` 原样回填进编辑表单再
+//!    POST 回来，混进只读字段会被 `parse_server` 的字段白名单拒掉。
+//! 4. **报错要说清下一步**，并且按用户隔离。
 
 mod common;
 
@@ -160,15 +165,39 @@ fn post_json(path: &str, token: &str, body: serde_json::Value) -> Request<Body> 
         .expect("构造请求")
 }
 
+/// 一条**故意拉不起来**的 stdio 配置。
+///
+/// 命令名保证不存在，于是每次保存/读取时的真实探测都会在 spawn 那一步**立刻**
+/// 失败，而不是等满握手超时。两条理由：
+///
+/// - 快。`npx` 在测试机上可能是有的，探测就得一路等到 10 秒上限；
+///   一次超时挂在 8 条用例上，全套测试凭空多出 80 秒。
+/// - 确定。不依赖测试机上装了什么。
+///
+/// 连不上正好是这些用例想要的输入：它们验的是存取与报错，不是连通性。
 fn stdio(name: &str) -> serde_json::Value {
     serde_json::json!({
         "name": name,
         "transport": "stdio",
-        "command": "npx",
+        "command": "quill-no-such-mcp-binary",
         "args": ["-y", "some-server"],
         "env": {"TOKEN": "secret"},
         "enabled_capabilities": null,
         "timeout_ms": 30000
+    })
+}
+
+/// 指向**真会说话**的 stdio MCP 服务器（`src/bin/mcp_stub.rs`）的配置。
+fn stdio_stub(name: &str, args: &[&str]) -> serde_json::Value {
+    serde_json::json!({
+        "name": name,
+        "transport": "stdio",
+        "command": env!("CARGO_BIN_EXE_quill-mcp-stub"),
+        "args": args,
+        // 空数组 = 能力**全开**（三态之一）。写成 null 或 ["resources"] 的话，
+        // 工具数会是 0，测的就不是连通性了。
+        "enabled_capabilities": [],
+        "timeout_ms": 20000
     })
 }
 
@@ -197,8 +226,59 @@ async fn list(h: &Harness, token: &str) -> serde_json::Value {
 
 // ------------------------------------------------------------------ 不伪造
 
+/// 主线：`connected` 现在是**实测值**。这一条钉住「真的连上了就是 true」，
+/// 而且是真去连了一个会说话的 stdio 服务器 —— 不是把字段写死。
+///
+/// 这条是 2026-10-06 之前那条「必须恒为 false」的**反面**：那时协议层不存在，
+/// 恒 false 是唯一诚实的写法；现在恒 false 就变成撒谎了。
 #[tokio::test]
-async fn saving_mcp_never_claims_to_be_connected() {
+async fn a_reachable_stdio_server_is_reported_as_connected_with_its_real_tool_count() {
+    let h = Harness::new("ext-mcp-connected");
+    seed_user(&h.db.bridge(), UID_A);
+
+    let v = save(
+        &h,
+        TOKEN_A,
+        serde_json::json!({"servers": [stdio_stub("notes", &["--one-page"])]}),
+    )
+    .await;
+
+    assert_eq!(v["connected"], serde_json::json!(true), "真连上了：{v}");
+    assert_eq!(v["probed"], serde_json::json!(1));
+    assert_eq!(v["connected_count"], serde_json::json!(1));
+    assert_eq!(v["failed_count"], serde_json::json!(0));
+
+    let st = &v["status"][0];
+    assert_eq!(st["name"], serde_json::json!("notes"));
+    assert_eq!(st["probed"], serde_json::json!(true));
+    assert_eq!(st["connected"], serde_json::json!(true));
+    assert_eq!(
+        st["tool_count"],
+        serde_json::json!(3),
+        "工具数必须是从 tools/list 数出来的：{st}"
+    );
+    assert_eq!(st["protocol_version"], serde_json::json!("2025-06-18"));
+    assert_eq!(st["server_info"], serde_json::json!("quill-test-stub 1.0.0"));
+    assert!(st["error"].is_null(), "连上了就不该带错误：{st}");
+
+    // note 必须说清「连上了 ≠ 模型能调」—— 这是当前最容易骗人的地方。
+    let note = v["note"].as_str().expect("必须有说明");
+    assert!(note.contains("1 台 stdio 服务器"), "{note}");
+    assert!(
+        note.contains("还没有挂进对话的工具表"),
+        "note 必须说清工具还没进工具表：{note}"
+    );
+
+    // 读回来也一样 —— 不能只在 POST 的响应里诚实。
+    let back = list(&h, TOKEN_A).await;
+    assert_eq!(back["connected"], serde_json::json!(true));
+    assert_eq!(back["status"][0]["tool_count"], serde_json::json!(3));
+}
+
+/// 拉不起来的服务器：`probed=true`（真的试过了）、`connected=false`，
+/// 并且带一条能照着做的原因。**不许**报成「没探测」—— 那是另一回事。
+#[tokio::test]
+async fn a_server_that_cannot_be_spawned_is_reported_as_a_real_failed_probe() {
     let h = Harness::new("ext-mcp-not-connected");
     seed_user(&h.db.bridge(), UID_A);
 
@@ -208,16 +288,97 @@ async fn saving_mcp_never_claims_to_be_connected() {
         serde_json::json!({"servers": [stdio("filesystem")]}),
     )
     .await;
-    assert_eq!(
-        v["connected"],
-        serde_json::json!(false),
-        "协议层还没接，必须说未连接。写 true 等于骗界面"
+    assert_eq!(v["connected"], serde_json::json!(false), "连不上：{v}");
+    assert_eq!(v["probed"], serde_json::json!(1), "真的试过了：{v}");
+    assert_eq!(v["failed_count"], serde_json::json!(1));
+    let st = &v["status"][0];
+    assert_eq!(st["probed"], serde_json::json!(true));
+    assert_eq!(st["connected"], serde_json::json!(false));
+    assert_eq!(st["tool_count"], serde_json::json!(0));
+    let err = st["error"].as_str().expect("失败必须带原因");
+    assert!(err.contains("拉起"), "{err}");
+    assert!(err.contains("手动跑一遍"), "原因要带得动手的下一步：{err}");
+    // 那个反引号里的内容是要被复制粘贴的：留个尾随空格就是「照着做还是错」。
+    assert!(
+        !err.contains("quill-no-such-mcp-binary `"),
+        "可粘贴的命令行不许有尾随空格：{err}"
     );
-    let note = v["note"].as_str().expect("必须有说明");
-    assert!(note.contains("rmcp"), "要说清下一步接什么：{note}");
 
     // 读回来也一样 —— 不能只在 POST 的响应里诚实。
     assert_eq!(list(&h, TOKEN_A).await["connected"], serde_json::json!(false));
+}
+
+/// 协议层没铺的传输方式：`probed=false`，原因说「还没铺」而不是「连不上」。
+///
+/// 这两种的下一步完全不同 —— 混成同一句话，用户会去查一个不存在的网络故障。
+#[tokio::test]
+async fn a_transport_without_a_protocol_layer_is_reported_as_not_probed() {
+    let h = Harness::new("ext-mcp-not-probed");
+    seed_user(&h.db.bridge(), UID_A);
+
+    let v = save(
+        &h,
+        TOKEN_A,
+        serde_json::json!({"servers": [{
+            "name": "remote",
+            "transport": "streamable_http",
+            "url": "http://127.0.0.1:1/mcp",
+            "enabled_capabilities": []
+        }]}),
+    )
+    .await;
+    assert_eq!(v["probed"], serde_json::json!(0), "压根没发起握手：{v}");
+    assert_eq!(v["connected"], serde_json::json!(false));
+    let st = &v["status"][0];
+    assert_eq!(st["probed"], serde_json::json!(false));
+    let err = st["error"].as_str().expect("要说明为什么没探测");
+    assert!(err.contains("还没铺"), "{err}");
+    // 关键是要**否认**自己是一次连接失败。早先这里写的是
+    // `!err.contains("失败")`，而正文里那句「这不是连接失败」正好把它判成了红 ——
+    // 断言写得比需求还窄，改的是断言，不是文案。
+    assert!(
+        err.contains("不是连接失败") || err.contains("还没做"),
+        "「还没做」必须与「连接失败」区分开：{err}"
+    );
+}
+
+/// 只读状态不许混进 `servers`：前端会把它原样回填进编辑表单再 POST 回来，
+/// 而 `parse_server` 的字段白名单会拒掉不认识的键。
+#[tokio::test]
+async fn the_read_only_status_never_leaks_into_the_editable_server_objects() {
+    let h = Harness::new("ext-mcp-status-shape");
+    seed_user(&h.db.bridge(), UID_A);
+    let v = save(
+        &h,
+        TOKEN_A,
+        serde_json::json!({"servers": [stdio_stub("notes", &["--one-page"])]}),
+    )
+    .await;
+
+    let forbidden = ["connected", "probed", "tool_count", "error", "protocol_version"];
+    let server = v["servers"][0].as_object().expect("server 必须是对象");
+    for key in forbidden {
+        assert!(
+            !server.contains_key(key),
+            "`servers[{key}]` 是只读状态，混进去会被字段白名单拒掉：{server:?}"
+        );
+    }
+    // 而且 status 与 servers 同序同长，界面才能按下标对齐。
+    assert_eq!(v["servers"].as_array().unwrap().len(), v["status"].as_array().unwrap().len());
+    assert_eq!(v["servers"][0]["name"], v["status"][0]["name"]);
+}
+
+/// 一台都没配时：`probed=0`、`connected=false`、`note` 说清「没查过」。
+/// 界面靠 `probed` 把「没查」和「查了没通」分开显示。
+#[tokio::test]
+async fn an_empty_list_reports_nothing_probed_rather_than_a_verdict() {
+    let h = Harness::new("ext-mcp-empty");
+    seed_user(&h.db.bridge(), UID_A);
+    let v = list(&h, TOKEN_A).await;
+    assert_eq!(v["probed"], serde_json::json!(0));
+    assert_eq!(v["connected"], serde_json::json!(false));
+    let note = v["note"].as_str().expect("必须有说明");
+    assert!(note.contains("没有发起任何协议握手"), "{note}");
 }
 
 #[tokio::test]
