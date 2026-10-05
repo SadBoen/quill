@@ -14,6 +14,7 @@ import json
 import pathlib
 import re
 import sys
+from collections import Counter
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 RAW = ROOT / "TESTSETS" / "_raw"
@@ -50,7 +51,14 @@ def load_atlas():
                 claims = []
             tasks.append(
                 {
-                    "id": f"atlas-{row['TASK'][:12]}",
+                    # **整个 TASK 都拿来做 id，不许截断。**
+                    #
+                    # MCP-Atlas 的 TASK 是 24 位十六进制，**前 12 位是分组前缀、
+                    # 后 12 位才是序号**（实测：689bd255c0422b257e7dfca5 /
+                    # …ca8 / …ca9 是三条**不同**的任务）。
+                    # 原来这里截到 12 位，恰好只留下分组前缀、把唯一的那部分扔了：
+                    # 500 行原始数据最后只剩 **32 个** id，498 行撞车。见 ISSUE-024。
+                    "id": f"atlas-{row['TASK']}",
                     "source": "MCP-Atlas",
                     "source_id": row["TASK"],
                     "source_url": "https://huggingface.co/datasets/ScaleAI/MCP-Atlas",
@@ -205,6 +213,20 @@ def main():
         )
         return 1
 
+    # id 必须真的唯一。**这条断言是被真实事故逼出来的**：MCP-Atlas 那边
+    # 一度把 TASK 截到 12 位，500 行只剩 32 个 id，于是「100 条任务」里有
+    # 34 条两两无法区分 —— 按 id 记进度会**虚增**，按 id 跑某一条会跑到
+    # 另一条身上。这种错静默通过，跑得越多越看不出来，所以在这里当场拦住，
+    # 不写进 tasks.json。见 ISSUE-024。
+    dup_ids = [i for i, n in Counter(t["id"] for t in picked).items() if n > 1]
+    if dup_ids:
+        print(
+            f"id 不唯一，共 {len(dup_ids)} 组冲突（{', '.join(sorted(dup_ids)[:5])} …）—— "
+            f"如实报错，不写出 tasks.json。",
+            file=sys.stderr,
+        )
+        return 1
+
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "tasks.json").write_text(
         json.dumps(picked, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -213,8 +235,6 @@ def main():
     n_skill_files = len(list((OUT / "skills").glob("*.md")))
     print(f"写出 tasks.json: {len(picked)} 条")
     print(f"写出 skills/: {n_skill_files} 个真实 SKILL.md")
-    from collections import Counter
-
     for k, v in Counter(t["source"] for t in picked).items():
         print(f"  {k}: {v}")
     return 0
