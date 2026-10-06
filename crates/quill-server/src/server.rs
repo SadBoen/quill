@@ -93,8 +93,10 @@ pub fn build_state(config: Config) -> (AppState, Vec<crate::config::Warning>) {
             }
 
             let bridge = Arc::new(bridge);
-            // 库建好了，把同一个 Arc 交给会话令牌解析器，之后登录签发的令牌
-            // 才会被认出来。必须是同一个 Arc —— 它是唯一持有 worker 池的那个。
+            // 库建好了，把同一个 Arc 交给令牌解析器：会话令牌要靠它查库，
+            // 环境变量令牌也要靠它核 `users` 行的状态与角色。必须是同一个 Arc
+            // —— 它是唯一持有 worker 池的那个。
+            resolver.attach(Arc::clone(&bridge));
             session_resolver.attach(Arc::clone(&bridge));
 
             (Some(bridge), None)

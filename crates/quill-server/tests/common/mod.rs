@@ -110,6 +110,61 @@ pub fn text_of(db: &Arc<DbBridge>, sql: &str) -> String {
     .unwrap_or_else(|e| panic!("断言查询失败：{e}"))
 }
 
+/// 铺一个 `users` 行，形状与 `bootstrap::ensure_token_user` 写出来的完全一致
+/// （`password_algo='token-only'`，没有口令）。
+///
+/// 令牌鉴权会回这一行核状态与角色，所以**凡是拿 `QUILL_TOKENS` 令牌发请求的测试
+/// 都必须先铺行**。不铺的话令牌会被当成「这个人在库里不存在」而拒，测的就不是
+/// 行为而是夹具了 —— 而且这种测试会「因为夹具不对而绿」，最难发现。
+pub async fn seed_token_user(
+    db: &Arc<DbBridge>,
+    id: &quill_domain::UserId,
+    username: &str,
+    is_admin: bool,
+) {
+    let id = id.as_bytes().to_vec();
+    let username = username.to_string();
+    let role = if is_admin { "owner" } else { "member" };
+    db.call(move |pool, _rt| {
+        Box::pin(async move {
+            sqlx::query(
+                "INSERT INTO users(id,username,username_norm,display_name,password_hash,\
+                 password_salt,password_algo,role,pwd_changed_at,created_at,updated_at) \
+                 VALUES(?,?,?,?,?,?,?,?,0,0,0)",
+            )
+            .bind(id)
+            .bind(&username)
+            .bind(&username)
+            .bind(&username)
+            .bind(b"token-only-no-password".as_slice())
+            .bind(b"token-only".as_slice())
+            .bind(quill_control::TOKEN_ONLY_ALGO)
+            .bind(role)
+            .execute(&pool)
+            .await
+            .map_err(|e| storage_error("铺 token 账号", e))?;
+            Ok(())
+        })
+    })
+    .expect("铺 token 账号失败");
+}
+
+/// 把账号改成停用，用来验「停用立刻生效」，而不是只在登录那一刻生效。
+pub async fn disable_user(db: &Arc<DbBridge>, id: &quill_domain::UserId) {
+    let id = id.as_bytes().to_vec();
+    db.call(move |pool, _rt| {
+        Box::pin(async move {
+            sqlx::query("UPDATE users SET status='disabled' WHERE id=?")
+                .bind(id)
+                .execute(&pool)
+                .await
+                .map_err(|e| storage_error("停用测试账号", e))?;
+            Ok(())
+        })
+    })
+    .expect("停用测试账号失败");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

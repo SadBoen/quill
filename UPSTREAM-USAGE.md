@@ -90,6 +90,8 @@
 | 上下文图的数据源接口 | `crates/quill-server/src/api_chat.rs:447` | `.octop-ref/octop/dashboard/src/pages/Chat/components/ContextWindowRing.tsx:144-146` | 只读对齐 | 形状对齐（used / max / 分段），路由与字段名是我们自己的 |
 | 会话级统计的产出规则（算不出来就是 null） | `crates/quill-server/src/session_metrics.rs:1-25` | `.octop-ref/octop/dashboard/src/api/modules/trajectory.ts:34-45` | 只读对齐 | 它十个指标都有数据源；quill 只能诚实产出一部分，缺的那些宁可不出现在界面上 |
 | 登录 / 首管引导的端点清单 | `crates/quill-server/src/api_auth.rs:3-12` | `.octop-ref/octop/dashboard/src/api/modules/auth.ts:11-17` | 已接入 | 路由与响应形状照抄；我们不抄 `captcha_token` 与 OIDC/OAuth/LDAP/改密码（抄过来就是恒定失败的字段），`logout` 我们返 200 + `revoked` 而不是 204 |
+| 令牌只有一种，且必须由服务端按账号状态裁决 | `crates/quill-server/src/auth.rs`（`CompositeTokenResolver::confirm_identity`） | `.octop-ref/octop/dashboard/src/api/request.ts:251-254`、`.octop-ref/octop/dashboard/src/api/request.ts:333-341` | 已接入 | 它每个请求统一带 `Authorization: Bearer`，401 一律清令牌跳登录，服务端是唯一裁判。**我们多一种令牌**（`QUILL_TOKENS` 环境变量直发令牌，octop 没有这个机制），但对齐的正是它最要紧的那条性质：令牌解析必须回库核状态与角色，不能凭配置放行。差别见下条 |
+| 明确拒绝「把鉴权关掉」 | `crates/quill-server/src/auth.rs`（库句柄未就绪时一律按令牌无效处理，不放行） | `.octop-ref/octop/dashboard/src/api/modules/auth.ts:306-308` | 只读对齐 | 它的 `disableAuth` 直接 `Promise.reject`，注释写着「Octop cannot disable auth」。我们没有这个开关，也没有对应的后门：查不到账号行就拒 |
 | MCP transport 枚举 | `crates/quill-store/migrations/0007_mcp_transport_alignment.sql:26-28` | `.octop-ref/octop/dashboard/src/api/modules/connectors.ts:128` | 我们的选择 | 它只有 `stdio` 与 `streamable_http`；我们多两个 —— `sse`（MCP 规范的另一种 HTTP 传输）与 `builtin`（quill 内建的伪服务器，不来自外部配置）。多出来的两个不是抄来的 |
 | 技能卡片的网格下限 | `ui/web/src/skills/hub.css:142-173` | `.octop-ref/octop/dashboard/src/pages/Experts/index.module.less:27` | 只读对齐 | 结构抄 320px 的 `auto-fill + minmax`，下限改成 240px，并在同一段里给出实测列数表。技能市场那页自己的 less 不在 sparse 内（见「核不到的地方」） |
 | 技能卡片的列表顺序：已装的排前面 | `ui/web/src/skills/HubSkillList.tsx:248-254` | `.octop-ref/octop/dashboard/src/pages/Agent/Skills/components/SkillHubTab.tsx` | 只读对齐 | 只动位置不动内容，列表条数与上游一致；但出处那页离线核不到 |
@@ -140,6 +142,7 @@
 | `dashboard/src/pages/Agent/Skills/index.module.less` | 不在 sparse 集合内。技能市场页自己的网格样式；`ui/web/src/skills/hub.css:142-173` 抄的 320px 下限，我们在 sparse 内能找到同一个字面量（`dashboard/src/pages/Experts/index.module.less:27`），但那不是它被抄的那一页 |
 | `dashboard/src/pages/Control/**` | 不在 sparse 集合内。涉及这一处的任何对比都缺一半证据 |
 | `crates/quill-server/src/skillhub.rs:459-474` 声称照抄的榜单类型集合 | 定义处不在 sparse 集合内，稀疏集里搜不到这个符号 —— **无法核实**，见交付报告 |
+| octop 的**服务端**鉴权实现（JWT 签发/校验、账号停用如何影响已签发的令牌） | src/octop/ 在 sparse 内只有 config.py、launch.py、__main__.py 与 infra/agents/experts/；没有任何 auth/user 模块。所以「停用某个账号后，他手里已签发的 JWT 还能不能用」这条**核不到出处**。这一轮据以下面三条前端事实定的方案：令牌只有一种（`.octop-ref/octop/dashboard/src/api/request.ts:251-254`）、401 一律清令牌（`.octop-ref/octop/dashboard/src/api/request.ts:333-341`）、不许关鉴权（`.octop-ref/octop/dashboard/src/api/modules/auth.ts:306-308`） |
 
 ---
 

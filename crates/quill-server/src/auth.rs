@@ -265,14 +265,21 @@ impl TokenResolver for SessionTokenResolver {
 
 /// 复合解析器：先查静态的环境变量令牌表，查不到再查会话表。
 ///
-/// 顺序有意如此：`QUILL_TOKENS` 是部署者直给的凭据，应当在热路径上零查库命中，
+/// 顺序有意如此：`QUILL_TOKENS` 是部署者直给的凭据，先在内存里过一遍，
 /// 开发与应急场景（数据库出问题时）也仍然进得来。代价是每**一个**没配在环境变量
 /// 里的令牌都会落到一次 DB 查询 —— 这是登录后每个请求的真实成本，记在这里以免
 /// 以后有人把它当 bug 顺手改掉顺序。
+///
+/// **环境变量令牌命中后必须回库核身份**（`confirm_identity`），否则这个表就成了一条
+/// 绕过数据库的后门：账号被停用、角色被改都拦不住它，`users` 行形同虚设。
+/// 这与 Octop 的做法一致 —— 那边的令牌一律解出用户 id，再由服务端按那一行的状态
+/// 与角色裁决；Octop 明确拒绝提供 `disableAuth` 这类「关掉鉴权」的开关
+/// （`dashboard/src/api/modules/auth.ts:306-308`）。
 #[derive(Debug)]
 pub struct CompositeTokenResolver {
     env: EnvTokenResolver,
     session: Arc<SessionTokenResolver>,
+    db: OnceLock<Arc<DbBridge>>,
 }
 
 impl CompositeTokenResolver {
@@ -284,9 +291,15 @@ impl CompositeTokenResolver {
             Self {
                 env,
                 session: Arc::clone(&session),
+                db: OnceLock::new(),
             },
             session,
         )
+    }
+
+    /// 建库之后回填。必须与 `server.rs` 交给会话解析器的是**同一个 Arc**。
+    pub fn attach(&self, db: Arc<DbBridge>) {
+        let _ = self.db.set(db);
     }
 
     pub fn env(&self) -> &EnvTokenResolver {
@@ -302,6 +315,68 @@ impl CompositeTokenResolver {
             .find(|(id, _, _)| *id == user_id)
             .map(|(_, login, _)| login)
     }
+
+    /// 令牌在环境变量表里命中之后，用 `users` 行的真实状态与角色裁决。
+    ///
+    /// 这一步是「停用挡不住 `QUILL_TOKENS`」的解药。查不到行（没引导成功、被软删）、
+    /// 行已停用，一律按令牌无效处理 —— 宁可少一次应急入口，也不留一条不查库的后门。
+    ///
+    /// 角色取自**行**而不是 `QUILL_TOKENS` 里写的 `:admin`：环境变量只在启动引导时
+    /// 决定初始角色，之后能改角色的是管理界面，鉴权必须跟后者一致，否则会出现
+    /// 「界面已把 owner 降级，令牌还能当 admin 用」。
+    fn confirm_identity(&self, claimed: &AuthContext) -> Result<AuthContext, TokenRejected> {
+        let Some(db) = self.db.get() else {
+            // 库还没建起来（`build_state` 失败、或测试里没 attach）时不能放行：
+            // 放行等于把「查不了」当「可以」，那正好是要消灭的那个洞。
+            eprintln!("[auth] 环境变量令牌命中但数据库句柄未就绪，按令牌无效处理");
+            return Err(TokenRejected::Unknown);
+        };
+        let user_id = claimed.user_id;
+        let slot: Arc<std::sync::Mutex<Option<Result<AuthContext, TokenRejected>>>> =
+            Arc::new(std::sync::Mutex::new(None));
+        let writer = Arc::clone(&slot);
+        let reader = Arc::clone(&slot);
+        db.call(move |pool, _rt| {
+            Box::pin(async move {
+                let cp = quill_control::ControlPlane::new_with_os_entropy(
+                    pool,
+                    Arc::new(quill_control::SystemClock),
+                    quill_control::Pbkdf2Params::production(),
+                );
+                let outcome = match cp.authz_of(&user_id).await {
+                    Ok(Some((role, status))) if status == quill_control::UserStatus::Active => {
+                        Ok(AuthContext {
+                            user_id,
+                            is_admin: role == quill_control::UserRole::Owner,
+                        })
+                    }
+                    Ok(Some((_, status))) => {
+                        eprintln!("[auth] 环境变量令牌对应账号已停用（{status:?}），按令牌无效处理");
+                        Err(TokenRejected::Unknown)
+                    }
+                    Ok(None) => {
+                        eprintln!(
+                            "[auth] 环境变量令牌对应的账号在库里不存在，拒绝放行：{}",
+                            user_id.to_compact_hex()
+                        );
+                        Err(TokenRejected::Unknown)
+                    }
+                    Err(e) => {
+                        eprintln!("[auth] 核对环境变量令牌身份时读库失败：{e}");
+                        Err(TokenRejected::Unknown)
+                    }
+                };
+                *writer.lock().expect("结果槽位不该被毒化") = Some(outcome);
+                Ok(())
+            })
+        })
+        .map_err(|e| {
+            eprintln!("[auth] 核对环境变量令牌身份时 DbBridge 通道失败：{e}");
+            TokenRejected::Unknown
+        })?;
+        let out = reader.lock().expect("结果槽位不该被毒化").take();
+        out.unwrap_or(Err(TokenRejected::Unknown))
+    }
 }
 
 impl TokenResolver for CompositeTokenResolver {
@@ -310,7 +385,7 @@ impl TokenResolver for CompositeTokenResolver {
             return Err(TokenRejected::Malformed);
         }
         match self.env.resolve(token) {
-            Ok(ctx) => Ok(ctx),
+            Ok(claimed) => self.confirm_identity(&claimed),
             Err(TokenRejected::Malformed) => Err(TokenRejected::Malformed),
             Err(TokenRejected::Unknown) => self.session.resolve(token),
         }

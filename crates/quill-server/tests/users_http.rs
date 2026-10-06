@@ -5,9 +5,10 @@
 //! 1. `GET /api/users` 真的读库。名单里必须有引导出来的真实账号，
 //!    且分页参数真的会改变返回的条数 —— 页面上那个「下一页」按钮此前
 //!    只改前端 state，服务端压根不认，是个纯装饰。
-//! 2. 停用一个账号**真的挡得住**已登录的人（会话令牌下一请求即拒），
-//!    但**挡不住**还握着 `QUILL_TOKENS` 的人。响应里必须带 `has_env_token`
-//!    与 `warning`：不写清楚，界面上的「已停用」就是一个假的。
+//! 2. 停用一个账号**真的挡得住**所有人：已登录会话令牌下一请求即拒，
+//!    环境变量令牌也一样（令牌鉴权会回 `users` 行核状态）。响应里带
+//!    `has_env_token` 与 `warning`，但那句 `warning` 说的是**登出**收不回令牌，
+//!    不再说「停用挡不住」—— 那句话曾经在替一个真洞背书。
 //! 3. `POST /api/users` 与 `DELETE /api/users/{id}` 仍然是 501，且要
 //!    说得出「为什么不做、下一步怎么办」—— 有意的拒绝和有意的沉默
 //!    对用户是两回事。
@@ -71,6 +72,10 @@ impl Harness {
             ),
         ]);
         let (resolver, sessions) = CompositeTokenResolver::new(env);
+        // 同一个 Arc 交给两个：会话令牌查 `sessions_auth`，环境变量令牌查 `users`
+        // 核状态与角色。少了后者，这两枚环境变量令牌会被一律拒掉，
+        // 下面每一条用它们发的请求都会假红。
+        resolver.attach(self.db.bridge());
         sessions.attach(self.db.bridge());
         AppState {
             config: Config::from_env(),
@@ -285,14 +290,22 @@ async fn disabling_an_account_actually_breaks_its_live_session() {
     assert_eq!(bob_row["status"], "disabled", "库里必须真的改了：{list}");
 }
 
-/// 6. 停用**挡不住**环境变量令牌 —— 所以响应必须说出来。
+/// 6. 停用**也挡得住**环境变量令牌 —— 而且响应必须说出来它挡的是什么。
 ///
-/// 这条是本文件最重要的用例。以前没有它，界面会显示「已停用」，
-/// 而那个人手里握着令牌照样进得来，那是一个假的停用。
+/// 这条测试的断言方向被整个翻过来过一次。早先环境变量令牌命中静态表就直接放行、
+/// **完全不查库**，于是停用之后 bob 照常进得来，接口还配了一句「停用挡不住他」
+/// 的 `warning` 去把这个洞合法化。现在令牌鉴权会回 `users` 行核状态
+/// （`auth.rs` 的 `confirm_identity`），停用对所有人一视同仁。
+///
+/// 留着的那个 `has_env_token` 回答的是**另一个**问题：登出收不收得回他的凭据。
 #[tokio::test]
-async fn disabling_says_out_that_an_env_token_still_gets_in() {
+async fn disabling_also_blocks_an_env_token_and_says_so() {
     let h = Harness::new("users-disable-envtoken");
     let bob = bob_id(&h).await;
+
+    // 先证明这枚令牌在停用前是通的，否则后面「被拒」可能只是它从来就不通。
+    let (before, _) = h.call("GET", "/api/auth/me", BOB_TOKEN, None).await;
+    assert_eq!(before, StatusCode::OK, "停用前 bob 的令牌当然能用");
 
     let (status, text) = h
         .call(
@@ -309,21 +322,23 @@ async fn disabling_says_out_that_an_env_token_still_gets_in() {
     let warning = v["warning"].as_str().unwrap_or_default();
     assert!(
         warning.contains("QUILL_TOKENS"),
-        "必须点名令牌这条路仍然通着：{warning}"
+        "仍然要点名令牌这条路：{warning}"
     );
     assert!(
-        warning.contains("不查库"),
-        "要写清楚为什么（令牌鉴权不查库），否则用户不会信：{warning}"
+        warning.contains("登出"),
+        "要说清剩下那个真实的缺口是登出收不回，而不是停用挡不住：{warning}"
+    );
+    assert!(
+        !warning.contains("挡不住"),
+        "这句现在是假的，留着等于骗运维：{warning}"
     );
 
-    // 而且这条警告必须真的出现 —— 也就是 bob 此刻**确实还能用令牌进来**。
-    // 断言不能停在「文案里有这句话」，得证明这句话是真的。
-    let (s2, _) = h.call("GET", "/api/auth/me", BOB_TOKEN, None).await;
+    // 文案不能只是文案：bob 此刻必须真的进不来了。
+    let (after, _) = h.call("GET", "/api/auth/me", BOB_TOKEN, None).await;
     assert_eq!(
-        s2,
-        StatusCode::OK,
-        "停用之后 bob 的环境变量令牌居然被拒了 —— 那么 warning 是假的，\
-         或者鉴权链路已经变了，两种都得改这条文案"
+        after,
+        StatusCode::UNAUTHORIZED,
+        "账号已停用，环境变量令牌必须在下一个请求就被拒"
     );
 }
 

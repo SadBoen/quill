@@ -28,20 +28,16 @@ use common::TestDb;
 const PW: &str = "correct-horse-battery";
 const WRONG_PW: &str = "definitely-not-the-one";
 
-fn state_with(db: &TestDb) -> AppState {
-    let env = EnvTokenResolver::new(vec![(
-        "tok-admin".to_string(),
-        AuthContext {
-            user_id: quill_domain::UserId::parse("0192b7c8-0000-7000-8000-000000000001")
-                .expect("测试 UID 必须合法"),
-            is_admin: true,
-        },
-    )]);
-    // 必须是复合解析器：`POST /api/auth/login` 签发的会话令牌要能被认出来，
-    // 否则后面所有「拿登录令牌访问 me/refresh/logout」的断言都会假红。
-    let (resolver, sessions) = CompositeTokenResolver::new(env);
-    sessions.attach(db.bridge());
+/// 复合解析器里那个环境变量令牌背后的账号。
+const ENV_ADMIN: &str = "0192b7c8-0000-7000-8000-000000000001";
+const ENV_MEMBER: &str = "0192b7c8-0000-7000-8000-000000000002";
+const ENV_OTHER: &str = "0192b7c8-0000-7000-8000-000000000003";
 
+fn env_admin_id() -> quill_domain::UserId {
+    quill_domain::UserId::parse(ENV_ADMIN).expect("测试 UID 必须合法")
+}
+
+fn base_state(resolver: CompositeTokenResolver, db: &TestDb) -> AppState {
     AppState {
         config: Config::from_env(),
         tokens: Arc::new(resolver),
@@ -53,6 +49,34 @@ fn state_with(db: &TestDb) -> AppState {
         login_limiter: Arc::new(RateLimiter::default()),
         pbkdf2: quill_control::Pbkdf2Params::for_tests(),
     }
+}
+
+fn state_with(db: &TestDb) -> AppState {
+    let env = EnvTokenResolver::new(vec![(
+        "tok-admin".to_string(),
+        AuthContext {
+            user_id: env_admin_id(),
+            is_admin: true,
+        },
+    )]);
+    // 必须是复合解析器：`POST /api/auth/login` 签发的会话令牌要能被认出来，
+    // 否则后面所有「拿登录令牌访问 me/refresh/logout」的断言都会假红。
+    let (resolver, sessions) = CompositeTokenResolver::new(env);
+    // 同一个 Arc 交给两个解析器：会话令牌查 `sessions_auth`，环境变量令牌查 `users`。
+    // 少了后者，环境变量令牌会因为「库句柄未就绪」被一律拒掉。
+    resolver.attach(db.bridge());
+    sessions.attach(db.bridge());
+
+    base_state(resolver, db)
+}
+
+/// 库里**铺好了**那个环境变量令牌对应的账号行的状态。
+///
+/// 与 [`state_with`] 的区别就是这一行 `users` 数据。真实部署里 `bootstrap` 引导
+/// 会建它；不铺的话测的是「身份不存在时会被拒」，不是「令牌能用」。
+async fn state_with_provisioned_env_user(db: &TestDb) -> AppState {
+    common::seed_token_user(&db.bridge(), &env_admin_id(), "tokadmin", true).await;
+    state_with(db)
 }
 
 async fn body_text(resp: axum::response::Response) -> String {
@@ -599,7 +623,7 @@ async fn logging_out_does_not_revoke_an_environment_token() {
     // 环境变量令牌是配置，不是会话：改配置+重启才收得回。
     // 登出声称吊销了它会是一个危险的谎报。
     let db = TestDb::new("auth-env-token");
-    let app = build_router(state_with(&db));
+    let app = build_router(state_with_provisioned_env_user(&db).await);
 
     let resp = app
         .clone()
@@ -726,6 +750,95 @@ async fn a_session_token_cannot_reach_admin_only_routes() {
 
     let allowed = app
         .oneshot(with_token("GET", "/api/experts", &token))
+        .await
+        .expect("请求失败");
+    assert_eq!(allowed.status(), StatusCode::OK, "member 仍应能读自己的数据");
+}
+
+// ------------------------------------------- 环境变量令牌也要过 users 行
+
+#[tokio::test]
+async fn disabling_an_account_blocks_its_environment_token_on_the_next_request() {
+    // 这是本文件最重要的一条。早先环境变量令牌命中静态表就直接放行、**不查库**，
+    // 于是把状态改成 disabled 之后那个人照样进得来 —— 「停用」是假的，
+    // 而管理界面上的「已停用」等于在骗运维。
+    let db = TestDb::new("auth-env-disabled");
+    let app = build_router(state_with_provisioned_env_user(&db).await);
+
+    let before = app
+        .clone()
+        .oneshot(with_token("GET", "/api/auth/me", "tok-admin"))
+        .await
+        .expect("请求失败");
+    assert_eq!(before.status(), StatusCode::OK, "停用前令牌当然能用");
+
+    common::disable_user(&db.bridge(), &env_admin_id()).await;
+
+    let after = app
+        .oneshot(with_token("GET", "/api/auth/me", "tok-admin"))
+        .await
+        .expect("请求失败");
+    assert_eq!(
+        after.status(),
+        StatusCode::UNAUTHORIZED,
+        "账号已停用，环境变量令牌必须在下一个请求就被拒"
+    );
+}
+
+#[tokio::test]
+async fn an_environment_token_whose_account_is_missing_from_the_db_is_refused() {
+    // 静态表里有这个人、库里却没有 → 不能放行。放行就等于「配了就能进」，
+    // 与「服务端按账号状态裁决」是两回事。库坏了也该如此：宁可进不来，
+    // 不要拿一个查不了的库当通行证。
+    let db = TestDb::new("auth-env-no-row");
+    let app = build_router(state_with(&db));
+
+    let resp = app
+        .oneshot(with_token("GET", "/api/auth/me", "tok-admin"))
+        .await
+        .expect("请求失败");
+    assert_eq!(
+        resp.status(),
+        StatusCode::UNAUTHORIZED,
+        "库里没有对应账号行时不得放行环境变量令牌"
+    );
+}
+
+#[tokio::test]
+async fn an_environment_token_takes_its_role_from_the_user_row_not_from_the_config() {
+    // `QUILL_TOKENS` 里写了 `:admin` 只在**启动引导**时决定初始角色。之后能改角色
+    // 的是管理界面；鉴权必须跟管理界面一致，否则会出现「界面已把 owner 降级、
+    // 那枚令牌还能当 admin 用」。这里行是 member、配置声称 admin，以行为准。
+    let db = TestDb::new("auth-env-role");
+    let id = quill_domain::UserId::parse(ENV_MEMBER).expect("测试 UID 必须合法");
+    common::seed_token_user(&db.bridge(), &id, "tokmember", false).await;
+
+    let env = EnvTokenResolver::new(vec![(
+        "tok-lying-admin".to_string(),
+        AuthContext {
+            user_id: id,
+            // 配置里明明写着 admin
+            is_admin: true,
+        },
+    )]);
+    let (resolver, sessions) = CompositeTokenResolver::new(env);
+    resolver.attach(db.bridge());
+    sessions.attach(db.bridge());
+    let app = build_router(base_state(resolver, &db));
+
+    let forbidden = app
+        .clone()
+        .oneshot(with_token("GET", "/api/admin/config", "tok-lying-admin"))
+        .await
+        .expect("请求失败");
+    assert_eq!(
+        forbidden.status(),
+        StatusCode::FORBIDDEN,
+        "users 行说他是 member，配置说 admin —— 必须以行为准，否则降级是假的"
+    );
+
+    let allowed = app
+        .oneshot(with_token("GET", "/api/experts", "tok-lying-admin"))
         .await
         .expect("请求失败");
     assert_eq!(allowed.status(), StatusCode::OK, "member 仍应能读自己的数据");

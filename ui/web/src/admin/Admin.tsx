@@ -168,11 +168,11 @@ export function AdminUsersPage(): ReactNode {
                     <StatusBadge tone={user.status === 'active' ? 'success' : 'danger'}>
                       {user.status === 'active' ? t('admin.normal', { defaultValue: '正常' }) : t('admin.disabled', { defaultValue: '已停用' })}
                     </StatusBadge>
-                    {/* 停用挡不住环境变量令牌 —— 不说出来，「已停用」就是一个假的。 */}
+                    {/* 登出收不回环境变量令牌 —— 不说出来，管理员会以为登出就够了。 */}
                     {user.has_env_token ? (
                       <small data-testid={`user-env-token-${user.username}`}>
                         {t('admin.stillHasEnvToken', {
-                          defaultValue: '仍持有 QUILL_TOKENS 令牌，停用挡不住他',
+                          defaultValue: '凭据是 QUILL_TOKENS 令牌，登出收不回（停用可以挡住）',
                         })}
                       </small>
                     ) : null}

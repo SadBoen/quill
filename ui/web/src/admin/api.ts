@@ -17,11 +17,11 @@ export interface AdminUser {
   created_at_ms: number
   last_login_at_ms: number | null
   /**
-   * 这个人是否还握着 `QUILL_TOKENS` 里的令牌。
+   * 这个人的凭据是不是一枚 `QUILL_TOKENS` 环境变量令牌（而不是登录签发的会话令牌）。
    *
-   * 这个字段不是装饰：令牌鉴权**不查库**，所以把状态改成「已停用」
-   * 对他是无效的 —— 他照样进得来。没有这个字段，界面上的「已停用」
-   * 就是一个假的停用。
+   * 注意它**不再**表示「停用挡不住他」—— 令牌鉴权会回 `users` 行核状态，
+   * 停用对所有令牌都生效。它现在回答的是「登出能不能收回他的凭据」：
+   * `/api/auth/logout` 只吊销会话行，收不回环境变量令牌。
    */
   has_env_token: boolean
 }

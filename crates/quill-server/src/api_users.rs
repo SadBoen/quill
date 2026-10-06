@@ -20,13 +20,15 @@
 //!!    会话、专家、团队全变成外键孤儿。在真做之前报 501，比返回一个「删掉了」
 //!    却什么都没删的 200 诚实。
 //!
-//! 4. **停用挡不住 `QUILL_TOKENS`。** 这是本文件最要紧的一条：
-//!    `CompositeTokenResolver::resolve` 先查环境变量令牌表，命中就直接放行，
-//!    **完全不查库**，所以那个人的状态改成 `disabled` 也照样进得来。
-//!    停用对**会话与口令**是真的生效的（`ControlPlane::authenticate` 会检查
-//!    `user_status`，已登录的人下一个请求就被拒），但对持有环境变量令牌的人无效。
-//!    所以响应里必须带 `has_env_token`，让界面能说出「已停用，但这个人手里
-//!    还有令牌」—— 否则就是拿一个假的「停用」糊弄用户。
+//! 4. **停用对 `QUILL_TOKENS` 令牌同样生效。** 这条改过一次：早先
+//!    `CompositeTokenResolver::resolve` 命中环境变量表就直接放行、**完全不查库**，
+//!    于是把状态改成 `disabled` 对持有令牌的人无效，「停用」是假的。现在
+//!    命中之后会回 `users` 行核状态与角色（`auth.rs` 的 `confirm_identity`），
+//!    行不存在或已停用一律按令牌无效处理，与 Octop「令牌解出用户 → 服务端按那一行
+//!    裁决」的做法一致。
+//!    `has_env_token` 因此**改了含义**：它现在不再表示「停用挡不住他」，而是
+//!    「这个人的凭据不在会话表里」。区别仍然值得说 —— `/api/auth/logout` 只吊销
+//!    会话行，收不回环境变量令牌，要收回得改配置再重启。
 
 use axum::extract::{Path, Query, State};
 use axum::Json;
@@ -60,8 +62,8 @@ fn to_api(e: ControlError) -> ApiError {
 
 /// 这台实例的账号里，这个人是否还握着一枚 `QUILL_TOKENS` 令牌。
 ///
-/// 取不到复合解析器时（比如测试里塞了个裸 `EnvTokenResolver`）**按 false 报**，
-/// 不按 true 报：声称「挡不住」而实际挡得住，会让人白折腾一趟去改环境变量。
+/// 取不到复合解析器时（比如测试里塞了个裸 `EnvTokenResolver`）**按 false 报**：
+/// 声称「他还有令牌」而实际没有，会让人白折腾一趟去改环境变量。
 fn has_env_token(state: &AppState, id: UserId) -> bool {
     state
         .tokens
@@ -78,7 +80,8 @@ fn user_json(state: &AppState, p: &UserProfile) -> Value {
         "status": p.status.as_str(),
         "created_at_ms": p.created_at_ms,
         "last_login_at_ms": p.last_login_at_ms,
-        // 见文件头第 4 条：这个字段不是装饰，是「停用到底挡不挡得住」的答案。
+        // 见文件头第 4 条：这个字段现在回答的是「登出能不能收回他的凭据」，
+        // 不再是「停用挡不挡得住他」—— 停用现在对所有令牌都生效。
         "has_env_token": has_env_token(state, p.id),
     })
 }
@@ -182,12 +185,13 @@ pub async fn set_status(
     let mut out = user_json(&state, &p);
     let env_token = has_env_token(&state, p.id);
     if p.status == UserStatus::Disabled && env_token {
-        // 这句话是本接口存在的理由。不说，界面上的「已停用」就是假的。
+        // 停用现在对所有令牌都生效，这句话改成提醒「另一种收回方式」而不是
+        // 「停用没挡住」—— 留着旧文案会让人以为已经停住了。
         out["warning"] = json!(
-            "账号已停用：口令登录与已登录的会话都被挡住了。\
-             但这个人还握着 QUILL_TOKENS 里的令牌，仍然可以直接进来 —— \
-             令牌鉴权不查库（见 auth.rs 的复合解析器）。\
-             要真正挡在外面，请把令牌从环境变量里去掉并重启服务。"
+            "账号已停用：口令登录、已登录的会话，以及他手里的 QUILL_TOKENS 令牌\
+             都会被挡住（令牌鉴权会回 users 行核状态）。\
+             注意登出只吊销会话行、收不回环境变量令牌；\
+             要彻底收回那枚令牌，请把它从环境变量里去掉并重启服务。"
         );
     }
     Ok(Json(out))
