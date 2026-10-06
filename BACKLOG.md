@@ -10,6 +10,48 @@
 
 ---
 
+## 状态图例
+
+每条标题末尾的标记只有一个含义，不要另创：
+
+| 标记 | 含义 | 该不该出现在排期里 |
+|---|---|---|
+| 🔴 | **阻塞** —— 挡着本里程碑的某条判据达成 | 是，优先做 |
+| 🟡 | **未完成但不阻塞** —— 判据本身不靠它 | 是，看余量 |
+| 🟢 | **已达成**（有实测记录） | 否，留作证据 |
+| ✅ | **已关闭**（做完了且复核过） | 否 |
+| ⚠ | **有风险/有争议**，结论本身还没定 | 先把结论定下来 |
+
+半关用组合写法（如 `🟡 半关`）：**推进了一部分，但另一半没动** ——
+别把它读成「已完成」。B2-1 就是这一类。
+
+**里程碑阶梯**（详见 `MILESTONES.md`）：M0 地基 → M1 单人闭环（= MVP）→
+M2 专家与专家团真执行 → M3 上下文与成本 → M4 数据安全 → M5 多用户与多端 →
+M6 上游对齐。**上一条的判据全绿，才开下一条。**
+
+### 索引（2026-10-07 核对）
+
+**M0 地基** — B0-1 ✅ · B0-2 ✅ · B0-3 ✅ · B0-4 ✅ · B0-5 ✅ 　*（5 条全关）*
+
+**M1 单人闭环** — B1-1 🔴 · B1-1b ✅ · B1-1c ✅ · B1-1d 🟡 · B1-2 🟡 · B1-3 🟡 ·
+B1-4 🟡 · B1-5 ✅ · B1-6 ✅ · B1-7 ✅ 　*（剩 1 条阻塞：B1-1）*
+
+**M2 专家与专家团真执行** — B2-1 🟡 · B2-2 🔴 · B2-3 🟡 · B2-4 🟡 　*（整格未开始）*
+
+**M3 上下文与成本** — B3-1 🟡 · B3-2 ⚠ · B3-3 🟡 　*（整格未开始）*
+
+**M4 数据安全** — B4-1 ✅ · B4-2 🔴 　*（备份已完成，在线升级未动）*
+
+**M5 多用户与多端** — B5-1 🔴 · B5-2 · B5-3 　*（整格未开始）*
+
+**M6 上游对齐** — B6-1 ⚠ · B6-2 🔴 · B6-3 ✅ 　*（判据已达成，但有未收口的自查项）*
+
+**当前唯一挡着 MVP 的阻塞**：B1-1（界面上仍有「点了必失败」的入口）。
+M1 剩下的最后一步是**重跑一次浏览器实点验收** —— 备份已收紧为只允许 admin，
+非 admin 点备份页现在应当是 403，界面有没有把这句话说明白必须实际点一遍（见 B1-4）。
+
+---
+
 ## M0 · 可重复的地基
 
 ### B0-1 门禁解析曾经恒为「通过」 ✅ 已修，但要防复发
@@ -211,7 +253,7 @@ Rust 工具链在 WSL2，node/npm 只在 Windows 侧。
    发现直接换 `Intl` 会挂测试，于是改用 `formatToParts` 保住 `10-06 09:05` 的格式
    （轴标签要定宽）。**幸好它没听我的。**
 
-### B1-1c lint 配好了，还剩两条真问题没修 🟡
+### B1-1c lint 配好了，还剩两条真问题没修 ✅ 已关（2026-10-07）
 
 `ui/web` 一直没有 `eslint.config.*`，于是 `npm run lint` 直接退 2 —— 而
 `eslint` / `@eslint/js` / `typescript-eslint` / `eslint-plugin-react-hooks` /
@@ -219,29 +261,30 @@ Rust 工具链在 WSL2，node/npm 只在 Windows 侧。
 （`ui/web/package.json:26-42`）。所以这不是「要不要新增依赖」的问题，
 是配置文件压根没写。补上之后 eslint 第一次真跑起来，扫出 4 个 error。
 
-**这一轮已修**：
+**2026-10-06 已修**：
 - `chatStream.ts`：流收尾时 `buffer += decoder.decode()` 的赋值之后再没被读过，
   流被截断在帧中间时最后半条 `data:` 就这么丢了。改成把尾巴当最后一段文本走一遍
   `handleLine`。
 - `ChatPage.tsx` 的 `ChatPageProps.pollIntervalMs`：一个**没人读的假旋钮**，
   连同 `chat/index.ts` 的类型再导出一起删掉。
 
-**还剩 2 个 error，没修**（`react-hooks/set-state-in-effect`）：
-- `src/chat/ChatPage.tsx:127` 与 `src/memory/MemoryPage.tsx:33` 都在 effect 里
-  同步 `setState`。
+**2026-10-07 已修**（剩下的两条 `react-hooks/set-state-in-effect`）：
+- `src/memory/MemoryPage.tsx` —— effect 里的 `setPaths` / `setCurrentPath` 都能从
+  `list.data` 算出来，改成 `useMemo` + 纯推导的 `activePath`，effect 整个删掉。
+- `src/chat/ChatPage.tsx` —— effect 开头同步 `setHistory(null)` 搬到渲染期判断。
+  这条下面压着一条变异验证过的竞态防护（发送中不重拉历史），所以搬的时候
+  **连带把归属一起搬**：发送开始时同步 `setHistoryFor(新会话)`。只搬动作不搬归属，
+  会在流结束 `sending` 变 false 时把刚流完的那一屏当成「上个会话的残留」擦掉 ——
+  这个坑是 `ChatPage.test.tsx` 当场撞出来的，已写进该文件注释。
 
-这两个不是删一行注释能解决的：正解是把那段状态改成**渲染期派生**（拿
-`list.data` 直接算 `paths`，而不是先 setState 再读）。但 `ChatPage` 那段 effect
-里压着一条已经用变异验证过的竞态防护（发送中不重拉历史，见该文件 131-137 行的
-注释），动它必须连带把那条防护重新验一遍 —— 不能顺手改。所以留在这里当一条
-独立的活。
+**因此 lint 已进 `.scripts/gates.sh`（2026-10-07）**。原先它不在门禁里，
+于是「门禁退出 0」与「eslint 报 2 个 error」可以同时成立而没人发现 ——
+这是「检查压根没接线」，与 B0-1 那条「判定写错了」同一类。
+`.scripts/gate-selftest.sh` 补了三个场景（只有 warning / 有 error / eslint 自己炸了），
+并已用注入一条真 error 的方式验证过门禁确实会红。
 
-**因此 lint 还没有进 `.scripts/gates.sh`**：门禁现在跑的是 typecheck / vitest /
-build。加一条会红的检查进去不如不加。等这两条修完再接。
-
-另外 11 个 warning 里绝大多数是 `react-refresh/only-export-components`
-（一个文件同时导出组件和常量，影响的是 HMR 粒度，不是 bug），
-两条 `exhaustive-deps` 记在 B3 一类的可观测性/稳健性条目里再说。
+还剩 **11 个 warning**，不进退出码：`react-refresh/only-export-components`
+（一个文件同时导出组件和常量，影响 HMR 粒度，不是 bug）与两条 `exhaustive-deps`。
 
 ### B1-2 未注册 ≠ 501，界面要分清这三种 🟡
 
@@ -429,26 +472,32 @@ SSE 那条把它换成往外发事件的实现。两份循环迟早只改一边�
 
 ## M2 · 专家与专家团真执行
 
-### B2-1 派工只记账，`{id}` 被丢弃 🟡 半关（2026-10-07）
+### B2-1 派工只记账，`{id}` 被丢弃 🟡 两端都不再丢弃了（2026-10-07）
 
-`api_dispatch.rs:20` 是 `Path(_team): Path<String>`，下划线前缀，team id **直接丢弃**。
-路由只按 `room_id` + `round` 过滤，于是**传一个根本不存在的团队也返回 200 和空记录**，
-读起来像「这个团队没有派工历史」。
+`api_dispatch.rs` 的 GET 那条曾是 `Path(_team): Path<String>`，下划线前缀，
+team id **直接丢弃**。路由只按 `room_id` + `round` 过滤，于是
+**传一个根本不存在的团队也返回 200 和空记录**，读起来像「这个团队没有派工历史」。
 
-**已做一半**：`POST /api/teams/{id}/dispatch` 现在会解析 `{id}` 并按
-`(user_id, id)` 查库（`teams_repo::exists_by_id`），团队不存在或已软删一律 **404**。
-所以「凭空往不存在的团队记账」这条路关掉了 —— 编一个 id 拿不到 200。
+**2026-10-07 已做**（两端都改了）：
 
-**仍然没做**（这两条是 B2-1 的另一半，也仍是 M2 未达成的主因）：
+- `POST /api/teams/{id}/dispatch`：解析 `{id}` 后按 `(user_id, id)` 查库
+  （`teams_repo::exists_by_id`），不存在或已软删一律 **404**。
+- `GET /api/teams/{id}/dispatch`：同样先校验团队存在，不存在返回 **404**；
+  存在时响应里回显 `team_id`，并加 `filtered_by: "room_id+round"` 明说
+  列表到底按什么过滤 —— 不让调用方误以为它按团队过滤。
 
-1. `GET /api/teams/{id}/dispatch` 那条**仍**是 `Path(_team)`，按 `room_id`+`round`
-   过滤，不认 `{id}`。
-2. **派工记录依然没有消费者** —— 只写台账，没有子 agent 真被执行。
-   校验团队存在**不等于**派工被消费，别把这条记成「派工已实现」。
+`teams` 的主键就是 `(user_id, id)`，只按 id 查等于把别人的团队算成自己的，
+所以校验一律带 `user_id`。测试两条各一例，且都断言了 404 里**不出现** `count`。
 
-**卡点（产品决定，不该我顺手改）**：`GET` 那条到底认不认 `team_id`？
-认 → 同样按 `(user_id, id)` 校验并按团队过滤；不认 → 把 `{id}` 从路由里去掉，
-别留一个被忽略的参数。
+**仍然没做**（这是 B2-1 剩下的部分，也是 M2 未达成的主因）：
+
+**派工记录依旧没有消费者** —— 只写台账，没有子 agent 真被执行。
+校验团队存在**不等于**派工被消费，别把这条记成「派工已实现」。
+
+**卡点（产品决定）**：台账的键是 `(owner, room_id, round)`，不是 `team_id`。
+要让 GET 真正按团队过滤，得把 `team_id` 并进键里 —— 那会改写已有台账，
+属于产品契约变更（`WORKING.md` 里「必须问你」那一列），所以这次只做到
+「不谎报存在性」为止，没有擅自改键。
 
 ### B2-2 成员执行器不存在 🔴
 
@@ -470,11 +519,26 @@ SSE 那条把它换成往外发事件的实现。两份循环迟早只改一边�
 `teams.guidelines` / `max_dispatch` / `max_replan` / `max_ask_depth` 在生产 Rust 里**零引用**
 （只出现在 `quill-store/tests/schema_constraints.rs`）。团队 CRUD 一个都不碰。
 
+**2026-10-07 复核**（只统计 `crates/*/src`，测试与迁移不算）：
+
+| 列 | 生产侧命中 | 结论 |
+|---|---|---|
+| `guidelines` | 0 | 建了没人读 |
+| `max_dispatch` | 0 | 建了没人读 |
+| `max_replan` | 0 | 建了没人读 |
+| `max_ask_depth` | 0 | 建了没人读 |
+| `state` / `state_changed_at` | 有引用 | 团队状态机那一层（与 M2 派工一起做） |
+| `room_id` | 有引用 | 派工按房间+轮次过滤，已真在用 |
+
+也就是说：**四个限制类列全是摆设**。界面上没有、接口不报、也没有任何逻辑读它们 ——
+比 `sessions` 那种「建了列但零读写」更彻底，因为连上报都没有，不至于骗人。
+真要做 M2 的派工限额（每轮最多派几个、最多重规划几次、嵌套多深）时才有消费者。
+
 ---
 
 ## M3 · 上下文与成本可信
 
-### B3-1 对外报了一个不存在的开关 🔴 界面已如实标注，压缩本体仍未做
+### B3-1 对外报了一个不存在的开关 🟡 谎言已去掉，压缩本体仍未做（M3）
 
 `/healthz` 与 `GET /api/admin/config` 都在上报 `compaction_threshold_tokens`，
 但 `compaction_threshold_tokens` 在 `crates/**` 里只出现在配置层
@@ -499,8 +563,21 @@ SSE 那条把它换成往外发事件的实现。两份循环迟早只改一边�
 然后发现对话该超还是超。已在该输入框下加一句「暂未生效」，并用一条测试钉住
 （`models-compaction-not-enforced`，变异验证：删掉标注即变红）。
 
-压缩本体仍是 M3 的主体：真做压缩，参照 `vendor/goose/crates/goose-context-management`
-（别自己发明）。顺带那 8 个 session 列仍然零读写，一并归在这一条里。
+**2026-10-07 复核：这一条从 🔴 降为 🟡。** 全仓库 grep 确认缺陷本身仍然存在
+（`compaction_threshold_tokens` 只出现在 `llm.rs` / `llm_providers.rs` / `api_admin.rs` /
+`routes.rs` 的配置、校验、落库与上报里，**没有任何运行时读者**），但**三处界面
+都已经如实标注**了：
+
+- 对话页 tooltip：「压缩尚未实现，超过上限不会自动摘要，需要自己新建会话」
+- 模型管理页输入框下：「暂未生效」
+- 各有一条测试钉住（`models-compaction-not-enforced` 等）
+
+所以「骗人」这一半已经关掉；**剩下的压缩本体是 M3 的功能，不是修 bug** ——
+它要决定摘要什么、存到哪（`sessions.summary` 那批零读写列正是给它的）、
+压缩后从哪里续上，属于有产品判断的整块工作，不该顺手塞进一次清理。
+
+压缩本体参照 `vendor/goose/crates/goose-context-management`（别自己发明），
+连同那 8 个零读写的 session 列一并归在这一条里。
 
 ### B3-2 token 口径已验证正确，暂不动 ✅ / ⚠
 
@@ -605,6 +682,27 @@ sha256 校验，错误类型还带 `fix_command()`。CLI 已经接了（`quill-c
 `expert.skill_count` 写字面量 `0`、`tool_policy_json` 写 `'{}'`
 （`experts_repo.rs:68-73`），没有消费者；`skills.tool_allowlist` 只存不用。
 **上报没有真来源的字段 = 骗人**，与「不画假开关」同一条纪律。
+
+**2026-10-07 逐条复核**（只统计 `crates/*/src`，测试与迁移不算 —— 这是关键，
+因为这些列大多确实出现在迁移与测试里，只看全仓库会得出「有在用」的错误结论）：
+
+| 表/列 | 生产侧 | 实际形态 |
+|---|---|---|
+| `plugins` | 仅 `routes.rs`（501 桩） | 建了表、**没有读写**，连上报都没有 |
+| `wiki_index` | 仅 `cmd_doctor.rs` | 建了表，doctor 探一下，**没有真实读写** |
+| `mcp_servers` | **真在用** | `api_extensions.rs` / `mcp_repo.rs` / `mcp_client.rs` 共 11 处 |
+| `sessions.compacted_count` | 0 | 建了列零读写（与 `summary` / `checkpoint_path` 同类） |
+| `sessions.checkpoint_path` | 0 | 同上 |
+| `skills.tool_allowlist` | 21 处，但全是**存/读/上报** | 存进库、从库里读出来、在 API 里回给前端，**唯独不过滤模型这一轮能调什么** |
+| `expert.skill_count` | 5 处 | 恒写 `0`，却照常上报给前端（`api_expert_market.rs:85`）—— 属于「上报了一个不会变的数字」 |
+| `expert.tool_policy_json` | 3 处 | 只出现在 SELECT 列清单里，恒写 `'{}'` |
+
+**`mcp_servers` 这一条要更正旧说法**：早期文档写它「只出现在迁移与测试里」，
+现在它已经有真实的存储层与调用方了，别再按未接线估工时。
+
+`tool_allowlist` 与 `skill_count` 是这一类里最该处理的两个：前者让用户以为
+自己限制了模型的工具、实际没有；后者让界面显示一个永远是 0 的计数。
+两条都属于「先摘掉上报，等真做了再挂回去」，而不是留着假装有。
 
 ---
 
