@@ -737,6 +737,31 @@ octop 的稀疏检出里也没有 `pages/Control` 与 `src/octop/infra/skills`�
 只写裸文件名会让读者落到另一份上，从而误判「上游缺陷」是假的 ——
 这是 2026-10-06 修掉的一处真实引用腐烂。
 
+### B6-4 第三个上游 `vendor/openoctopus-frontend` 没有任何来源记录
+
+`ui/web/src/index.css` 必须与 `vendor/openoctopus-frontend/src/index.css` 逐字节一致，
+这是整套样式的地基。但那棵树：
+
+- `.scripts/fetch-vendor.sh` **只取 goose 与 octop，从来不取它**；
+- 它没有 `.git`（`git -C vendor/openoctopus-frontend` 会一路往上找到仓库根，
+  于是看起来「有 git」，其实是纯拷贝 —— 这也是 `.upstream-check.mjs` 里特意警告过的陷阱）；
+- **它来自哪个仓库、哪个版本，全项目任何地方都没记。**
+
+也就是说：这条移植基准只存在于一台机器上，谁 clone 下来都拿不到，
+`UPSTREAM-USAGE.md` 里指着它的那条引用在别处只能报「核不到」。
+
+**为什么不能顺手编一个 pin**：编一个出来比留空更坏 —— 它会让下一个人
+去核一个不存在的地方，正是这个项目吃过的一次亏（2026-10-06 的引用腐烂）。
+所以这条的判据是人工：要问清当初拷贝它的人「这是哪个仓库的哪一版」。
+
+顺带在这一轮修掉的两件相关的事（都已验证）：
+「index.css 有 sha256 门禁」这句话原本是假的 —— 那道检查只躺在
+`.wsl-css-check.sh` 等四个一次性脚本里，`gates.sh` 与 CI 都没跑。
+现已搬成正经门禁 `.vendor-baseline-check.mjs`，钉哈希而非比对两个文件，
+所以 `vendor/` 不在手边也能核，能进 CI 的 gates-core。
+另外 `.provenance-check.mjs` 原来把「整棵树没取回来」判成「引用坏了」，
+现已区分「没核」与「坏了」。
+
 ---
 
 ## 已完成（留作基线，不再维护细节）

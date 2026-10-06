@@ -359,6 +359,23 @@ export const ITEMS = [
     verify: { kind: 'cmd', cmd: 'node .provenance-check.mjs', cwd: 'wsl' },
     blocks: [],
   },
+  {
+    id: 'B6-4',
+    milestone: 'M6',
+    title: 'vendor/openoctopus-frontend 的来源与版本被记下来（现在无处可查）',
+    // 2026-10-08 第一次真跑 CI 才暴露：CI 里那条引用
+    // `vendor/openoctopus-frontend/src/index.css:70` 报「文件读不到」，
+    // 顺着查下去发现 —— 那棵树**从来没人取过**（fetch-vendor.sh 只取 goose 与 octop），
+    // 它没有 .git，是纯拷贝，而它来自哪个仓库、哪个版本**全项目没记**。
+    //
+    // 所以判据只能是人工：要问当初拷贝它的人「这是哪个仓库的哪一版」。
+    // 编一个 pin 进去比留空更坏 —— 它会让下一个人去核一个不存在的地方。
+    verify: {
+      kind: 'manual',
+      how: '问清 vendor/openoctopus-frontend 来自哪个仓库、哪个 commit，写进 UPSTREAM.md，再让 fetch-vendor.sh 按那个 pin 取',
+    },
+    blocks: [],
+  },
 ];
 
 /** 里程碑的推进顺序。判据是人的判断，不是测量结果，所以留在这里。 */
