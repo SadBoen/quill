@@ -65,8 +65,16 @@ __pycache__/
 
 /.demo/
 
-# WSL 里的临时验证脚本（PowerShell 会吞多行 bash，只能落成文件再 wsl -e bash 跑）
-/.wsl-*.sh
+# 本地临时验证脚本与抓取日志（PowerShell 会吞多行 bash，只能落成文件再 wsl -e bash 跑）
+#
+# 为什么是 `/.wsl-*` 而不是 `/.wsl-*.sh`：原规则只挡了 `.sh`，
+# 于是同批产出的 `.wsl-*.py` / `.wsl-commitmsg*.txt` 以及各类 `.out` 日志
+# 全在 `git status` 里裸奔 —— 二十多条噪音盖住真正要看的改动。
+/.wsl-*
+/.ge*.out
+/.llama-vulkan.*
+/.sb-fetch.log
+/.srv-browser.*
 
 # 抓 LLM 请求/响应留下的原始报文
 /.llm-req*.json

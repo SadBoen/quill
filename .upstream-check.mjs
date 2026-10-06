@@ -49,6 +49,27 @@ if (!gooseHasGit && !doc.includes('**纯文件拷贝，没有 `.git`**')) {
   problems.push('vendor/goose 确实不是 git 检出，但 UPSTREAM.md 没写这条限制');
 }
 
+// ---------- goose：.upstream-pin 是机器可读的记录，必须与前两处一致 ----------
+//
+// 为什么加这一段：`.upstream-pin` 一直躺在仓库里没人读，于是它记的版本
+// 可以和 UPSTREAM.md、Cargo.toml 各说各话而不被发现。**多一份记录、多一处
+// 漂移的可能**，所以要么它被门禁读，要么它不该存在 —— 现在选前者。
+//
+// 注意它的 hash **本地无法验证**：vendor/goose 没有 .git，没法确认这份拷贝
+// 真的就是那个 commit。它记的是「我们打算用哪一版」，不是「这份文件就是
+// 那一版」的证明 —— UPSTREAM.md 里那句限制仍然成立，别因为这里能读出 hash
+// 就以为能做文件级 diff。
+const pinRaw = read('.upstream-pin').trim();
+const pinVersion = stripV(pinRaw.split(/\s+/)[0]);
+const pinCommit = pinRaw.match(/\b([0-9a-f]{40})\b/)?.[1];
+lines.push(`goose   pin=${pinVersion ?? '?'}${pinCommit ? ` @${pinCommit.slice(0, 12)}` : ''}`);
+if (!pinCommit) {
+  problems.push('.upstream-pin 没有 40 位 commit hash，格式应为「vX.Y.Z <sha1>」');
+}
+if (pinVersion && gooseRealVersion && pinVersion !== gooseRealVersion) {
+  problems.push(`goose 版本三方对不上：Cargo.toml=${gooseRealVersion}，UPSTREAM.md=${gooseDocVersion ?? '?'}，.upstream-pin=${pinVersion}`);
+}
+
 // ---------- Octop：真实来源是 sparse checkout ----------
 let octopRealCommit = null;
 try {
