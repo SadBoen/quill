@@ -54,19 +54,59 @@ Rust 工具链在 WSL2，node/npm 只在 Windows 侧。
    在 Windows 侧跑一次 `npm install` 就回来（反之亦然）。
    这不是坏了，是这个结构的必然结果；`gates.sh` 自己会补，直接手跑就要自己补。
 
-### B0-3 前端 lint 从来没跑起来 ⚠
+### B0-3 前端 lint 从来没跑起来 ✅ 已通（2026-10-07）
 
-`ui/web` 下不存在任何 `eslint.config.*`，`npm run lint` 直接退出 2。
-既有问题，非本轮引入。后果是 `react-hooks/exhaustive-deps` 这条规则**从未生效过**，
-而 `EChart.tsx:146` / `:155` 的 `useEffect` 依赖正好是它该管的。
-本轮补的 20 条测试是目前唯一的自动化安全网（前端 164 → 184）。
-**卡点**：加 eslint 配置等于改依赖政策 → 按 `WORKING.md` 归「要问你」那一列。
+`ui/web` 下不存在任何 `eslint.config.*`，`npm run lint` 直接退出 2 ——
+既有问题，非某一轮引入。后果是 `react-hooks/exhaustive-deps` 这条规则
+**从未生效过**，而 `EChart.tsx` 的 `useEffect` 依赖正好是它该管的。
+
+**已解决**：`eslint.config.js` 已入库（依赖本来就在，缺的只是那份配置，
+不需要改依赖政策）。`npx eslint .` 现在 **0 error、11 warning**。
+
+首次真跑就抓出 2 条 error，两条都是真的派生状态问题，已修：
+
+| 位置 | 问题 | 修法 |
+|---|---|---|
+| `MemoryPage.tsx` | effect 里 `setPaths` + `setCurrentPath`，而这两个值都能从 `list.data` 算出来 | 改成 `useMemo` + 纯推导的 `activePath`，effect 整个删掉 |
+| `ChatPage.tsx` | effect 里同步 `setHistory(null)` 擦换会话的画面 | 搬到渲染期判断，**并在发送开始时同步 `setHistoryFor(新会话)`** |
+
+第二条有个坑值得记下来：只把擦除搬出 effect 是不够的。从 /chat 直接发第一条
+消息时，`navigate` 换掉 `sessionId` 与「开始发送」发生在同一轮；等流结束
+`sending` 变 false，而 `historyFor` 若还停在旧值，条件成立，**刚流完的那一屏
+被当成「上个会话的残留」擦掉** —— 用户看着刚收到的答案凭空消失。
+是 `ChatPage.test.tsx` 当场逮到的（`工具往返那一轮的正文会被抹掉` 那条变红）。
+搬的时候必须一起搬归属，不能只搬动作。
+
+剩下 11 条 warning 不影响退出码，按需处理：`react-refresh/only-export-components`
+（组件文件里顺带导出常量/函数，影响 Fast Refresh）与两条 `exhaustive-deps`
+（`LibraryTab.tsx` / `TeamsTab.tsx` 里 `useMemo` 的初始化表达式每次渲染都新造一个数组）。
+
+> `gates.sh` **不含 lint**。别把「门禁退出 0」当成「lint 也过」的证据。
 
 ### B0-4 清理本地噪音 ✅
 
 旧 `.gitignore` 只忽略 `/.wsl-*.sh`，同批产出的 `.wsl-*.py`、`.wsl-commitmsg*.txt`
 与各类 `.out`/`.log` 全在 `git status` 里裸奔。已放宽为 `/.wsl-*` 等五条规则，
 `git status --porcelain` 从 20+ 条噪音降到 0。
+
+### B0-5 三个空壳 crate：建了但没人用 ⚠ → ✅ 已删（2026-10-07）
+
+`quill-bridge`（9 行）、`quill-ext-hub`（7 行）、`quill-xtask`（13 行）各只有一个
+`assert_eq!(2 + 2, 4)` 的「能编译」测试，全仓库**没有任何 crate 依赖它们**，
+`*.md` 里也从没被提到过 —— 建了但没人用、没人引、没人写。
+
+留着比缺失更糟，两个实际害处：
+
+1. **假的防护**。`quill-bridge` 的 description 写的是「实例间委派共享防护
+   （SSRF / 路径白名单 / 头剥离）」，`quill-ext-hub` 写的是「MCP / SKILL /
+   插件注册中心（配置存服务端，铁律）」。读 `Cargo.toml` 的人会以为这些安全
+   边界已经存在 —— 而代码里一行都没有。真要实现时，这层「看起来已经在了」
+   会让人以为不用做。
+2. **假的覆盖面**。三个占位测试让 `cargo test` 的数字更好看，却什么都没验证
+   —— 正是 M0 记的那类「测试全绿本身不是判据」。
+
+已从 `Cargo.toml` 的 `members` 移除并删目录，`cargo build --workspace` 通过。
+真需要其中某个能力时，按真实需要重建，并给它真测试与真调用方。
 
 ---
 
@@ -389,14 +429,26 @@ SSE 那条把它换成往外发事件的实现。两份循环迟早只改一边�
 
 ## M2 · 专家与专家团真执行
 
-### B2-1 派工只记账，`{id}` 被丢弃 🔴
+### B2-1 派工只记账，`{id}` 被丢弃 🟡 半关（2026-10-07）
 
 `api_dispatch.rs:20` 是 `Path(_team): Path<String>`，下划线前缀，team id **直接丢弃**。
 路由只按 `room_id` + `round` 过滤，于是**传一个根本不存在的团队也返回 200 和空记录**，
 读起来像「这个团队没有派工历史」。
 
-**卡点（产品决定，不该我顺手改）**：dispatch 到底认不认 `team_id`？
-认 → 解析 slug 并校验团队存在；不认 → 把 `{id}` 从路由里去掉，别留一个被忽略的参数。
+**已做一半**：`POST /api/teams/{id}/dispatch` 现在会解析 `{id}` 并按
+`(user_id, id)` 查库（`teams_repo::exists_by_id`），团队不存在或已软删一律 **404**。
+所以「凭空往不存在的团队记账」这条路关掉了 —— 编一个 id 拿不到 200。
+
+**仍然没做**（这两条是 B2-1 的另一半，也仍是 M2 未达成的主因）：
+
+1. `GET /api/teams/{id}/dispatch` 那条**仍**是 `Path(_team)`，按 `room_id`+`round`
+   过滤，不认 `{id}`。
+2. **派工记录依然没有消费者** —— 只写台账，没有子 agent 真被执行。
+   校验团队存在**不等于**派工被消费，别把这条记成「派工已实现」。
+
+**卡点（产品决定，不该我顺手改）**：`GET` 那条到底认不认 `team_id`？
+认 → 同样按 `(user_id, id)` 校验并按团队过滤；不认 → 把 `{id}` 从路由里去掉，
+别留一个被忽略的参数。
 
 ### B2-2 成员执行器不存在 🔴
 
@@ -479,6 +531,19 @@ sha256 校验，错误类型还带 `fix_command()`。CLI 已经接了（`quill-c
 
 **已做（2026-10-06）**：`crates/quill-server/src/api_backup.rs` 把 export / verify 接成真路由，
 工作区页按钮不再是 501。校验是真算 sha256：改一个字节会点名那个文件。
+
+**已做（2026-10-07）**：三条备份路由从 `AuthUser`（登录即可）改成 `RequireAdmin`。
+原先**任何登录用户**都能导出整份数据根 —— 那里装着**所有**用户的会话全文，
+这在多用户下是横向越权。`verify` 会读全量文件并回报目录级信息，`restore`
+虽不写盘却会回显服务端绝对路径与一条可直接执行的 `quill restore` 命令，
+三条都是「实例级」操作，与 `/api/admin/config` 同类。
+新增测试 `a_logged_in_non_admin_cannot_reach_any_backup_route` 钉住这条边界，
+防止以后有人图省事换回 `AuthUser`。
+
+> **待复验**：这条改完之后，界面上的备份按钮对非 admin 会返回 403。
+> M1 的浏览器实点验收是 2026-10-06 跑的（那时还是登录即可），
+> 需要用非 admin 令牌实际点一遍，确认界面把「需要 admin」这句话说明白了，
+> 而不是甩一个原始 403 给用户。
 
 **还差的**：`POST /api/backup/restore` **诚实但不真还原** —— 服务进程自己占着数据库文件，
 所以它只返回 `restored:false` + 确切 CLI 命令，界面上没有还原按钮。
