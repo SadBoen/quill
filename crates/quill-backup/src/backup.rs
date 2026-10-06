@@ -114,6 +114,7 @@ pub async fn create_backup(
         &src.data_root,
         &src.data_root,
         &data_dir,
+        &src.db_path,
         &mut files,
         &mut excluded,
     )?;
@@ -190,6 +191,7 @@ fn copy_tree(
     src_root: &Path,
     cur: &Path,
     dest_root: &Path,
+    live_db: &Path,
     files: &mut Vec<ManifestEntry>,
     excluded: &mut Vec<ExcludedEntry>,
 ) -> Result<(), BackupError> {
@@ -230,6 +232,17 @@ fn copy_tree(
             continue;
         }
 
+        if is_live_database(&child, live_db) {
+            excluded.push(ExcludedEntry {
+                rel,
+                reason: "这是服务正在使用的数据库文件或它的 WAL 边车，不进用户数据副本；\
+                         权威快照在备份的 db/ 目录里（由 VACUUM INTO 一致性导出，\
+                         不是边写边拷出来的中间态）"
+                    .into(),
+            });
+            continue;
+        }
+
         if is_forbidden_in_backup(&name) {
             excluded.push(ExcludedEntry {
                 rel,
@@ -241,7 +254,7 @@ fn copy_tree(
         if meta.is_dir() {
             std::fs::create_dir_all(dest_root.join(&rel))
                 .map_err(|e| io_err("创建备份子目录", &dest_root.join(&rel), e))?;
-            copy_tree(src_root, &child, dest_root, files, excluded)?;
+            copy_tree(src_root, &child, dest_root, live_db, files, excluded)?;
             continue;
         }
 
@@ -395,6 +408,38 @@ fn with_sidecar(db_path: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(s)
 }
 
+/// SQLite 在库文件旁边可能留下的文件。`-journal` 是回滚日志模式下的那一个。
+const DB_SIDECARS: [&str; 4] = ["", "-wal", "-shm", "-journal"];
+
+/// 这个文件是不是**正在被使用**的数据库，或它的边车文件。
+///
+/// 默认配置下数据库就放在数据根里，所以「复制用户数据」这一步会顺手把
+/// 活着的 `quill.db` 和 `-wal` 也拷一份。两件事都不该发生：
+///
+/// - 边写边拷拿到的是撕裂的中间态，而清单会给这份垃圾记一个「摘要正确」的
+///   条目 —— 等于给一份坏数据盖章，校验反而说它没问题。
+/// - 权威快照已经在 `db/quill.db`（`VACUUM INTO` 的一致性导出）。再放一份
+///   `data/quill.db` 只会让人以为可以拿它还原；真还原时它还会盖在数据根里，
+///   和刚换上去的数据库互相打架。
+fn is_live_database(path: &Path, db_path: &Path) -> bool {
+    DB_SIDECARS
+        .iter()
+        .any(|s| same_path(path, &with_sidecar(db_path, s)))
+}
+
+fn same_path(a: &Path, b: &Path) -> bool {
+    let (a, b) = match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => (a, b),
+        _ => (a.to_path_buf(), b.to_path_buf()),
+    };
+    if cfg!(windows) {
+        a.to_string_lossy()
+            .eq_ignore_ascii_case(&b.to_string_lossy())
+    } else {
+        a == b
+    }
+}
+
 fn file_size(path: &Path) -> Result<u64, BackupError> {
     std::fs::metadata(path)
         .map(|m| m.len())
@@ -427,6 +472,26 @@ mod tests {
         let p = Path::new("/x/quill.db");
         assert_eq!(with_sidecar(p, "-wal"), PathBuf::from("/x/quill.db-wal"));
         assert_eq!(with_sidecar(p, "-shm"), PathBuf::from("/x/quill.db-shm"));
+    }
+
+    #[test]
+    fn the_live_database_and_its_sidecars_are_recognised_and_ordinary_files_are_not() {
+        let db = Path::new("/data/quill.db");
+        for s in ["", "-wal", "-shm", "-journal"] {
+            assert!(
+                is_live_database(&with_sidecar(db, s), db),
+                "{s:?} 边车必须被认成活库"
+            );
+        }
+        // 同目录下叫别的名字的用户数据不能被误伤 —— 排错比漏掉更糟，
+        // 因为用户会发现自己明明没让备份数据库却丢了文件。
+        for other in ["/data/u1/notes.md", "/data/quill.dbx", "/data/quill.db.bak"] {
+
+            assert!(
+                !is_live_database(Path::new(other), db),
+                "{other} 不是活库，不该被排除"
+            );
+        }
     }
 
     #[test]
