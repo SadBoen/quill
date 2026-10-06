@@ -19,15 +19,34 @@
 于是 `$6` 恒为空，`failed` 恒等于 0 —— **跑多少个红都印「通过」**。
 现版解析与自测逐字锁在一起（`.scripts/gates.sh` 与 `gate-selftest.sh` 同源）。
 
-**残留**：`gates.sh` 本身还没在 WSL 侧实跑过（node/npm 在 Windows 侧，不在 WSL）。
-→ 见 B0-2。
+**残留**：~~`gates.sh` 本身还没在 WSL 侧实跑过~~ —— **2026-10-06 已在 WSL 侧实跑通过，
+退出 0**。见 B0-2。
 
-### B0-2 `gates.sh` 需要一个能跑的落点 🔴
+### B0-2 `gates.sh` 需要一个能跑的落点 ✅ 已通
 
-M0 的判据就是 `bash .scripts/gates.sh` 退出 0。现状：
-Rust 工具链在 WSL2，**node / npm 只在 Windows 侧**，所以这个脚本目前只能在
-Windows 上跑前端那几步、在 WSL 上跑 Rust 那几步 —— 一条命令跑完的前提是先统一。
-**卡点**：选哪一侧为准（WSL 装 node，还是脚本分两段）。这是环境决定，我不擅自装。
+M0 的判据就是 `bash .scripts/gates.sh` 退出 0。原先两侧各缺一半：
+Rust 工具链在 WSL2，node/npm 只在 Windows 侧。
+
+**已解决**：WSL 里装了免 root 的 Node LTS（官方二进制包解压到 `~/.local/node`，
+先用官方 SHASUMS256 校验过），`gates.sh` 在非交互 shell 里会主动把它挂进 PATH
+（只写 `~/.bashrc` 没用 —— `bash gates.sh` 既不读 .bashrc 也不读 .profile）。
+现在 **`bash .scripts/gates.sh` 在 WSL 侧一条命令跑完全部门禁，退出 0**。
+
+**途中撞到并修掉的两个真问题**：
+
+1. `.i18n-check.mjs` 把路径写死成 `D:/96_CoderWorld/quill/...`，在 WSL 里 ENOENT。
+   改成按脚本自身位置推 —— 一道门禁只能在一台机器的一个目录上跑，
+   那它守的不是仓库，是那台机器。
+2. `node_modules` 在 D: 上被 Windows 与 WSL **共用同一份**，但 rolldown 的原生
+   二进制每个平台一个目录名。任一侧单独 `npm install` 都会把另一侧的删掉，
+   另一侧启动就报 "Cannot find native binding"。
+   试过「两个包装在一起」—— Windows 因 libc 不符直接拒装；
+   试过 `--force` —— 装上了，但下一次普通 `npm install` 又被剪掉；
+   也不能写进 `package.json` —— 那会让 Windows 侧 `npm install` 因装不了 glibc
+   包而直接失败，等于为了 WSL 把 Windows 弄坏。
+   **结论：一份 node_modules 只能服务一个平台**，这是结构事实不是配置问题。
+   `gates.sh` 因此在跑前端前先真的 `import('rolldown')` 探一次，
+   加载不了就按当前平台补装（幂等，几秒）。两侧都验过能自愈。
 
 ### B0-3 前端 lint 从来没跑起来 ⚠
 

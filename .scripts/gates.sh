@@ -31,6 +31,17 @@ if ! command -v cargo >/dev/null 2>&1; then
   export PATH="$HOME/.cargo/bin:$PATH"
 fi
 
+# 同理给 node。**必须在这里做而不是只写 ~/.bashrc**：
+# `bash .scripts/gates.sh` 是非交互、非登录的 shell，既不读 .bashrc 也不读
+# .profile —— 只写启动文件的话，PATH 在真正跑门禁时仍然是空的，
+# 门禁会报「缺 node」，而 node 其实就装在那儿。
+if ! command -v node >/dev/null 2>&1; then
+  if [ -x "$HOME/.local/node/bin/node" ]; then
+    export PATH="$HOME/.local/node/bin:$PATH"
+    echo "  （node 从 ~/.local/node/bin 找到，已挂进本次 PATH）"
+  fi
+fi
+
 FAILED=0
 step() { printf '\n=== %s ===\n' "$1"; }
 fail() { echo "  ✗ $1"; FAILED=1; }
@@ -39,9 +50,11 @@ fail() { echo "  ✗ $1"; FAILED=1; }
 # **为什么单独做这一步**：缺工具时报「门禁未过」，会让人去修门禁代码，
 # 而真正的原因是环境里没有那个工具。这与当年 awk 解析恒为 0 是同一类错误 ——
 # 查不出来源的失败会被当成结论。
-# 已知现状（2026-10-06）：WSL2 里有 cargo 但**没有 node**；
-# Windows 侧有 node/npm 但没有 cargo 工具链。所以本脚本在 WSL 上只能跑
-# Rust 那部分，前端那部分要在 Windows 侧跑（见 BACKLOG.md 的 B0-2）。
+#
+# 环境现状（2026-10-06 更新）：WSL2 里已经装好免 root 的 node（LTS，
+# 解压在 `~/.local/node`，官方 SHASUMS 校验过），所以**两侧各自都能跑完
+# 全部门禁**，M0 的 B0-2 环境项就此关闭。Windows 侧仍要单独跑，因为
+# cargo 工具链不在那边。
 step "工具链"
 HAVE_CARGO=0; HAVE_NODE=0
 if command -v cargo >/dev/null 2>&1; then HAVE_CARGO=1; echo "  ✓ cargo $(cargo --version 2>/dev/null | head -1)"; else echo "  - cargo 缺失"; fi
@@ -161,6 +174,35 @@ if [ "$HAVE_NODE" = "0" ] || [ ! -d ui/web ]; then
   echo "  - 跳过：本机没有 node。请在有 node 的一侧跑 npm run typecheck / npx vitest run / npm run build"
 else
   cd ui/web || exit 1
+
+  # ——— 本平台的原生依赖 ———
+  # `node_modules` 在 D: 上，Windows 与 WSL 共用**同一份**。但 vite 8 用的
+  # rolldown 带原生二进制，每个平台一个目录名（binding-win32-x64-msvc /
+  # binding-linux-x64-gnu）。任一侧单独跑 `npm install` 都会把另一侧的删掉，
+  # 于是另一侧启动就报 "Cannot find native binding"。
+  #
+  # 试过的几条路都不通：把两个包一起装，Windows 侧因为 libc 不符直接拒装
+  # （notsup glibc）；用 --force 装上了，但下一次普通 `npm install` 又会被剪掉。
+  # 它们不能写进 package.json —— 一旦写进去，Windows 上 `npm install` 会因为
+  # 装不了 glibc 包而失败，那等于为了 WSL 把 Windows 侧弄坏。
+  #
+  # 所以按当前平台自愈：先**真的去加载一次** rolldown（而不是猜目录名），
+  # 加载不了才补装。幂等，几秒钟。
+  if node -e "import('rolldown').then(() => {}, () => process.exit(1))" >/dev/null 2>&1; then
+    echo "  ✓ 本平台的原生依赖已就位"
+  else
+    echo "  · node_modules 是另一侧装的，缺本平台的原生依赖；现在补装…"
+    if npm install --no-audit --no-fund >/tmp/quill-gate-npmi.log 2>&1; then
+      if node -e "import('rolldown').then(() => {}, () => process.exit(1))" >/dev/null 2>&1; then
+        echo "  ✓ 补装完成（另一侧再跑门禁时会自动补回它自己那份）"
+      else
+        fail "补装原生依赖后 rolldown 仍加载不了"; tail -5 /tmp/quill-gate-npmi.log | sed 's/^/    /'
+      fi
+    else
+      fail "npm install 失败"; tail -5 /tmp/quill-gate-npmi.log | sed 's/^/    /'
+    fi
+  fi
+
   if npm run typecheck >/tmp/quill-gate-tsc.log 2>&1; then
     echo "  ✓ typecheck"
   else

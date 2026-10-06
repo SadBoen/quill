@@ -1,9 +1,15 @@
 // 一次性核查脚本：比对 ui/web 各 t() 调用点传入的占位符 与 语言包字符串里的占位符。
 // 用法：node .i18n-check.mjs
 import { readFileSync, readdirSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const SRC = 'D:/96_CoderWorld/quill/ui/web/src'
+// 路径**按脚本自身位置**推，不写死盘符。
+// 写死 `D:/96_CoderWorld/quill/...` 的代价：在 WSL 里跑会 ENOENT，
+// 别人 clone 到别的目录也跑不了 —— 一道门禁只能在一台机器的一个目录上跑，
+// 那它守的不是仓库，是那台机器。
+const ROOT = dirname(fileURLToPath(import.meta.url))
+const SRC = join(ROOT, 'ui', 'web', 'src')
 const RES = join(SRC, 'i18n', 'resources.ts')
 
 const raw = readFileSync(RES, 'utf8')
