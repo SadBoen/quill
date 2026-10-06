@@ -7,6 +7,7 @@ import { Card, ErrorNotice, PageHeader } from '../components/Page'
 import {
   METRIC_KEYS,
   formatMetric,
+  metricLabel,
   visibleMetrics,
   type SessionMetricKey,
   type SessionMetrics,
@@ -28,20 +29,13 @@ import './usage.css'
  * 所以每一格都走 `visibleMetrics()`，服务端给 `null` 的列就是空的。
  */
 
-/** 每一格的表头（中文）与指标键的映射。 */
-const COLUMN_LABEL: Record<SessionMetricKey, string> = {
-  turns: '轮次',
-  steps: '回复',
-  llm_duration_ms: '模型耗时',
-  tool_duration_ms: '工具耗时',
-  ttft_avg_ms: '首字延迟',
-  tok_per_s: 'tok/s',
-  cache_hit_ratio: '缓存命中',
-  input_tokens: '入参',
-  output_tokens: '出参',
-  cache_read_tokens: '缓存读',
-}
-
+/**
+ * 每一格的表头。
+ *
+ * 复用 `sessionMetrics.ts` 里的 `metricLabel`（统计条用的是同一个函数）——
+ * **同一批指标在聊天页和用量页必须是同一个名字**，所以这里不再抄一份映射：
+ * 抄一份的结果就是切到英文时表头还留着「轮次 / 入参」。
+ */
 function cellText(metrics: SessionMetrics, key: SessionMetricKey): string {
   const found = visibleMetrics(metrics).find((m) => m.key === key)
   // 「—」是 quill 约定的「没记这一项」，不是 0。
@@ -63,7 +57,7 @@ function MetricsTable({ report }: { report: UsageReport }): ReactNode {
             <th scope="col">{t('usage.colExpert', { defaultValue: '角色' })}</th>
             {METRIC_KEYS.map((key) => (
               <th scope="col" key={key}>
-                {COLUMN_LABEL[key]}
+                {metricLabel(key, t)}
               </th>
             ))}
           </tr>

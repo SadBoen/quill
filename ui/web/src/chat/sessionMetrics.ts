@@ -73,6 +73,39 @@ export function visibleMetrics(metrics: SessionMetrics): VisibleMetric[] {
   return out
 }
 
+/**
+ * 指标名 → 展示文案。
+ *
+ * 聊天页统计条（`SessionMetricsBar`）和用量页表头（`UsagePage`）展示的是**同一批
+ * 指标**，所以名字必须来自同一张表：抄一份的结果就是同一个指标在两个页面显示不同名字。
+ *
+ * `Record<SessionMetricKey, ...>` 是刻意的：`SessionMetricKey` 新增一项而这里漏了，
+ * TypeScript 直接报错，而不是让那一格默默显示 i18n 的原始 key。
+ *
+ * `defaultValue` 只是兜底 —— 项目规矩是文案必须写进 `i18n/resources.ts` 的中英两处，
+ * 否则 `.i18n-check.mjs` 门禁会红。
+ */
+const METRIC_LABELS: Record<SessionMetricKey, { key: string; fallback: string }> = {
+  turns: { key: 'chat.metrics.turns', fallback: '轮次' },
+  steps: { key: 'chat.metrics.steps', fallback: '回复' },
+  llm_duration_ms: { key: 'chat.metrics.llmMs', fallback: '模型耗时' },
+  tool_duration_ms: { key: 'chat.metrics.toolMs', fallback: '工具耗时' },
+  ttft_avg_ms: { key: 'chat.metrics.ttft', fallback: '首字延迟' },
+  tok_per_s: { key: 'chat.metrics.tokPerS', fallback: 'tok/s' },
+  cache_hit_ratio: { key: 'chat.metrics.cacheHit', fallback: '缓存命中' },
+  input_tokens: { key: 'chat.metrics.inputTokens', fallback: '入参' },
+  output_tokens: { key: 'chat.metrics.outputTokens', fallback: '出参' },
+  cache_read_tokens: { key: 'chat.metrics.cacheRead', fallback: '缓存读' },
+}
+
+export function metricLabel(
+  key: SessionMetricKey,
+  t: (k: string, o?: Record<string, unknown>) => string,
+): string {
+  const entry = METRIC_LABELS[key]
+  return t(entry.key, { defaultValue: entry.fallback })
+}
+
 /** 毫秒 → 人读的时长。逐字抄 octop 的 `formatDurationMs`。 */
 export function formatDurationMs(milliseconds: number): string {
   if (!Number.isFinite(milliseconds) || milliseconds < 0) return '—'

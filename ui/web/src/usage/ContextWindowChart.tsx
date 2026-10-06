@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { ErrorNotice } from '../components/Page'
 import { EChart, useCssVar } from '../charts/EChart'
 import { loadSessionContext, type SessionContext } from './contextApi'
 
@@ -59,7 +60,7 @@ export function ContextWindowChart({
   sessionId: string
   context: SessionContext | null
 }): ReactNode {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
 
   // canvas 不认 CSS 变量，必须读成真色值（见 useCssVar 的说明）。
   const cInk = useCssVar('--ink', '#172033')
@@ -77,7 +78,13 @@ export function ContextWindowChart({
   })
   const data = context ?? query.data ?? null
 
-  if (!data) return null
+  // 「没测到」和「没拉到」是两件不同的事，**两件都得说出来**。
+  // 之前这里只有 `if (!data) return null`，于是 400/500/404 与「还没量过」
+  // 在界面上长得一模一样 —— 用 `/usage` 的人以为这一格是空的，
+  // 用 `/chat` 的人以为环「自己消失了」。所以失败要把错误原样说出来。
+  if (!data) {
+    return query.isError ? <ErrorNotice error={query.error} /> : null
+  }
 
   // 没跟模型说过话 → 没有实测值。**这里必须显式说明，不能画一个 0% 的空环**：
   // 「0%」看着像「还有一大半没用」，实际是「完全没量过」。
@@ -153,7 +160,12 @@ export function ContextWindowChart({
     tooltip: {
       trigger: 'item',
       formatter: (p: { name: string; value: number; percent: number }) =>
-        `${p.name}：${formatTokens(p.value)} 字符（${p.percent}%）`,
+        t('usage.segTip', {
+          name: p.name,
+          value: formatTokens(p.value),
+          percent: p.percent,
+          defaultValue: '{{name}}：{{value}} 字符（{{percent}}%）',
+        }),
     },
     legend: { bottom: 0, itemWidth: 10, itemHeight: 10, textStyle: { fontSize: 11 } },
     series: [
@@ -167,6 +179,20 @@ export function ContextWindowChart({
     ],
   }
 
+  // 单位跟 tooltip 走同一个 key：这一页唯一说「字符」的地方不允许出现两种
+  // 写法，更不允许在英文界面里蹦出中文单位。
+  // 提前算好：`.i18n-check.mjs` 靠括号配平抓参数，嵌在外层 t() 里的 t() 会被
+  // 误认成「多传了 name / value」。
+  const segDetail = segData
+    .map((s) =>
+      t('usage.segItem', {
+        name: s.name,
+        value: s.value,
+        defaultValue: '{{name}} {{value}} 字符',
+      }),
+    )
+    .join('，')
+
   return (
     <div className="usage-chart-pair">
       <figure className="usage-chart">
@@ -174,6 +200,9 @@ export function ContextWindowChart({
         <EChart
           option={ringOption}
           height={168}
+          // 环的文案藏在 formatter 闭包里，语言变了源码没变 —— 必须把语言交给
+          // EChart，否则切语言后 tooltip 还是旧文案。
+          updateKey={i18n.language}
           ariaLabel={t('usage.contextRingAria', {
             used: formatTokens(used),
             max: formatTokens(data.max_tokens),
@@ -194,8 +223,9 @@ export function ContextWindowChart({
         <EChart
           option={compositionOption}
           height={168}
+          updateKey={i18n.language}
           ariaLabel={t('usage.contextCompositionAria', {
-            detail: segData.map((s) => `${s.name} ${s.value} 字符`).join('，'),
+            detail: segDetail,
             defaultValue: '上下文构成：{{detail}}',
           })}
         />

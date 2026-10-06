@@ -182,6 +182,8 @@ export const en = {
       segSkills: 'Skills',
       segMcp: 'MCP',
       segConversation: 'Conversation',
+      segTip: '{{name}}: {{value}} chars ({{percent}}%)',
+      segItem: '{{name}} {{value}} chars',
     },
     memory: {
       title: 'Knowledge base',
@@ -972,6 +974,8 @@ export const zhCN = {
       segSkills: '技能',
       segMcp: 'MCP',
       segConversation: '对话历史',
+      segTip: '{{name}}：{{value}} 字符（{{percent}}%）',
+      segItem: '{{name}} {{value}} 字符',
     },
     memory: {
       title: '资料库',

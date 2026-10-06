@@ -7,9 +7,21 @@ import { echarts, type EChartsOption } from './echarts'
  *
  * 只做三件必须做的事，其余交给 echarts：
  * 1. 挂载时 init、卸载时 dispose —— 漏掉 dispose 会泄漏 canvas 与事件监听。
- * 2. option 变化时 setOption（不是重新 init）。
+ * 2. option **内容**变化时 setOption（不是重新 init）。
  * 3. 容器尺寸变化时 resize —— 用 ResizeObserver 而不是 window.resize，
  *    因为侧栏折叠这类「窗口没变、容器变了」的情况后者听不到。
+ *
+ * ## 为什么要算「内容指纹」而不是直接把 option 放进依赖
+ *
+ * 所有调用方都把 option 写成**每次渲染新建的字面量**。把它直接放进
+ * `useEffect` 依赖，等于「父组件每重渲染一次 → dispose + 重新 init」：
+ * 聊天页每敲一个字就重建两张上下文图（入场动画重放、hover/zoom 状态丢失、
+ * ResizeObserver 被反复摘挂）。
+ *
+ * 所以这里：init 只在挂载时做一次，实例活到卸载；每次渲染算一遍内容指纹，
+ * **只有内容真的变了才 setOption**。指纹里含颜色与数据，所以主题切换
+ * （useCssVar 改 state）一定会触发重画；翻译藏在 formatter 闭包里看不出来，
+ * 由调用方用 `updateKey` 传当前语言补上。
  *
  * ## 为什么 init 要 try/catch
  *
@@ -59,38 +71,88 @@ export function useCssVar(name: string, fallback: string): string {
   return value
 }
 
+/**
+ * option 的内容指纹 —— 「该不该重画」的判据。
+ *
+ * 规则：
+ * - 普通值照常序列化。颜色、数据、图例名都在这里，所以主题切换一定被抓到。
+ * - 函数按**源码**序列化：tooltip 的 formatter 是闭包，引用每次渲染都不同，
+ *   但源码没变时没必要重画。
+ * - 环引用兜底成 `[circular]`（同一份 option 里重复引用同一个对象时也会
+ *   走到这里，但两次判定结果一致，不影响相等判断）。
+ */
+function fingerprint(option: EChartsOption): string {
+  const seen = new WeakSet<object>()
+  return JSON.stringify(option, (_key, value) => {
+    if (typeof value === 'function') return `fn:${value.toString()}`
+    if (value && typeof value === 'object') {
+      if (seen.has(value)) return '[circular]'
+      seen.add(value)
+    }
+    return value
+  })
+}
+
 export function EChart({
   option,
   height = 220,
   className,
   ariaLabel,
+  updateKey,
 }: {
   option: EChartsOption
   height?: number
   className?: string
   /** canvas 本身对读屏软件是黑的，所以外层必须给一个可读的标签。 */
   ariaLabel: string
+  /**
+   * 额外参与「内容是否变了」判断的标识。
+   *
+   * 只有当 option 里有一处**翻译藏在闭包里**时才有意义 —— 比如 tooltip 的
+   * formatter：切语言时闭包源码不变，但里面的文案变了。传当前语言即可。
+   */
+  updateKey?: string
 }) {
   const host = useRef<HTMLDivElement>(null)
+  const chart = useRef<ReturnType<typeof echarts.init> | null>(null)
+  /** 上一次真正 setOption 过的内容指纹。 */
+  const applied = useRef<string | null>(null)
 
+  const stamp =
+    updateKey === undefined ? fingerprint(option) : `${updateKey}\u0000${fingerprint(option)}`
+
+  // init / dispose 只跟生命周期走。
   useEffect(() => {
     const el = host.current
     if (!el) return
-    let chart: ReturnType<typeof echarts.init>
+    let instance: ReturnType<typeof echarts.init>
     try {
-      chart = echarts.init(el, undefined, { renderer: 'canvas' })
+      instance = echarts.init(el, undefined, { renderer: 'canvas' })
     } catch (e) {
       console.warn('[charts] 无法初始化 echarts（当前环境没有可用的 canvas），图不显示：', e)
       return
     }
-    chart.setOption(option)
-    const ro = new ResizeObserver(() => chart.resize())
+    chart.current = instance
+    // 指纹记的是**上一个实例**画过的内容：新实例必须重画一次。
+    applied.current = null
+    const ro = new ResizeObserver(() => instance.resize())
     ro.observe(el)
     return () => {
       ro.disconnect()
-      chart.dispose()
+      instance.dispose()
+      chart.current = null
+      applied.current = null
     }
-  }, [option])
+  }, [])
+
+  // 内容变了才 setOption —— 不重新 init。
+  useEffect(() => {
+    const instance = chart.current
+    // init 失败（无 canvas）时这里是 null：退化行为和以前一样，只剩占位。
+    if (!instance || applied.current === stamp) return
+    applied.current = stamp
+    instance.setOption(option)
+  }, [option, stamp])
 
   return (
     <div

@@ -319,7 +319,10 @@ export function HubSkillList(): ReactNode {
   const active = searching ? search : board
   const items = active.data?.items ?? []
   const host = active.data?.host
-  const failedSections = Object.keys(board.data?.errors ?? {})
+  // 榜单没拉全的提示**只在榜单视图里说**。`board` 是 `enabled: !searching`，
+  // 搜索时它保留上一次成功的数据 —— 那几个失败的榜单跟这次搜索结果
+  // 一点关系都没有，挂上去等于把一份完整的搜索结果说成「不完整」。
+  const failedSections = searching ? [] : Object.keys(board.data?.errors ?? {})
 
   return (
     <div className="settings-stack">

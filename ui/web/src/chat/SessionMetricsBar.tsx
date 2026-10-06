@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next'
 import './SessionMetricsBar.css'
 import {
   formatMetric,
+  metricLabel,
   visibleMetrics,
   type SessionMetricKey,
   type SessionMetrics,
@@ -35,7 +36,7 @@ export default function SessionMetricsBar({ metrics }: { metrics: SessionMetrics
             </span>
           ) : null}
           <span className="chat-metrics-chip" data-metric={entry.key}>
-            {chipText(entry.key, entry.value, labelOf(entry.key, t))}
+            {chipText(entry.key, entry.value, metricLabel(entry.key, t))}
           </span>
         </span>
       ))}
@@ -57,26 +58,4 @@ function chipText(key: SessionMetricKey, value: number, label: string): string {
     return `${text} ${label}`
   }
   return `${label} ${text}`
-}
-
-/**
- * 标签文案。
- *
- * 走 `t()` 查语言包；`defaultValue` 只是兜底 —— 项目规矩是新增文案必须同时
- * 写进 `i18n/resources.ts` 的中英两处，否则 `.i18n-check.mjs` 门禁会红。
- */
-function labelOf(key: SessionMetricKey, t: (k: string, o?: Record<string, unknown>) => string): string {
-  const map: Record<SessionMetricKey, { key: string; fallback: string }> = {
-    turns: { key: 'chat.metrics.turns', fallback: '轮次' },
-    steps: { key: 'chat.metrics.steps', fallback: '回复' },
-    llm_duration_ms: { key: 'chat.metrics.llmMs', fallback: '模型耗时' },
-    tool_duration_ms: { key: 'chat.metrics.toolMs', fallback: '工具耗时' },
-    ttft_avg_ms: { key: 'chat.metrics.ttft', fallback: '首字延迟' },
-    tok_per_s: { key: 'chat.metrics.tokPerS', fallback: 'tok/s' },
-    cache_hit_ratio: { key: 'chat.metrics.cacheHit', fallback: '缓存命中' },
-    input_tokens: { key: 'chat.metrics.inputTokens', fallback: '入参' },
-    output_tokens: { key: 'chat.metrics.outputTokens', fallback: '出参' },
-    cache_read_tokens: { key: 'chat.metrics.cacheRead', fallback: '缓存读' },
-  }
-  return t(map[key].key, { defaultValue: map[key].fallback })
 }
