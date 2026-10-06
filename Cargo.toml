@@ -5,15 +5,12 @@ members = [
     "crates/quill-adapters",
     "crates/quill-domain",
     "crates/quill-store",
-    "crates/quill-bridge",
     "crates/quill-control",
     "crates/quill-wiki",
     "crates/quill-agent",
-    "crates/quill-ext-hub",
     "crates/quill-backup",
     "crates/quill-provider",
     "crates/quill-upgrade",
-    "crates/quill-xtask",
 
     "crates/quill-testkit",
 
@@ -21,6 +18,21 @@ members = [
     "crates/quill-cli",
 ]
 
+# 2026-10-07 移出三个空壳 crate：quill-bridge / quill-ext-hub / quill-xtask。
+#
+# 它们各自只有一个 `assert_eq!(2 + 2, 4)` 的「能编译」测试，全仓库**没有任何
+# crate 依赖它们**，文档里也从没被提到过 —— 建了但没人用、没人引、没人写。
+# 留着有两个实际害处，比缺失更糟：
+#
+# 1. **假的防护**。`quill-bridge` 的 description 写的是「实例间委派共享防护
+#    （SSRF / 路径白名单 / 头剥离）」，`quill-ext-hub` 写的是「MCP / SKILL /
+#    插件注册中心（配置存服务端，铁律）」。读 Cargo.toml 的人会以为这些安全
+#    边界已经存在 —— 而代码里一行都没有。真要实现时，这层「看起来已经在了」
+#    会让人以为不用做。
+# 2. **假的覆盖面**。三个占位测试让 `cargo test` 的数字更好看，却什么都
+#    没验证 —— 正是 MILESTONES 里 M0 记的那类「测试全绿本身不是判据」。
+#
+# 需要其中某个能力时，按真实需要重新建 crate，并让它有真测试与真调用方。
 exclude = [
     "crates/quill-testkit/fixtures/*",
     "crates/quill-testkit/fixtures/**",

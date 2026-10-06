@@ -1172,15 +1172,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "quill-bridge"
-version = "0.1.0"
-dependencies = [
- "quill-adapters",
- "quill-domain",
- "tokio",
-]
-
-[[package]]
 name = "quill-cli"
 version = "0.1.0"
 dependencies = [
@@ -1216,14 +1207,6 @@ name = "quill-domain"
 version = "0.1.0"
 dependencies = [
  "quill-adapters",
-]
-
-[[package]]
-name = "quill-ext-hub"
-version = "0.1.0"
-dependencies = [
- "quill-adapters",
- "quill-domain",
 ]
 
 [[package]]
@@ -1296,14 +1279,6 @@ dependencies = [
 
 [[package]]
 name = "quill-wiki"
-version = "0.1.0"
-dependencies = [
- "quill-adapters",
- "quill-domain",
-]
-
-[[package]]
-name = "quill-xtask"
 version = "0.1.0"
 dependencies = [
  "quill-adapters",
