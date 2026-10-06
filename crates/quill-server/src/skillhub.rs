@@ -1,7 +1,6 @@
 //! SkillHub 客户端 —— 技能市场的上游。
 //!
-//! 照抄 Octop 的实现（`.octop-ref/octop` 的 `skills/skillhub_common.py` 与
-//! `agents/experts/skillhub_market.py`），**包括它的安全上限**。
+//! 照抄 Octop 的安全上限（`.octop-ref/octop` 的 `skills/skillhub_common.py`）。
 //! 那些数字不是随手拍的，是 Octop 踩过 zip bomb 与超大包之后定下来的。
 //!
 //! ## 上游是外部真实服务
@@ -24,13 +23,21 @@
 //! `pdf-image-text-extractor` 的 zip 里有 `SKILL.md` 15 KB 加 4 个脚本）。
 //! 只接技能包，用户装半天装到的全是「去用那 6 个技能」——而那 6 个根本装不上。
 //!
-//! ## 上游是两层，不是一层
+//! ## 端点路径是实测来的，不是抄来的
 //!
-//! 抄 Octop 的 `infra/skills/skillhub_market.py`（**不是** `experts/` 下那个
-//! 同名文件，那份是旧的）。它把这几件事分得很清楚，我们照抄：
-//! - `SEARCH_ENDPOINT = "/api/v1/search"`
-//! - `DOWNLOAD_ENDPOINT = "/api/v1/download"`
-//! - `RANKING_ENDPOINTS`：`showcase/{hot,featured,newest,recommended,trending,paid}`
+//! 端点常量（`SEARCH_ENDPOINT` / `DOWNLOAD_ENDPOINT` / `RANKING_ENDPOINTS`）在上游
+//! **另一份** `infra/skills/skillhub_market.py` 里，而那份**不在我们的 sparse 检出
+//! 集合内**（可查的那份只有 `agents/experts/skillhub_market.py`，里面没有这几个常量）。
+//! 所以上面那三条端点是 2026-10-06 **真机实测**（对 https://api.skillhub.cn 发请求、
+//! 看它真实返回什么）定下来的，不是逐字抄来的 —— 谁去核对都核不出「抄自哪一行」，
+//! 因为真的没有那一行。这也是我们不写「照抄 infra/skills/ 那份、experts 那份是旧的」
+//! 的原因：那份不在手边，「哪份是旧的」判断不了。
+//!
+//! 我们**确实**从可核的那份（`agents/experts/skillhub_market.py`）学到的，是它的
+//! 安全上限（`skills/skillhub_common.py`）与两处**没有照抄**的缺陷：
+//! - 包里多个 `.md` 时它取 `zf.namelist()` 的第一个、不排序（:610-616）；
+//! - manifest 的扁平 `skillSlugs` 直接透传、不去重（:652-655）。
+//! 我们改成先计划再写入、按名去重并如实报重复，见 [`plan_install`]。
 //!
 //! ## 三条不能省的限制
 //!

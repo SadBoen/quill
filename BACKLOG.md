@@ -207,9 +207,16 @@ octop 的稀疏检出里也没有 `pages/Control` 与 `src/octop/infra/skills`�
 
 ### B6-3 我们比 octop 做得好的地方，别在重构里弄丢 🟢
 
-装包重名：octop 直接取 zip 列表里第一个 `.md`（不排序，`skillhub_market.py:610`），
-扁平 `skillSlugs` 忘了去重（`:652`）。我们是先计划再写入、按名去重、如实报重复。
+装包重名：octop 直接取 zip 列表里第一个 `.md`（不排序，
+`.octop-ref/octop/src/octop/infra/agents/experts/skillhub_market.py:610-616` 的
+`skillset_files[0]`），扁平 `skillSlugs` 忘了去重（同文件 `:652-655` 直接透传）。
+我们是先计划再写入、按名去重、如实报重复。
 **已在 main 上，不要退回 octop 的做法。**
+
+**目录必须写全**：octop 有两个同名 `skillhub_market.py`。上面这些行号只在
+`infra/agents/experts/` 那份里成立（1349 行）；`infra/skills/` 那份不在我们的 sparse
+检出集合内，行数不同、没有这些缺陷。只写裸文件名会让读者落到另一份上，
+从而误判「上游缺陷」是假的 —— 这是 2026-10-06 修掉的一处真实引用腐烂。
 
 ---
 
