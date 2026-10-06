@@ -149,16 +149,19 @@ Windows 上跑前端那几步、在 WSL 上跑 Rust 那几步 —— 一条命�
 
 ## M4 · 数据安全
 
-### B4-1 备份：实现齐、路由空 🔴 建议下一个就做这个
+### B4-1 备份：导出与校验已接线；「真还原一次」的演练还没做 🟡
 
 `quill-backup/src/` 实测 **1576 行**（backup.rs 441 / manifest.rs 620 / error.rs 384 /
 digest.rs 102 / lib.rs 29），有 `create_backup` / `restore_backup`、清单 render/parse、
 sha256 校验，错误类型还带 `fix_command()`。CLI 已经接了（`quill-cli/src/cmd_backup.rs`）。
-路由是 501（`routes.rs:204/210/216`），工作区页按钮点下去必失败。
 
-**注意**：`ui/web/src/workspace/api.ts:8-12` 只导出了 export / verify，
-**restore 没有界面入口** —— 旧文档说的"工作区页 4 个按钮"数错了。
-要做的是：接路由 + 补一个"真还原一次"的演练，而不是只把 export 接上。
+**已做（2026-10-06）**：`crates/quill-server/src/api_backup.rs` 把 export / verify 接成真路由，
+工作区页按钮不再是 501。校验是真算 sha256：改一个字节会点名那个文件。
+
+**还差的**：`POST /api/backup/restore` **诚实但不真还原** —— 服务进程自己占着数据库文件，
+所以它只返回 `restored:false` + 确切 CLI 命令，界面上没有还原按钮。
+下一步要做的是**演练**：停服务、用 `quill restore` 真还原一次、确认数据回来。
+没演练过就宣称「能还原」是不作数的。
 
 ### B4-2 在线升级：别按"只差路由"估工时 🔴
 
