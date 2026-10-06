@@ -82,6 +82,25 @@ function renderPage(handlers: Record<string, () => Promise<Response>>): {
 const EXPORT_URL = '/api/backup/export'
 const VERIFY_URL = '/api/backup/verify'
 
+/**
+ * 页面默认的备份名，跟 `WorkspacePage.tsx` 的 `defaultBackupName()` 同一套算法。
+ *
+ * 这里**不能写死日期**。页面按「今天」算，测试写死 `backup-2026-10-06` 就等于
+ * 给这条断言装了个隐形截止日：跨过那天之后它会开始红，而红的原因跟被测行为
+ * 一点关系都没有 —— 那种红最坏，它会让人开始怀疑功能坏了。
+ */
+function todayBackupName(): string {
+  const now = new Date()
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `backup-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+}
+
+/** 输入框当前的值。请求体里的 name 应当就是它。 */
+function typedBackupName(): string {
+  const input = screen.getByPlaceholderText('backup-2026-10-06') as HTMLInputElement
+  return input.value
+}
+
 function clickExport(): void {
   fireEvent.click(screen.getByRole('button', { name: '导出备份' }))
 }
@@ -123,10 +142,14 @@ describe('导出备份：成功时显示服务端给的每一个字段', () => {
   it('请求体就是约定的 { name }，name 是相对名而不是路径', async () => {
     const { requests } = renderPage({ [EXPORT_URL]: () => Promise.resolve(json(BACKUP, 201)) })
 
+    expect(typedBackupName()).toBe(todayBackupName())
+
     clickExport()
 
     await waitFor(() => expect(requests.some((r) => r.url === EXPORT_URL)).toBe(true))
-    expect(requests.find((r) => r.url === EXPORT_URL)?.body).toEqual({ name: 'backup-2026-10-06' })
+    expect(requests.find((r) => r.url === EXPORT_URL)?.body).toEqual({
+      name: todayBackupName(),
+    })
   })
 
   it('服务端说成功但字段残缺时，不许渲染成「导出完成」', async () => {
@@ -252,10 +275,11 @@ describe('校验备份', () => {
   it('校验走的是同一个相对名', async () => {
     const { requests } = renderPage({ [VERIFY_URL]: () => Promise.resolve(json(VERIFY)) })
 
+    const typed = typedBackupName()
     clickVerify()
 
     await waitFor(() => expect(requests.some((r) => r.url === VERIFY_URL)).toBe(true))
-    expect(requests.find((r) => r.url === VERIFY_URL)?.body).toEqual({ name: 'backup-2026-10-06' })
+    expect(requests.find((r) => r.url === VERIFY_URL)?.body).toEqual({ name: typed })
   })
 })
 
