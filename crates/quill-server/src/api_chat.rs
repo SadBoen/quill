@@ -813,6 +813,66 @@ fn parse_id(raw: &str) -> Result<[u8; 16], ApiError> {
         })
 }
 
+/// 一轮对话（可能含多次模型调用）的 token 用量累加器。
+///
+/// ## 为什么需要它
+///
+/// 工具往返那段循环每轮都 `reply = provider.chat(&follow_up)`，**只把最后一轮的
+/// `reply.usage` 存进 messages**。于是「这一轮」在统计条上只剩最后一次调用的数：
+/// 实测 50 条真实任务里有 34 条以工具轮收场，而工具轮恰恰是入参最大的一类 ——
+/// 用户拿这个数字判断「技能是不是把上下文撑爆了」，少报一半正好报在要命的地方。
+///
+/// ## 累加规则
+///
+/// 1. **只加真值**（`session_metrics::sum_reported` 的同一条规矩：「token 可加，
+///    有一条真值即可」）。一条都没报就是 `None` —— 不能因为求和就凭空造出 0，
+///    那会让界面显示「这次聊天一点没花 token」。
+/// 2. **缓存两项不加进入参**。goose 口径里 `cache_read` / `cache_write` 是
+///    `input` 的**子集**（见 migration 0008），把它们并进 `input` 会算出 >100% 的
+///    命中率。求和是**逐项**求和，语义不变。
+/// 3. `cache_read` 求和后**不允许超过 `input`**。越界只可能来自「某几轮报了
+///    `input=0`/`None`、另一轮报了 `cache_read`」这种半真值组合，夹到 `input`
+///    上，命中率就永远落在 100% 以内。诚实的上游每轮都满足子集关系，求和后
+///    必然也满足，所以这条夹取**只**动得了异常上报。
+/// 4. **单轮逐字不变**（`rounds <= 1` 时不夹）。不带工具的那一轮仍然原样存上游
+///    报来的数：那是上游的口径，不在这一层替它改写。
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct TurnUsage {
+    total: TokenUsage,
+    /// 这一轮里一共调了几次模型。第 3 条的夹取只对「真的求和过」的情形生效，
+    /// 靠它把单轮和多轮区分开。
+    rounds: u32,
+}
+
+impl TurnUsage {
+    /// 记入一次模型调用报上来的 usage。
+    pub fn push(&mut self, usage: TokenUsage) {
+        add_reported(&mut self.total.input, usage.input);
+        add_reported(&mut self.total.output, usage.output);
+        add_reported(&mut self.total.cache_read, usage.cache_read);
+        add_reported(&mut self.total.cache_write, usage.cache_write);
+        self.rounds = self.rounds.saturating_add(1);
+    }
+
+    /// 这一轮的总量。存档与响应 JSON 都用它，保证两边是同一份数。
+    pub fn finish(self) -> TokenUsage {
+        let mut total = self.total;
+        if self.rounds > 1 {
+            if let (Some(input), Some(read)) = (total.input, total.cache_read) {
+                total.cache_read = Some(read.min(input));
+            }
+        }
+        total
+    }
+}
+
+/// 只在有真值时累加；`None` 保持 `None`（「没报」不等于「报了个 0」）。
+fn add_reported(acc: &mut Option<u32>, value: Option<u32>) {
+    if let Some(v) = value {
+        *acc = Some(acc.unwrap_or(0).saturating_add(v));
+    }
+}
+
 /// 发一句话：存用户消息 → 调模型 → 存助手消息 → 返回。
 pub async fn post_message(
     State(state): State<AppState>,
@@ -925,7 +985,12 @@ pub async fn post_message(
     };
 
     let started = std::time::Instant::now();
-    let mut reply = provider.chat(&request).await.map_err(provider_failure)?;
+    // 这一轮**所有**模型调用的 usage 都记在这里，而不是只留最后一轮 ——
+    // 工具往返的每一轮都真花了入参，漏掉它们统计条就只会报最后那次。
+    let mut turn_usage = TurnUsage::default();
+    let first = provider.chat(&request).await.map_err(provider_failure)?;
+    turn_usage.push(first.usage);
+    let mut reply = first;
 
     let mut tool_trace: Vec<Value> = Vec::new();
     let mut rounds = 0usize;
@@ -969,6 +1034,7 @@ pub async fn post_message(
             follow_up.with_tools(tools.clone())
         };
         reply = provider.chat(&follow_up).await.map_err(provider_failure)?;
+        turn_usage.push(reply.usage);
     }
 
     // 轮次用尽、模型仍然只给 tool_calls 没有正文时，**再做一次收尾调用**：
@@ -989,6 +1055,8 @@ pub async fn post_message(
         let final_request = crate::llm::build_request(&llm_config, msgs.clone());
         match provider.chat(&final_request).await {
             Ok(last) => {
+                // 收尾这一次也真花了 token：不管它最后有没有被采纳，都记上。
+                turn_usage.push(last.usage);
                 tool_trace.push(json!({
                     "id": "final",
                     "name": crate::tools::FINAL_ANSWER_MARKER,
@@ -1007,6 +1075,8 @@ pub async fn post_message(
         }
     }
     let turn_ms = started.elapsed().as_millis() as i64;
+    // 存档、汇总列、响应 JSON 三处用**同一份**总量。
+    let usage = turn_usage.finish();
 
     // 工具往返用尽后仍只有 tool_calls、没有正文：这是**没有回答**，
     // 不能当成功返回。`has_answer()` 在这种情况下会返回 true（它只判断
@@ -1059,12 +1129,12 @@ pub async fn post_message(
         "complete",
         &text,
         Some(&reasoning),
-        reply.usage,
+        usage,
         Some(turn_ms),
     )
     .await?;
 
-    touch_session(&db, uid, sid, seq_assistant + 1, reply.usage.input, reply.usage.output).await?;
+    touch_session(&db, uid, sid, seq_assistant + 1, usage.input, usage.output).await?;
 
     Ok(Json(json!({
         "session_id": id,
@@ -1085,11 +1155,12 @@ pub async fn post_message(
         "finish_reason": reply.finish_reason.map(|f| format!("{f:?}")),
         // 缓存两项是 nullable：上游没报就是 null，前端据此决定「命中率」这一格
         // 到底显示数字还是干脆不显示。别把它们 default 成 0。
+        // 这里给的是**整轮总量**（含工具往返的每一轮），与存档里那一行同源。
         "usage": {
-            "input": reply.usage.input,
-            "output": reply.usage.output,
-            "cache_read": reply.usage.cache_read,
-            "cache_write": reply.usage.cache_write,
+            "input": usage.input,
+            "output": usage.output,
+            "cache_read": usage.cache_read,
+            "cache_write": usage.cache_write,
         },
         "turn_ms": turn_ms,
         "persona_applied": persona.instructions.is_some(),
@@ -1483,6 +1554,95 @@ mod tests {
             e.next_step().contains("确认端点活着"),
             "真连不上时这句必须还在：{}",
             e.next_step()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // 一轮的 token 用量：工具往返的**每一轮**都要算进去
+    //
+    // 原先只存 `reply.usage`（最后一次调用），于是「先查工具、再回答」这种
+    // 最常见的形状会把入参少报一大半。下面这几条把这个口径钉死。
+    // -----------------------------------------------------------------------
+
+    fn usage(input: Option<u32>, output: Option<u32>, cache: Option<u32>) -> TokenUsage {
+        TokenUsage::new(input, output).with_cache(cache, None)
+    }
+
+    #[test]
+    fn a_single_round_is_stored_exactly_as_the_provider_reported_it() {
+        // 不带工具的那一轮（绝大多数请求）必须**逐字不变**。
+        for u in [
+            TokenUsage::default(),
+            usage(Some(1000), Some(20), Some(900)),
+            // 上游报的数即使离谱也不在这一层改写：那是上游的口径。
+            usage(Some(10), Some(1), Some(9999)),
+            usage(None, Some(7), None),
+        ] {
+            let mut acc = TurnUsage::default();
+            acc.push(u);
+            assert_eq!(acc.finish(), u, "单轮不能被求和逻辑改写：{u:?}");
+        }
+    }
+
+    #[test]
+    fn a_turn_with_tool_rounds_reports_every_round_not_only_the_last_one() {
+        let mut acc = TurnUsage::default();
+        acc.push(usage(Some(1000), Some(50), Some(400)));
+        // 第二轮才是给出正文的那一轮，入参更大（上下文里多了工具结果）。
+        acc.push(usage(Some(1500), Some(80), Some(1200)));
+        let t = acc.finish();
+        assert_eq!(t.input, Some(2500), "两轮都要算，不能只报最后一轮");
+        assert_eq!(t.output, Some(130));
+        assert_eq!(t.cache_read, Some(1600));
+    }
+
+    #[test]
+    fn a_turn_where_nobody_reported_usage_reports_nothing_rather_than_zero() {
+        // 全部 None 时求和必须是 None：报 0 会让界面显示「这次聊天一点没花 token」。
+        let mut acc = TurnUsage::default();
+        acc.push(TokenUsage::default());
+        acc.push(TokenUsage::default());
+        let t = acc.finish();
+        assert_eq!(t.input, None);
+        assert_eq!(t.output, None);
+        assert_eq!(t.cache_read, None);
+    }
+
+    #[test]
+    fn a_turn_sums_the_reported_rounds_and_leaves_the_unreported_ones_out() {
+        // 与 `session_metrics::sum_reported` 同一条规矩：token 可加，
+        // 有一条真值即可；没报的那几轮不参与，也**不**因此把整体变成 None。
+        let mut acc = TurnUsage::default();
+        acc.push(usage(None, None, None));
+        acc.push(usage(Some(700), Some(30), Some(100)));
+        acc.push(usage(None, Some(5), None));
+        let t = acc.finish();
+        assert_eq!(t.input, Some(700));
+        assert_eq!(t.output, Some(35));
+        assert_eq!(t.cache_read, Some(100));
+    }
+
+    #[test]
+    fn summed_cache_tokens_never_escape_the_summed_input() {
+        // 半真值组合：某几轮报了入参 0，另一轮报了缓存读。逐项相加后
+        // cache_read > input，命中率会算出 >100%。夹到 input 上。
+        let mut acc = TurnUsage::default();
+        acc.push(usage(Some(0), Some(0), Some(500)));
+        acc.push(usage(Some(100), Some(0), None));
+        let t = acc.finish();
+        assert_eq!(t.input, Some(100));
+        assert_eq!(t.cache_read, Some(100), "缓存读是入参的子集，不能越界");
+    }
+
+    #[test]
+    fn the_sum_saturates_instead_of_wrapping_around() {
+        let mut acc = TurnUsage::default();
+        acc.push(usage(Some(u32::MAX), Some(0), None));
+        acc.push(usage(Some(u32::MAX), Some(0), None));
+        assert_eq!(
+            acc.finish().input,
+            Some(u32::MAX),
+            "回绕成 0 比不显示更糟：用户会以为这次几乎没花 token"
         );
     }
 }

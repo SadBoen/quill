@@ -35,8 +35,7 @@
 //! ## 三条不能省的限制
 //!
 //! 1. **超时**：默认 30 秒。没有超时的话上游一挂，界面就一直转圈。
-//! 2. **体积上限**：32 MiB。`bytes()` 会先把整个响应读进内存，
-//!    不限量的话一个 2 GB 的响应就能把服务端吃干。
+//! 2. **体积上限**：32 MiB，**读的时候就限量**（见 `read_capped`）。
 //! 3. **下载 zip 的压缩比**：解压后 64 MiB / 100:1 上限。**这是 zip bomb 的
 //!    标准防线** —— 一个几 KB 的 zip 能解压出几百 GB。不设这个上限，
 //!    我们就是在替上游跑一个可以让任意用户把服务端打爆的服务。
@@ -233,9 +232,47 @@ async fn get_json(url: &str) -> Result<serde_json::Value, HubError> {
     if !status.is_success() {
         return Err(HubError::Status(status.as_u16()));
     }
-    resp.json::<serde_json::Value>()
-        .await
-        .map_err(|e| HubError::Parse(e.to_string()))
+    // 列表/搜索/榜单的响应同样**读的时候就有上限**（原先这里连上限都没有，
+    // `json()` 会把整个响应读进内存才谈解析）。label 用路径，一眼知道是哪个接口。
+    let bytes = read_capped(resp, &path_label(url)).await?;
+    serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|e| HubError::Parse(e.to_string()))
+}
+
+/// 把响应体**边读边限量**地收进内存。
+///
+/// ## 为什么必须流式
+///
+/// `resp.bytes()` / `resp.json()` 是「先把整个响应读进内存，再判断要不要」——
+/// 那个判断发生得太晚：一个 2 GB 的响应会先把内存吃干，然后才返回错误。
+/// `HTTP_TIMEOUT_SECS` 挡不住这件事：它限的是**时长**，不是**体积**，
+/// 一个 1 GB/s 的上游十秒就能灌进来 10 GB。
+///
+/// 所以这里按块读，**加上这一块就越界就立刻停**：无论上游发来什么，
+/// 内存峰值都被 `MAX_HTTP_BYTES` 兜住。
+async fn read_capped(resp: reqwest::Response, label: &str) -> Result<Vec<u8>, HubError> {
+    let mut resp = resp;
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(|e| HubError::Fetch(e.to_string()))? {
+        if buf.len() as u64 + chunk.len() as u64 > MAX_HTTP_BYTES {
+            return Err(HubError::Fetch(format!(
+                "{label} 超过 {} MiB 上限，已拒收",
+                MAX_HTTP_BYTES / 1024 / 1024
+            )));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
+}
+
+/// 报错时给人看的接口标识：URL 的 path（没有 path 就退回 host）。
+fn path_label(url: &str) -> String {
+    let rest = url.strip_prefix(&host()).unwrap_or(url);
+    let path = rest.split('?').next().unwrap_or("");
+    if path.is_empty() {
+        host()
+    } else {
+        path.to_string()
+    }
 }
 
 /// 列出技能集。
@@ -497,17 +534,8 @@ async fn download_zip(url: &str, label: &str) -> Result<Vec<u8>, HubError> {
         return Err(HubError::Status(status.as_u16()));
     }
     // 先收再判的做法本身就不可接受：一个 2 GB 的响应会先把内存吃干。
-    let bytes = resp
-        .bytes()
-        .await
-        .map_err(|e| HubError::Fetch(e.to_string()))?;
-    if bytes.len() as u64 > MAX_HTTP_BYTES {
-        return Err(HubError::Fetch(format!(
-            "{label} 超过 {} MiB 上限，已拒收",
-            MAX_HTTP_BYTES / 1024 / 1024
-        )));
-    }
-    Ok(bytes.to_vec())
+    // read_capped 是**边读边判**，越界就停，内存峰值被 MAX_HTTP_BYTES 兜住。
+    read_capped(resp, label).await
 }
 
 /// 一次拉全部榜单。
@@ -1129,6 +1157,123 @@ mod tests {
                 "不该标成需要密钥：{raw}"
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // 体积上限：**读的时候**就要判
+    //
+    // 下面这个上游**永远写不完**（chunked + 无限发块）。它专门用来把
+    // 「先收再判」和「边读边判」区分开：
+    //   - 先收再判：永远收不完，只能等 30 秒超时，报的是超时不是超限；
+    //   - 边读边判：超过 32 MiB 的那一刻就返回，报「超过上限」。
+    // 所以这两个用例断言的**不只是错误文案，还有它在超时之前就回来了**。
+    // -----------------------------------------------------------------------
+
+    async fn endless_body_server() -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("假上游必须能绑回环端口");
+        let addr = listener.local_addr().expect("读本机地址");
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    // 请求头读完就够了：要的是「一个发不完的响应」。
+                    let mut head = [0u8; 2048];
+                    let _ = sock.read(&mut head).await;
+                    if sock
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n\
+                              Transfer-Encoding: chunked\r\n\r\n",
+                        )
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                    let block = vec![b'x'; 64 * 1024];
+                    let frame = format!("{:x}\r\n", block.len()).into_bytes();
+                    // 客户端一旦收够就断连，write 随之报错，这里就收工。
+                    loop {
+                        if sock.write_all(&frame).await.is_err()
+                            || sock.write_all(&block).await.is_err()
+                            || sock.write_all(b"\r\n").await.is_err()
+                        {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    /// 一个老老实实发完就收工的上游，用来守住 happy path：
+    /// 有限流不能变成「一律拒收」。
+    async fn finite_body_server(body: &'static str) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("假上游必须能绑回环端口");
+        let addr = listener.local_addr().expect("读本机地址");
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut head = [0u8; 2048];
+                    let _ = sock.read(&mut head).await;
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                         Content-Length: {}\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = sock.write_all(head.as_bytes()).await;
+                    let _ = sock.write_all(body.as_bytes()).await;
+                });
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn a_zip_that_never_ends_is_rejected_while_reading_not_after_buffering_it() {
+        let base = endless_body_server().await;
+        let started = std::time::Instant::now();
+        let err = download_zip(&format!("{base}/api/v1/download?slug=x"), "x")
+            .await
+            .expect_err("一个发不完的 zip 必须被拒");
+        let secs = started.elapsed().as_secs_f64();
+        let m = err.message();
+        assert!(m.contains("上限"), "{m}");
+        assert!(m.contains("下一步"), "每条错误都要有下一步：{m}");
+        assert!(
+            secs < 20.0,
+            "应当在越界那一刻就返回；等到超时说明又变回「先收再判」了：{secs} 秒"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_oversized_json_body_is_refused_the_same_way_a_zip_is() {
+        // `get_json` 原先压根没有上限（`json()` 一次性读全），现在与 zip 同一条路。
+        let base = endless_body_server().await;
+        let err = get_json(&format!("{base}/api/v1/search?q=pdf"))
+            .await
+            .expect_err("发不完的 JSON 必须被拒");
+        let m = err.message();
+        assert!(m.contains("上限"), "{m}");
+        assert!(
+            m.contains("/api/v1/search"),
+            "报错要让人知道是哪个接口超了：{m}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_body_under_the_cap_is_still_read_and_parsed_normally() {
+        // 守住另一半：加流式读取不是把上限判死。
+        let base = finite_body_server(r#"{"results":[{"slug":"a"}]}"#).await;
+        let v = get_json(&format!("{base}/api/v1/search?q=a"))
+            .await
+            .expect("限内的响应必须照常解析");
+        assert_eq!(v["results"][0]["slug"], serde_json::json!("a"));
     }
 
     #[test]

@@ -471,3 +471,131 @@ async fn context_uses_the_last_real_input_tokens_and_never_invents_one() {
         .expect("数字");
     assert_eq!(conv, 0, "夹具里的 user 消息正文是空串，所以是 0 —— 这是真值不是缺失");
 }
+
+/// 假上游：第 1 次调用只给 tool_calls，第 2 次给正文。两次的 usage **故意不同**，
+/// 这样「只记最后一轮」和「记整轮」在数字上必然分家。
+///
+/// 两轮的入参/出参/缓存分别是 (1000,50,400) 与 (1500,80,1200)，
+/// 整轮总量应为 (2500,130,1600)。
+async fn tool_round_upstream() -> String {
+    use axum::routing::post;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let first = {
+        let calls = Arc::clone(&calls);
+        move || {
+            let n = calls.fetch_add(1, Ordering::SeqCst);
+            assert!(n < 2, "两轮就该收尾：第 {} 次调用不该再发生", n + 1);
+            if n == 0 {
+                serde_json::json!({
+                    "id": "round-1", "model": "m",
+                    "choices": [{
+                        "message": {
+                            "role": "assistant",
+                            "content": null,
+                            "tool_calls": [{
+                                "id": "call_1", "type": "function",
+                                "function": {"name": "list_experts", "arguments": "{}"}
+                            }]
+                        },
+                        "finish_reason": "tool_calls"
+                    }],
+                    "usage": {
+                        "prompt_tokens": 1000, "completion_tokens": 50,
+                        "prompt_tokens_details": {"cached_tokens": 400}
+                    }
+                })
+            } else {
+                serde_json::json!({
+                    "id": "round-2", "model": "m",
+                    "choices": [{
+                        "message": {"role": "assistant", "content": "查完了，没有可用专家。"},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {
+                        "prompt_tokens": 1500, "completion_tokens": 80,
+                        "prompt_tokens_details": {"cached_tokens": 1200}
+                    }
+                })
+            }
+        }
+    };
+
+    let app = axum::Router::new().route(
+        "/v1/chat/completions",
+        // 请求体在这里是摆设：我们要的只是「第几次被调用」。
+        post(move |_body: String| {
+            let first = first.clone();
+            async move { axum::Json(first()) }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("假上游必须能绑回环端口");
+    let addr = listener.local_addr().expect("读本机地址");
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    format!("http://{addr}/v1")
+}
+
+/// 一条**走完工具往返**的消息，入参必须是两轮之和，不是最后一轮。
+///
+/// 这正是原先的 bug：工具往返那段循环每轮都覆盖 `reply`，只留最后一次的
+/// `usage` 存档。而实测 50 条真实任务里有 34 条以工具轮收场 —— 少报的是
+/// 「这个 agent 到底吃了多少上下文」那个最要紧的数。
+#[tokio::test]
+async fn a_turn_with_tool_rounds_is_charged_for_every_round_not_only_the_last() {
+    let t = TestDb::new("metrics-toolrounds");
+    seed_user(&t);
+    let app = state(&t);
+    let base = tool_round_upstream().await;
+    let cfg = quill_server::llm::LlmConfig {
+        base_url: base,
+        model: "m".into(),
+        ..Default::default()
+    };
+    let provider = quill_server::llm::build(&cfg).expect("URL 形状合法");
+    app.replace_llm(Some(provider), cfg);
+
+    let sid = create_session(app.clone()).await;
+    let resp = build_router(app.clone())
+        .oneshot({
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/sessions/{sid}/messages"))
+                .header("authorization", format!("Bearer {TOKEN_A}"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"content":"有哪些专家？"}"#))
+                .expect("构造请求失败")
+        })
+        .await
+        .expect("oneshot 失败");
+    assert_eq!(resp.status(), StatusCode::OK, "工具往返应当正常收尾");
+    let bytes = resp.into_body().collect().await.expect("读响应体").to_bytes();
+    let v: Value = serde_json::from_slice(&bytes).expect("必须是 JSON");
+    assert_eq!(v["tool_rounds"], serde_json::json!(1), "确实走了一轮工具");
+    // 响应里的 usage 与存档里那一行必须同源（都是整轮总量）。
+    assert_eq!(v["usage"]["input"], serde_json::json!(2500), "1000 + 1500");
+    assert_eq!(v["usage"]["output"], serde_json::json!(130));
+    assert_eq!(v["usage"]["cache_read"], serde_json::json!(1600), "400 + 1200");
+
+    // 存档侧：会话统计与 /api/usage 合计都读的是这一行，不能退回 1500。
+    let (status, m) = get_json(app.clone(), &format!("/api/sessions/{sid}/metrics")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(m["steps"], serde_json::json!(1), "一轮对话就是一条 assistant 消息");
+    assert_eq!(
+        m["input_tokens"],
+        serde_json::json!(2500),
+        "只报最后一轮的 1500 就是这个 bug 本身"
+    );
+    assert_eq!(m["output_tokens"], serde_json::json!(130));
+    assert_eq!(m["cache_read_tokens"], serde_json::json!(1600));
+    // 缓存读是入参的子集，命中率 1600/2500 = 64%，不得超过 100%。
+    let ratio = m["cache_hit_ratio"].as_f64().expect("应当给出命中率");
+    assert!((ratio - 0.64).abs() < 1e-6, "命中率应为 64%，实际 {ratio}");
+
+    let (_, u) = get_json(app, "/api/usage").await;
+    assert_eq!(u["totals"]["input_tokens"], serde_json::json!(2500));
+}
