@@ -277,9 +277,12 @@ async fn extra_routes_list_does_not_leak_into_404_claim() {
 
 #[tokio::test]
 async fn registered_but_unimplemented_route_returns_501_with_route_name() {
-    // `/api/users` 是 REQUIREMENTS 里的用户管理，目前仍是登记未实现。
+    // 拿 `/api/upgrade/check` 当样本：它登记了、能力确实还没实现。
+    // 原来这里用的是 `GET /api/users` —— 那条 2026-10-06 接通之后，
+    // 这个测试会**因为自己过期而失败**。样本路由必须挑一条**仍然**是 501 的，
+    // 否则它测的其实是「我以为的那件事」，不是「501 这个行为」。
     let resp = app!()
-        .oneshot(authed("GET", "/api/users", TOKEN_ADMIN))
+        .oneshot(authed("GET", "/api/upgrade/check", TOKEN_ADMIN))
         .await
         .expect("失败");
     assert_eq!(
@@ -293,8 +296,15 @@ async fn registered_but_unimplemented_route_returns_501_with_route_name() {
         "错误码应可被前端分支：{text}"
     );
     assert!(
-        text.contains("/api/users"),
+        text.contains("/api/upgrade/check"),
         "501 文案必须点名具体路由（否则不可诊断）：{text}"
+    );
+    // next_step 现在按路由给（NotImplemented 带 advice），所以还必须真的有内容。
+    let envelope = serde_json::from_str::<serde_json::Value>(&text).expect("响应必须是 JSON");
+    let ns = envelope["error"]["next_step"].as_str().unwrap_or_default();
+    assert!(
+        !ns.trim().is_empty(),
+        "501 必须自带下一步，否则用户只能干等：{text}"
     );
 }
 

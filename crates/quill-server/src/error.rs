@@ -72,6 +72,14 @@ pub enum ApiError {
     NotImplemented {
         method: &'static str,
         path: &'static str,
+        /// 「为什么没做、接下来怎么办」由调用方给。
+        ///
+        /// 501 最容易变成一句没有信息的话：「该路由已登记，但能力尚未实现」。
+        /// 用户读到它只能猜。可实际情况往往是**有意不做**——
+        /// 例如 `POST /api/users` 不建账号，是 `bootstrap.rs` 里写死的部署口径
+        /// （账号只来自环境变量配置），而不是没来得及写。把这句话按路由分开，
+        /// 501 才真的在告诉人下一步。
+        advice: &'static str,
     },
 
     StorageUnavailable {
@@ -320,7 +328,7 @@ impl ApiError {
             Self::BadRequest { detail } => detail.clone(),
             Self::Conflict { detail, .. } => detail.clone(),
             Self::Unprocessable { detail, .. } => detail.clone(),
-            Self::NotImplemented { method, path } => {
+            Self::NotImplemented { method, path, .. } => {
                 format!("路由 {method} {path} 已登记，但能力尚未实现")
             }
             Self::StorageUnavailable { detail } => detail.clone(),
@@ -364,10 +372,7 @@ impl ApiError {
                 "确认该路径允许的方法；\
                  路径存在但方法不对不会被当成 404。"
             }
-            Self::NotImplemented { .. } => {
-                "执行 `GET /healthz` 确认服务存活；该路由随对应 crate 落地后自动转为可用，\
-                 在此之前请不要在客户端里依赖它返回成功。"
-            }
+            Self::NotImplemented { advice, .. } => advice,
             Self::StorageUnavailable { .. } => {
                 "存储不可用：先执行 `quill doctor --section=db` 打印数据库诊断；\
                  若提示缺表，按 crates/quill-store/migrations/0001_init.sql 执行迁移后重启服务；\
@@ -622,9 +627,12 @@ mod tests {
         let e = ApiError::NotImplemented {
             method: "GET",
             path: "/api/experts",
+            advice: "先看这里是什么能力。",
         };
         assert!(e.detail().contains("/api/experts"));
         assert_eq!(e.status(), StatusCode::NOT_IMPLEMENTED);
+        // 「下一步」按路由给，不是一句通用安慰。
+        assert_eq!(e.next_step(), "先看这里是什么能力。");
     }
 
     impl ApiError {
@@ -632,6 +640,8 @@ mod tests {
             Self::NotImplemented {
                 method: "GET",
                 path: "/api/version",
+                advice: "执行 `GET /healthz` 确认服务存活；该路由随对应 crate 落地后自动转为可用，\
+                 在此之前请不要在客户端里依赖它返回成功。",
             }
         }
     }

@@ -16,7 +16,12 @@ use crate::error::ApiError;
 use crate::state::AppState;
 
 fn not_implemented(method: &'static str, path: &'static str) -> ApiError {
-    ApiError::NotImplemented { method, path }
+    ApiError::NotImplemented {
+        method,
+        path,
+        advice: "执行 `GET /healthz` 确认服务存活；该路由随对应能力落地后自动转为可用，\
+                 在此之前请不要在客户端里依赖它返回成功。",
+    }
 }
 
 pub fn build_router(state: AppState) -> Router {
