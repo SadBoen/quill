@@ -150,8 +150,18 @@ export function ChatPage(_props: ChatPageProps): ReactNode {
     setSending(true)
     setNotice(null)
     setText('')
+    // 这条消息**实际发到哪个会话**，得在这里就记住。
+    //
+    // 原来 catch 里用的是 `sessionId ?? null`，那是从渲染闭包里读的旧值：
+    // 从 /chat 直接发第一条消息时它还是 undefined，于是 catch 把 notice 记到
+    // `sessionId: null` 上；而第 83 行是按**当前路由的** sessionId 过滤的，
+    // 那时 navigate 已经把地址换成了新会话 id —— `null === "F565D514…"` 不成立，
+    // `visibleNotice` 永远是 null。**发送失败的提示因此一条都显示不出来。**
+    // 后端其实把可执行的「下一步：…」都写好了，被这里吞得干干净净。
+    let targetIdForNotice: string | null = sessionId ?? null
     try {
       const targetId = sessionId ?? (await createSession(expertId || generalExpert?.id)).id
+      targetIdForNotice = targetId
       if (!sessionId) navigate(`/chat/${targetId}`, { replace: true })
       setHistory((current) => current ?? [])
       const result = await sendChatMessage(targetId, sentText)
@@ -187,7 +197,7 @@ export function ChatPage(_props: ChatPageProps): ReactNode {
     } catch (error) {
       setText(sentText)
       setNotice({
-        sessionId: sessionId ?? null,
+        sessionId: targetIdForNotice,
         message: chatErrorMessage(error, t('chat.sendFailed', { defaultValue: '消息发送失败，请重试。' })),
       })
     } finally {

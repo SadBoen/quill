@@ -271,7 +271,7 @@ impl ToolRegistry {
                 }
             }
             let spec = crate::skills_repo::as_tool_spec(&row, &body);
-            let handler = skill_handler(&row.name);
+            let handler = skill_handler(&row.name, &body);
             self.register(spec, handler);
         }
         Ok(self)
@@ -621,12 +621,16 @@ fn veto(
 
 /// SKILL 工具的执行体。
 ///
-/// **只回执，不回正文** —— 正文已经在 `as_tool_spec` 里进了工具描述，而工具
-/// 描述每轮请求都带着。再回一份就是同一段文字读两遍；更糟的是正文可能超过
-/// `MAX_RESULT_CHARS`，于是回灌给模型的是一份**被截断的**副本，模型会误以为
-/// 方法只写了一半。
-fn skill_handler(name: &str) -> ToolHandler {
+/// **调用时才回灌正文。** 工具描述里只放摘要（见 `skills_repo::as_tool_spec`），
+/// 否则每个启用技能的全文都是每轮请求的常驻开销，装十几个技能就会顶爆上下文
+/// 窗口 —— 实测 13 个技能 32430 字符 ≈ 10810 tokens > 8192，连「1+1」都必然
+/// 503。见 ISSUE-036。
+///
+/// 正文真的超了 `MAX_RESULT_CHARS` 时**明说被截断了**，不能悄悄给半份：
+/// 模型会以为方法只写了一半，然后照着残缺的方法去做事。
+fn skill_handler(name: &str, body: &str) -> ToolHandler {
     let name = name.to_string();
+    let body = body.to_string();
     Arc::new(move |args: &Value| {
         let task = args
             .get("task")
@@ -634,8 +638,21 @@ fn skill_handler(name: &str) -> ToolHandler {
             .map(str::trim)
             .filter(|t| !t.is_empty())
             .ok_or("缺少参数 task —— 请写清要交给这套方法处理的具体任务。")?;
+        let (text, note) = if body.chars().count() > MAX_RESULT_CHARS {
+            let kept: String = body.chars().take(MAX_RESULT_CHARS).collect();
+            (
+                kept,
+                format!(
+                    "\n\n（这套方法正文共 {} 字符，超过单次回灌上限 {MAX_RESULT_CHARS} 字符，\
+                     上面只是前半部分。后半段请直接读技能文件，或把任务拆小再调一次。）",
+                    body.chars().count()
+                ),
+            )
+        } else {
+            (body.clone(), String::new())
+        };
         Ok(format!(
-            "已加载「{name}」这套方法（正文见该工具的描述）。\
+            "已加载「{name}」这套方法。完整正文如下：\n\n{text}{note}\n\n\
              现在按这套方法处理这个任务：\n{task}"
         ))
     })
@@ -793,8 +810,12 @@ mod tests {
     }
 
     #[test]
-    fn a_skill_tool_result_reports_the_task_and_does_not_repeat_the_body() {
-        let h = skill_handler("code-review");
+    fn a_skill_tool_result_returns_the_full_body_so_the_model_can_follow_it() {
+        // 修之前的形态是「只回执，正文常驻在工具描述里」。那样每个启用技能的
+        // 全文都是每轮请求的固定开销，13 个技能就能把 8192 的窗口顶爆，
+        // 连「1+1」都必然 503（ISSUE-036）。现在改成调用时才回灌正文。
+        let body = "第一步：读文件。第二步：写下拉。第三步：跑测试。";
+        let h = skill_handler("code-review", body);
         let out = h(&json!({ "task": "审一下 x.rs 里的下拉" })).expect("应成功");
         assert!(out.contains("code-review"), "要说清用的是哪套方法：{out}");
         assert!(
@@ -802,15 +823,27 @@ mod tests {
             "任务要回给模型：{out}"
         );
         assert!(
-            out.chars().count() < MAX_RESULT_CHARS,
-            "回执必须短到不被 render_result 截断，否则模型会拿到半截方法"
+            out.contains("第三步：跑测试。"),
+            "正文必须整段回灌，否则模型拿不到方法：{out}"
+        );
+    }
+
+    #[test]
+    fn a_skill_body_too_long_for_one_refeed_says_it_was_cut_instead_of_quietly_truncating() {
+        // 悄悄给半份正文，模型会以为方法只写了一半，然后照着残缺的方法做事。
+        let body = "字".repeat(MAX_RESULT_CHARS + 500);
+        let out = skill_handler("huge", &body)(&json!({ "task": "干活" })).expect("应成功");
+        assert!(
+            out.contains("超过单次回灌上限"),
+            "超长必须明说，不能悄悄截断：{}",
+            &out[out.len().saturating_sub(200)..]
         );
     }
 
     #[test]
     fn a_skill_tool_called_without_a_task_is_reported_back_to_the_model() {
         for args in [json!({}), json!({"task": "  "}), json!({"task": 7})] {
-            let err = skill_handler("x")(&args).expect_err("缺 task 必须报错");
+            let err = skill_handler("x", "正文")(&args).expect_err("缺 task 必须报错");
             assert!(err.contains("task"), "要说清缺哪个参数：{err}");
         }
     }

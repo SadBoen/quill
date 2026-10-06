@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
@@ -108,4 +108,53 @@ it('专家还没加载出来时说实话「加载中」，不假装有个叫「�
   })
   renderPage('/chat', slow)
   await waitFor(() => expect(screen.getByText('角色加载中…')).toBeInTheDocument())
+})
+
+it('新建会话时发消息失败，必须把服务端写的「下一步」显示出来（ISSUE-035）', async () => {
+  // 后端在 503 里把可执行的下一步都写好了：
+  //   detail: 'request (9845 tokens) exceeds the available context size (8192 tokens)'
+  //   next_step: '……调大 QUILL_LLM_MAX_CONTEXT_TOKENS，或减少这一轮挂着的技能……'
+  // 也就是说**服务端尽到了责任**，前端把它吞掉才是问题所在。
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.includes('/api/experts')) return jsonResponse(EXPERTS)
+    // 顺序有讲究：发消息的路径是 /api/sessions/{id}/messages，建会话是 /api/sessions。
+    if (url.includes('/messages')) {
+      return jsonResponse(
+        {
+          error: {
+            code: 'provider_rejected',
+            detail:
+              '模型调用失败：LLM 服务返回 HTTP 400：request (9845 tokens) exceeds the available context size (8192 tokens)',
+            next_step: '下一步：调大 QUILL_LLM_MAX_CONTEXT_TOKENS，或减少这一轮挂着的技能。',
+          },
+        },
+        503,
+      )
+    }
+    if (url.endsWith('/api/sessions')) {
+      return jsonResponse({ id: 'NEWSESSION01', title: '新对话', expert_id: 'general' })
+    }
+    if (url.includes('/api/sessions?')) return jsonResponse({ sessions: [] })
+    if (url.includes('/healthz')) return jsonResponse({ llm: {} })
+    return jsonResponse({ messages: [] })
+  })
+
+  renderPage('/chat', fetchMock)
+  await waitFor(() => expect(screen.getByRole('combobox')).toBeInTheDocument())
+
+  const box = await screen.findByRole('textbox', { name: '消息' })
+  fireEvent.change(box, { target: { value: '1+1 等于几？' } })
+  fireEvent.submit(box.closest('form') as HTMLFormElement)
+
+  // 过去这里一直是失败的：catch 把 notice 记到「还没有 sessionId」上，
+  // 而可见性是按 navigate 之后的**新**会话 id 过滤的，对不上就永远不渲染。
+  await waitFor(() =>
+    expect(fetchMock.mock.calls.map((c) => String(c[0])).some((u) => u.includes('/messages'))).toBe(true),
+  )
+  await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument())
+  const alert = screen.getByRole('alert').textContent ?? ''
+  expect(alert).toContain('exceeds the available context size')
+  // 项目硬规矩：错误必须带「下一步：…」
+  expect(alert).toContain('下一步：')
 })

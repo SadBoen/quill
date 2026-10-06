@@ -1564,3 +1564,103 @@
 那个批评**只对 MCP-Atlas 那 50 条成立**，对 SkillsBench 那 50 条是错的 ——
 它们本来就有真实输入，是我没下。**用户的质疑推翻的是我的核查，不是口径本身。**
 
+---
+
+## ISSUE-035 · 发送失败的提示一条都显示不出来：notice 记在了「还没有会话」的那个 id 上
+
+- **发现于**：ISSUE-034 补完夹具后，用浏览器实跑第 1 条任务
+  （`atlas-689bd255c0422b257e7dfcf4`）
+- **现象**：从 `/chat` 进页面，发第一条消息。请求确实发出去了，但界面
+  **只留下用户自己那条消息，没有助手回复、没有红色横幅、没有「重试」、
+  没有任何错误提示**。等了 55 秒，什么都没等到。
+  头部还写着「0 条消息」。
+  用户视角就是：**「模型不回话，也没人告诉我为什么。」**
+- **严重度**：严重（**任何一次发送失败都会静默**，用户无从得知发生了什么）
+- **根因**：两处配合出错。
+  1. `ui/web/src/chat/ChatPage.tsx:190` 原来写
+     `setNotice({ sessionId: sessionId ?? null, ... })`。
+     这里的 `sessionId` 来自 `useParams`，是从**渲染闭包里读的旧值**。
+     从 `/chat` 发第一条消息时它还是 `undefined`。
+  2. 同文件 `:83` 的可见性判断是
+     `notice?.sessionId === (sessionId ?? null)`。
+     而 `:155` 的 `navigate('/chat/{id}')` 已经把地址换成了新会话 id，
+     于是比较变成 `null === "F565D514…"` —— **不成立**，`visibleNotice`
+     恒为 `null`，横幅永远不渲染。
+  **只有「第一次发消息」会中招**（第二次起 `sessionId` 有值），
+  而那恰恰是新手最常遇到的那一刻。
+  实测后端其实把可执行的下一步都写好了：
+  ```
+  HTTP 503
+  detail:   模型调用失败：LLM 服务返回 HTTP 400：request (9845 tokens)
+            exceeds the available context size (8192 tokens)
+  next_step: 模型服务**活着**并回了一个错误状态码，它自己的原话在上一段里。
+            下一步：照那句话改，**不要**去重启模型服务……调大
+            QUILL_LLM_MAX_CONTEXT_TOKENS，或减少这一轮挂着的技能……
+  ```
+  **服务端尽到了责任，是前端把它吞得干干净净。**
+- **复现**：在任意新会话里发一条必然失败的消息（例如挂着足够多的技能导致超窗），
+  看 `POST /api/sessions/{id}/messages` 返回 503，但界面上没有任何提示。
+- **修复**：
+  1. `handleSubmit` 里在发消息**之前**就把 `targetIdForNotice` 定下来，
+     catch 里用它而不是闭包里的旧 `sessionId`。
+  2. `ui/web/src/chat/chatApi.ts` 的 `chatErrorMessage` 原来只取
+     `error.message`，把 `ApiError.nextStep` 整个丢掉了 —— 那是项目硬规矩
+     「错误必须带下一步」在聊天页的最后一环，一并补上（带去重，避免重复拼接）。
+- **回归**：`ui/web/src/chat/ChatPage.test.tsx` 新增
+  「新建会话时发消息失败，必须把服务端写的「下一步」显示出来（ISSUE-035）」，
+  用一个 503 信封做桩，断言横幅出现、含 `exceeds the available context size`
+  且含「下一步：」。前端 **90 passed / 12 files**。
+- **状态**：已修已回归。
+
+---
+
+## ISSUE-036 · 技能正文整段常驻上下文，13 个技能就把 8192 窗口顶爆（而界面什么都不说）
+
+- **发现于**：ISSUE-035 排查时顺着 503 的原文往下查
+- **现象**：用户发的是「1+1 等于几？直接回答。」——22 tokens 的一句话。
+  quill 发给模型的请求却是 **9845 tokens**，上游直接
+  `request (9845 tokens) exceeds the available context size (8192 tokens)`。
+  手工直接打 llama-server 同样的问题，**只要 19 tokens**。
+  差出来的 9826 tokens 全是 quill 自己加的固定开销。
+- **严重度**：严重（**装了十几个技能之后，quill 在这个模型上一个字都说不出来**，
+  连最小的问题都不行；而用户界面毫无提示）
+- **根因**：`crates/quill-server/src/skills_repo.rs` 的 `as_tool_spec` 原来写的是
+  ```rust
+  quill_provider::ToolSpec::new(&r.name, content)   // content = 整段正文
+  ```
+  而它上面的注释写着：
+  > 好处是 SKILL 不占常驻上下文 —— 用不到就完全不出现。
+
+  **这句话是反的。** 工具描述每轮请求都带着，所以每个启用技能的
+  **全文都是常驻开销**。实测本机 13 个 `model_can_see=true` 的技能，
+  正文合计 **32430 字符（≈10810 tokens）> 8192 的窗口** ——
+  空会话也必然超窗。逐条列出来最大的是
+  `geometric-layout-repair` 4969、`architectural-dxf-extraction` 5265、
+  `ada-plan-view-accessibility` 3701、`image-editing` 4111 字符。
+  配套的 `skill_handler` 也照着这个错误前提写（「只回执，不回正文」，
+  并注明「正文已经在 `as_tool_spec` 里进了工具描述」）。
+- **复现**：`POST /api/extensions/skills` 启用 13 个真实技能，
+  再往任意会话发「1+1 等于几？」→ 503 超窗。
+- **修复**：把「SKILL 即工具」真正做成渐进披露。
+  1. `skills_repo.rs` 新增 `MAX_SKILL_DESCRIPTION_CHARS = 240`
+     与 `skill_summary()`：工具描述只放**有界摘要**，优先用 SKILL 自己
+     frontmatter 里的 `description`，没有就从正文开头取一段，
+     被截断时附一句「完整方法正文在调用该技能时回灌」。
+  2. `tools.rs` 的 `skill_handler(name, body)` 改为**调用时才回灌整段正文**。
+     正文超 `MAX_RESULT_CHARS` 时**明说被截断了**，不能悄悄给半份 ——
+     原来那段注释担心的正是这个，所以这里显式写出来。
+  3. 两处把错误前提的注释一并改正，写清「工具描述每轮都带，所以正文必须
+     留在外面」。
+- **回归**：
+  - `skills_repo::tests::the_tool_description_carries_a_summary_not_the_whole_body`
+    （描述有界 + 正文不整段出现 + 有回灌标记）
+  - `skills_repo::tests::a_short_frontmatter_description_is_used_verbatim`
+    （没截断时不硬塞废话）
+  - `skills_repo::tests::a_skill_without_a_frontmatter_description_falls_back_to_the_head_of_the_body`
+  - `skills_repo::tests::the_summary_limit_is_small_enough_that_thirteen_skills_fit_an_8k_window`
+    （13 × 300 = 3900 字符 < 4000，直接钉住 ISSUE-036 那个场景）
+  - `tools::tests::a_skill_tool_result_returns_the_full_body_so_the_model_can_follow_it`
+  - `tools::tests::a_skill_body_too_long_for_one_refeed_says_it_was_cut_instead_of_quietly_truncating`
+  - `cargo test -p quill-server --lib` **171 passed / 0 failed**
+- **状态**：已修待真机回归（要在浏览器里重跑第 1 条任务验证）。
+

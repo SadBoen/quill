@@ -1056,14 +1056,21 @@ async fn an_enabled_skill_reaches_the_model_as_a_tool_and_can_be_called() {
         serde_json::json!(["task"]),
         "没有必填参数，模型只能瞎猜"
     );
-    // 4. 正文进了描述 —— 「SKILL 即工具」靠的就是这个。
+    // 4. 描述里放的是**摘要**，不是整段正文 —— 见 ISSUE-036。
+    //    正文每轮请求都带着的话，13 个技能就是 32430 字符（≈10810 tokens），
+    //    光固定开销就超了 8192 的窗口，连「1+1」都必然 503。
     assert!(
-        spec.description.contains("读 diff"),
-        "正文必须进工具描述，模型才知道这套方法是什么：{}",
+        spec.description.contains("审代码的固定流程"),
+        "描述要用 frontmatter 里那句说明，模型才知道这套方法管什么：{}",
+        spec.description
+    );
+    assert!(
+        !spec.description.contains("第二步：找未处理的下拉"),
+        "整段正文不该常驻在工具描述里：{}",
         spec.description
     );
 
-    // 5. 真调用一次，走的是对话里同一条执行路径。
+    // 5. 真调用一次，走的是对话里同一条执行路径；正文这时才回灌。
     let call = quill_provider::ToolCall::new(
         "c1",
         "code-review",
@@ -1072,6 +1079,10 @@ async fn an_enabled_skill_reaches_the_model_as_a_tool_and_can_be_called() {
     let out = r.call(&call).expect("SKILL 工具必须能执行");
     assert!(out.contains("code-review"), "要说清用的是哪套方法：{out}");
     assert!(out.contains("审一下 x.rs 里的下拉"), "任务要回给模型：{out}");
+    assert!(
+        out.contains("第二步：找未处理的下拉"),
+        "调用时必须把正文整段给模型，否则它拿不到方法：{out}"
+    );
 }
 
 #[tokio::test]

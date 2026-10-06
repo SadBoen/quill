@@ -261,22 +261,62 @@ pub fn to_json(r: &SkillRow) -> Value {
     })
 }
 
+/// 工具描述里最多放多少字符的技能摘要。
+///
+/// **这个数字是算出来的，不是拍的**：实测一个 8192 上下文的模型上，
+/// 13 个启用技能的正文合计 32430 字符（≈10810 tokens），**光固定开销就已经
+/// 超窗**，于是连「1+1 等于几」都必然 503。见 ISSUE-036。
+/// 描述改成有界摘要之后，同样的 13 个技能常驻开销降到 3k 字符量级。
+pub const MAX_SKILL_DESCRIPTION_CHARS: usize = 240;
+
+/// 从正文开头取一段有界摘要，给「frontmatter 的 description 为空」的情况兜底。
+///
+/// 仍然要有摘要：模型得先知道这个技能**管不管用得上**，才会决定调不调它。
+/// 完全没有描述的话，模型就只能靠工具名瞎猜。
+fn body_summary(content: &str) -> String {
+    let mut out: String = content.chars().take(MAX_SKILL_DESCRIPTION_CHARS).collect();
+    if content.chars().count() > MAX_SKILL_DESCRIPTION_CHARS {
+        out.push_str("……（完整方法正文在调用该技能时回灌，这里只是摘要。）");
+    }
+    out
+}
+
+/// 工具描述用的摘要。
+///
+/// 优先用 SKILL 自己 frontmatter 里的 `description` —— 那本来就是给它看的；
+/// 没有就退回正文开头一段。
+pub fn skill_summary(r: &SkillRow, content: &str) -> String {
+    let desc = r.description.trim();
+    if !desc.is_empty() {
+        let mut out: String = desc.chars().take(MAX_SKILL_DESCRIPTION_CHARS).collect();
+        if desc.chars().count() > MAX_SKILL_DESCRIPTION_CHARS {
+            out.push_str("……（完整方法正文在调用该技能时回灌，这里只是摘要。）");
+        }
+        return out;
+    }
+    body_summary(content)
+}
+
 /// 把 SKILL 变成一个 `ToolSpec`，挂进 `ToolRegistry`。
 ///
-/// 这就是「SKILL 即工具」的落地点：正文进 description，模型自己决定何时用。
-/// 好处是 SKILL 不占常驻上下文 —— 用不到就完全不出现。
+/// 这就是「SKILL 即工具」的落地点：模型自己决定何时调用这个技能。
+///
+/// **描述里只放摘要，不放整段正文。** 正文在技能被调用时才回灌。
+/// 之前是把正文整段塞进 `description` 的，注释还写着「SKILL 不占常驻上下文
+/// ——用不到就完全不出现」——**那句话是反的**：工具描述每轮请求都带着，
+/// 所以每个启用技能的全文都是**常驻**开销，用户装十几个技能就会把上下文窗口
+/// 顶爆，而界面一个字都不说。见 ISSUE-036。
 pub fn as_tool_spec(r: &SkillRow, content: &str) -> quill_provider::ToolSpec {
-    quill_provider::ToolSpec::new(&r.name, content)
-        .with_parameters(json!({
-            "type": "object",
-            "properties": {
-                "task": {
-                    "type": "string",
-                    "description": "要交给这套方法处理的具体任务描述。"
-                }
-            },
-            "required": ["task"]
-        }))
+    quill_provider::ToolSpec::new(&r.name, skill_summary(r, content)).with_parameters(json!({
+        "type": "object",
+        "properties": {
+            "task": {
+                "type": "string",
+                "description": "要交给这套方法处理的具体任务描述。"
+            }
+        },
+        "required": ["task"]
+    }))
 }
 
 #[cfg(test)]
@@ -302,6 +342,65 @@ mod tests {
     fn the_list_sql_filters_by_user_and_excludes_soft_deleted() {
         assert!(LIST_SQL.contains("user_id = ?"));
         assert!(LIST_SQL.contains("deleted_at IS NULL"));
+    }
+
+    #[test]
+    fn the_tool_description_carries_a_summary_not_the_whole_body() {
+        // 修之前 `ToolSpec::new(name, content)` 把整段正文塞进 description，
+        // 而工具描述每轮请求都带着 —— 13 个技能就是 32430 字符（≈10810 tokens），
+        // 光固定开销就超了 8192 的窗口。见 ISSUE-036。
+        let body = "行".repeat(5_000);
+        let mut r = row("mesh-analysis");
+        // frontmatter 的描述写得足够长，正好逼出截断标记
+        r.description = "描".repeat(MAX_SKILL_DESCRIPTION_CHARS + 100);
+        let spec = as_tool_spec(&r, &body);
+        let desc = &spec.description;
+        assert!(
+            desc.chars().count() <= MAX_SKILL_DESCRIPTION_CHARS + 80,
+            "描述必须有界，实测 {} 字符",
+            desc.chars().count()
+        );
+        assert!(
+            !desc.contains(&"行".repeat(1_000)),
+            "正文不该整段出现在描述里"
+        );
+        assert!(
+            desc.contains("调用该技能时回灌"),
+            "要说清摘要在哪看全集：{desc}"
+        );
+    }
+
+    #[test]
+    fn a_short_frontmatter_description_is_used_verbatim() {
+        // 没被截断时不要硬塞「回灌」标记，否则每条描述都多一句废话。
+        let spec = as_tool_spec(&row("csv-processing"), &"行".repeat(5_000));
+        assert_eq!(spec.description, "示例");
+    }
+
+    #[test]
+    fn a_skill_without_a_frontmatter_description_falls_back_to_the_head_of_the_body() {
+        // 描述为空时模型就只能靠工具名瞎猜，所以从正文开头取一段。
+        let mut r = row("no-desc");
+        r.description = "   ".into();
+        let body = format!("第一步：{}{}", "甲", "乙".repeat(2_000));
+        let spec = as_tool_spec(&r, &body);
+        assert!(spec.description.contains("第一步：甲"));
+        assert!(
+            spec.description.chars().count() <= MAX_SKILL_DESCRIPTION_CHARS + 80,
+            "兜底摘要同样必须有界：{} 字符",
+            spec.description.chars().count()
+        );
+    }
+
+    #[test]
+    fn the_summary_limit_is_small_enough_that_thirteen_skills_fit_an_8k_window() {
+        // 这条断言是 ISSUE-036 的直接回归：13 * (240 + 60) ≈ 3900 字符，
+        // 加上人格与工具表也还在 8192 以内。数字变了就说明预算又松了。
+        let thirteen = 13 * (MAX_SKILL_DESCRIPTION_CHARS + 60);
+        assert!(
+            thirteen < 4_000,
+            "13 个技能的常驻描述预算 {thirteen} 字符，超出可接受范围"
+        );
     }
 
     #[test]
@@ -338,7 +437,8 @@ mod tests {
     fn a_skill_becomes_a_tool_with_a_requiring_task_argument() {
         let spec = as_tool_spec(&row("code-review"), "如何审代码：先看 diff……");
         assert_eq!(spec.name, "code-review");
-        assert!(spec.description.contains("先看 diff"), "正文要进 description");
+        // 描述取 frontmatter 的 description（「示例」），不再塞正文 —— 见 ISSUE-036。
+        assert_eq!(spec.description, "示例");
         assert_eq!(
             spec.parameters["required"],
             json!(["task"]),

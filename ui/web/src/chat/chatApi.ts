@@ -29,10 +29,23 @@ export function sendChatMessage(sessionId: string, text: string): Promise<SendMe
   })
 }
 
+/**
+ * 把 ApiError 变成一句能直接显示给用户的话。
+ *
+ * 必须带上 `nextStep`：服务端在错误信封里认真写了「下一步：…」
+ * （调大 QUILL_LLM_MAX_CONTEXT_TOKENS、减少挂着的技能、别去重启模型服务…），
+ * **丢掉它等于让用户对着一句「HTTP 400」干瞪眼**。项目硬规矩是面向用户的
+ * 错误一律带「下一步」，前端这里就是最后一环。
+ */
 export function chatErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof ApiError) {
     const codeSuffix = `(${error.code})`
-    return error.message.includes(codeSuffix) ? error.message : `${error.message} ${codeSuffix}`
+    const withCode = error.message.includes(codeSuffix)
+      ? error.message
+      : `${error.message} ${codeSuffix}`
+    const step = error.nextStep?.trim()
+    if (!step || withCode.includes(step)) return withCode
+    return `${withCode} ${step}`
   }
   return error instanceof Error ? error.message : fallback
 }
