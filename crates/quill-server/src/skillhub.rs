@@ -366,6 +366,43 @@ pub struct SkillSetPage {
     pub page_size: u32,
 }
 
+/// 取一个技能集的详情：`GET /api/v1/skillsets/{slug}`。
+///
+/// 列表里已经带了大半字段，**这个端点不是为了「多拿点什么」**，
+/// 而是装专家时需要一个可信的兜底：包里若没有可解析的 `manifest.json`，
+/// 就退回这里给的 `skillSlugs`（见 `skillhub_unpack::skillset_contents`）。
+/// Octop 装之前同样先 `fetch_skillset`
+/// （`.octop-ref/octop/src/octop/infra/agents/experts/skillhub_market.py:389`）。
+pub async fn fetch_skillset(slug: &str) -> Result<HubSkillSet, HubError> {
+    let safe = validate_slug(slug)?;
+    let url = format!("{}/api/v1/skillsets/{safe}", host());
+    let value = get_json(&url).await?;
+    // 上游把详情包在 `{"skillSet": {...}}` 里；解不出来就说解不出来，
+    // 不用列表项去顶 —— 那是拿 A 的数据冒充 B 的回答。
+    let raw = value
+        .get("skillSet")
+        .cloned()
+        .or_else(|| value.get("skillset").cloned());
+    // 形状对不上归 `Parse`，不是 `Status(404)`：404 是上游**说没有**，
+    // 而这里是上游答了、只是我们认不出。两者给用户的下一步不同。
+    let raw = match raw {
+        Some(v) if v.is_object() => v,
+        _ => {
+            return Err(HubError::Parse(format!(
+                "技能集 {safe} 的详情响应里既没有 skillSet，也不是对象本身"
+            )));
+        }
+    };
+    let item: HubSkillSet =
+        serde_json::from_value(raw).map_err(|e| HubError::Parse(e.to_string()))?;
+    if item.slug.trim().is_empty() {
+        return Err(HubError::Parse(format!(
+            "技能集 {safe} 的详情里没有 slug"
+        )));
+    }
+    Ok(item)
+}
+
 /// 下载一个技能集的 zip。**读的时候就限量**，不是收下再判断。
 pub async fn download_skillset(slug: &str) -> Result<Vec<u8>, HubError> {
     let safe = validate_slug(slug)?;

@@ -4,6 +4,8 @@ pub mod api_auth;
 pub mod api_backup;
 pub mod api_chat;
 pub mod api_dispatch;
+/// 专家市场：从 SkillHub 技能集装成「我的专家」。
+pub mod api_expert_market;
 pub mod api_experts;
 pub mod api_extensions;
 pub mod api_providers;

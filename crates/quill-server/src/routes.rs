@@ -8,6 +8,7 @@ use crate::api_chat;
 use crate::api_auth;
 use crate::api_backup;
 use crate::api_dispatch;
+use crate::api_expert_market;
 use crate::api_experts;
 use crate::api_extensions;
 use crate::api_providers;
@@ -69,6 +70,14 @@ pub fn build_router(state: AppState) -> Router {
             get(|_u: crate::auth::AuthUser| async {
                 not_implemented("GET", "/api/experts/export")
             }),
+        )
+        .route(
+            "/api/experts/market",
+            get(api_expert_market::list),
+        )
+        .route(
+            "/api/experts/market/{slug}/install",
+            post(api_expert_market::install),
         )
         .route(
             "/api/experts/{slug}",
@@ -405,6 +414,8 @@ pub const CONTRACT_ROUTES: &[(&str, &str)] = &[
     ("DELETE", "/api/experts/{slug}"),
     ("POST", "/api/experts/import"),
     ("GET", "/api/experts/export"),
+    ("GET", "/api/experts/market"),
+    ("POST", "/api/experts/market/{slug}/install"),
     ("GET", "/api/teams"),
     ("POST", "/api/teams"),
     ("GET", "/api/teams/{id}"),

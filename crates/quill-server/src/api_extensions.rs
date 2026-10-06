@@ -30,7 +30,7 @@ use crate::mcp_repo::{self, McpServerRow};
 use crate::skills_repo;
 use crate::state::AppState;
 
-fn map_err(op: &str, e: quill_agent::AgentError) -> ApiError {
+pub(crate) fn map_err(op: &str, e: quill_agent::AgentError) -> ApiError {
     ApiError::internal(format!("{op}失败（详情见服务端日志）：{e}"))
 }
 
@@ -812,7 +812,7 @@ fn fifty() -> u32 {
 ///
 /// `what` 是**这次失败在做什么**（「读技能市场列表」「下载技能 xxx」），
 /// 拼在错误前面好让用户知道是哪一步坏的。
-fn hub_error(what: &str, e: crate::skillhub::HubError) -> ApiError {
+pub(crate) fn hub_error(what: &str, e: crate::skillhub::HubError) -> ApiError {
     use crate::skillhub::HubError;
     match e {
         // 调用方给错了值 → 400。**说「上游坏了」会把用户引去查一个没坏的东西。**
@@ -846,7 +846,7 @@ fn hub_error(what: &str, e: crate::skillhub::HubError) -> ApiError {
 ///
 /// **不能复用 `ProviderUnavailable` 那句** —— 它谈的是模型服务与
 /// llama-server，而这里坏的是另一个外部服务。
-const SKILLHUB_ADVICE: &str =
+pub(crate) const SKILLHUB_ADVICE: &str =
     "技能市场（SkillHub）是外部服务，本机没有它的副本。\
      先确认网络能到上游；若是自建或镜像的市场，用 `QUILL_SKILLHUB_HOST` \
      指向可达的地址后重启 quill-server。已安装的技能不受影响，\
@@ -868,7 +868,7 @@ const SKILLHUB_ADVICE: &str =
 /// 措辞照 `SKILLHUB_ADVICE` 的路子：先说清这次的**前提**是什么，
 /// 再给能照着做的下一步，最后仍要提一句「已安装的技能不受影响」——
 /// 那是这个文件里所有市场类错误共有的收尾，用户最关心的就是这句。
-const SKILLHUB_OVERSIZE_ADVICE: &str =
+pub(crate) const SKILLHUB_OVERSIZE_ADVICE: &str =
     "技能市场（SkillHub）是通的，回来的响应比我们单次接收的上限还大，\
      于是在读的过程中被我们拒收了 —— 网络与镜像都没有坏，\
      重试同一个地址不会有结果。\
@@ -989,8 +989,36 @@ pub async fn skill_hub_install_skill(
     user: AuthUser,
     Path(slug): Path<String>,
 ) -> Result<Response, ApiError> {
-    let safe = crate::skillhub::validate_slug(&slug)
-        .map_err(|e| hub_error("请求不合法", e))?;
+    let installed = install_one_skill(&state, user.0.user_id, &slug).await?;
+    Ok(Json(json!({
+        "installed": skills_repo::to_json(&installed.row),
+        "installed_count": 1,
+        "source_slug": installed.slug,
+        // 包里那个文件被当成了正文。**说出来**，别让人以为装的是 SKILL.md。
+        "body_file": installed.body_file,
+        "already_present": installed.already_present,
+    }))
+    .into_response())
+}
+
+/// 装**一个**单技能：下载、解包、落盘、登记。**HTTP 处理器与专家市场共用它。**
+///
+/// 抽出来的理由：市场里「装一个专家」会连带装它点名的那些技能，
+/// 那时已经没有请求上下文可用了 —— 所以核芯不能住在 handler 里。
+/// 复制一份的话，两边迟早在「装完要不要启用」这种地方分叉。
+pub(crate) struct InstalledSkill {
+    pub row: skills_repo::SkillRow,
+    pub slug: String,
+    pub body_file: String,
+    pub already_present: bool,
+}
+
+pub(crate) async fn install_one_skill(
+    state: &AppState,
+    user_id: quill_adapters::UserId,
+    slug: &str,
+) -> Result<InstalledSkill, ApiError> {
+    let safe = crate::skillhub::validate_slug(slug).map_err(|e| hub_error("请求不合法", e))?;
 
     let bytes = match crate::skillhub::download_skill(&safe).await {
         Ok(b) => b,
@@ -1020,10 +1048,24 @@ pub async fn skill_hub_install_skill(
     let name = mcp_repo::normalize_name(&safe).map_err(ApiError::bad_request)?;
     let path = skill_file(&dir, &name)?;
 
+    // 已经在册上就是「本来就有」，**不重复写盘**：
+    // 市场连带安装时会把同一个技能点到多次，那属于一次安装里的正常情况。
     let db = state.db()?;
+    if let Some(existing) = skills_repo::get(db, user_id, &name)
+        .await
+        .map_err(|e| map_err("查技能", e))?
+    {
+        return Ok(InstalledSkill {
+            row: existing,
+            slug: safe,
+            body_file,
+            already_present: true,
+        });
+    }
+
     let saved = skills_repo::upsert(
         db,
-        user.0.user_id,
+        user_id,
         skills_repo::SkillRow {
             name: name.clone(),
             version: "0.1.0".to_string(),
@@ -1050,18 +1092,12 @@ pub async fn skill_hub_install_skill(
         )));
     }
 
-    Ok(Json(json!({
-        "installed": skills_repo::to_json(&saved),
-        "installed_count": 1,
-        "source_slug": safe,
-        // 包里那个文件被当成了正文。**说出来**，别让人以为装的是 SKILL.md。
-        "body_file": body_file,
-        "skipped_other": unpacked.skipped_other,
-        "compressed_bytes": unpacked.compressed_bytes,
-        "uncompressed_bytes": unpacked.uncompressed_bytes,
-        "enabled": false,
-    }))
-    .into_response())
+    Ok(InstalledSkill {
+        row: saved,
+        slug: safe,
+        body_file,
+        already_present: false,
+    })
 }
 
 /// 技能包里的 manifest：它是元数据，不是技能正文。
@@ -1305,7 +1341,7 @@ pub async fn skill_hub_install(
 /// **留空是有意的**：`skills_repo::skill_summary` 在 description 为空时会
 /// 退回正文开头，模型照样看得见。而这里编一句摘要，只会让用户看到一句
 /// 我们自己造的说明。
-fn hub_description(body: &str) -> String {
+pub(crate) fn hub_description(body: &str) -> String {
     let head = body.splitn(3, "---").nth(1).unwrap_or("");
     for line in head.lines() {
         if let Some(rest) = line.trim().strip_prefix("description:") {
@@ -1387,7 +1423,7 @@ pub(crate) fn skill_body_path(
 /// **路径穿越防护**：slug 来自 URL/body，直接拼进路径就能用 `../` 跳出目录，
 /// 写到任意位置。归一后仍要确认最终路径落在根目录内 —— 归一规则被绕过时
 /// 这道检查是最后一道。
-fn skill_file(root: &std::path::Path, slug: &str) -> Result<std::path::PathBuf, ApiError> {
+pub(crate) fn skill_file(root: &std::path::Path, slug: &str) -> Result<std::path::PathBuf, ApiError> {
     let name = mcp_repo::normalize_name(slug).map_err(ApiError::bad_request)?;
     skill_body_path(root, &name)
 }

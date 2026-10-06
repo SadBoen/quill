@@ -197,12 +197,12 @@ pub async fn delete(
     })))
 }
 
-fn registry(state: &AppState) -> Result<ExpertRegistry<SqlxExpertRepository>, ApiError> {
+pub(crate) fn registry(state: &AppState) -> Result<ExpertRegistry<SqlxExpertRepository>, ApiError> {
     let db = state.db()?;
     Ok(SqlxExpertRepository::registry(std::sync::Arc::clone(db)))
 }
 
-fn expert_json(e: &Expert) -> Value {
+pub(crate) fn expert_json(e: &Expert) -> Value {
     json!({
         "id": e.id().as_str(),
         "owner": e.owner().to_compact_hex(),

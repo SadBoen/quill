@@ -111,12 +111,7 @@ fn unpack_with(bytes: &[u8], kind: PackageKind) -> Result<Unpacked, UnpackError>
     let mut zip = zip::ZipArchive::new(reader).map_err(|e| UnpackError::Zip(e.to_string()))?;
 
     let total = zip.len();
-    if total > MAX_ZIP_ENTRIES {
-        return Err(refuse(format!(
-            "包里有 {total} 个文件，超过 {} 个上限 —— 这类条目数通常是压缩炸弹的信号。",
-            MAX_ZIP_ENTRIES
-        )));
-    }
+    guard_entry_count(total)?;
 
     let compressed_bytes: u64 = bytes.len() as u64;
     let mut uncompressed_total: u64 = 0;
@@ -133,40 +128,7 @@ fn unpack_with(bytes: &[u8], kind: PackageKind) -> Result<Unpacked, UnpackError>
         if entry.is_dir() {
             continue;
         }
-        let raw = entry.size();
-        uncompressed_total = uncompressed_total.saturating_add(raw);
-
-        // 上限 A：解压后总量。**必须在解压前判断** —— 已经解出来的东西
-        // 占的内存就已经还回去了。
-        if uncompressed_total > MAX_ZIP_UNCOMPRESSED_BYTES {
-            return Err(refuse(format!(
-                "解压后超过 {} MiB 上限。",
-                MAX_ZIP_UNCOMPRESSED_BYTES / 1024 / 1024
-            )));
-        }
-
-        // 上限 B：压缩比。**这条必须在读之前算** ——
-        // 一个 3 KB 的 zip 声明解压出 300 MB，比例 100000:1，
-        // 这就是 zip bomb。
-        if raw > 0 {
-            let ratio = raw as f64 / entry.compressed_size().max(1) as f64;
-            if ratio > MAX_ZIP_COMPRESSION_RATIO {
-                return Err(refuse(format!(
-                    "压缩比 {ratio:.0}:1 超过 {MAX_ZIP_COMPRESSION_RATIO:.0}:1 上限 —— \
-                     这是压缩炸弹的典型特征，所以没有解压。"
-                )));
-            }
-        }
-
-        // 上限 C：单文件也要有界。上面的总量是累加的，
-        // 但一个 60 MB 的单文件在总量还没到线时就吃掉内存了。
-        if raw > MAX_ZIP_UNCOMPRESSED_BYTES {
-            return Err(refuse(format!(
-                "包里有单个 {} MiB 的文件，超过 {} MiB 上限。",
-                raw / 1024 / 1024,
-                MAX_ZIP_UNCOMPRESSED_BYTES / 1024 / 1024
-            )));
-        }
+        guard_entry(&entry, &mut uncompressed_total)?;
 
         // 收哪些条目由包的种类决定。**其余一律丢掉**。
         // manifest 要留着是因为它装着「这个包还引用了哪些技能」——
@@ -224,6 +186,233 @@ fn unpack_with(bytes: &[u8], kind: PackageKind) -> Result<Unpacked, UnpackError>
         uncompressed_bytes: uncompressed_total,
         skipped_other,
     })
+}
+
+/// 逐条过四道安全上限。
+///
+/// **抽出来是因为现在有两条解包路径**（装技能、装市场专家），
+/// 而这四道上限是安全边界不是顺手加的检查：复制一份过去，
+/// 早晚有一天只改了一边，另一边就悄悄不设防了。
+fn guard_entry(
+    entry: &zip::read::ZipFile<'_>,
+    uncompressed_total: &mut u64,
+) -> Result<(), UnpackError> {
+    let raw = entry.size();
+    *uncompressed_total = uncompressed_total.saturating_add(raw);
+
+    // 上限 A：解压后总量。**必须在解压前判断** —— 已经解出来的东西
+    // 占的内存就已经还回去了。
+    if *uncompressed_total > MAX_ZIP_UNCOMPRESSED_BYTES {
+        return Err(refuse(format!(
+            "解压后超过 {} MiB 上限。",
+            MAX_ZIP_UNCOMPRESSED_BYTES / 1024 / 1024
+        )));
+    }
+
+    // 上限 B：压缩比。**这条必须在读之前算** ——
+    // 一个 3 KB 的 zip 声明解压出 300 MB，比例 100000:1，这就是 zip bomb。
+    if raw > 0 {
+        let ratio = raw as f64 / entry.compressed_size().max(1) as f64;
+        if ratio > MAX_ZIP_COMPRESSION_RATIO {
+            return Err(refuse(format!(
+                "压缩比 {ratio:.0}:1 超过 {MAX_ZIP_COMPRESSION_RATIO:.0}:1 上限 —— \
+                 这是压缩炸弹的典型特征，所以没有解压。"
+            )));
+        }
+    }
+
+    // 上限 C：单文件也要有界。上面的总量是累加的，
+    // 但一个 60 MB 的单文件在总量还没到线时就吃掉内存了。
+    if raw > MAX_ZIP_UNCOMPRESSED_BYTES {
+        return Err(refuse(format!(
+            "包里有单个 {} MiB 的文件，超过 {} MiB 上限。",
+            raw / 1024 / 1024,
+            MAX_ZIP_UNCOMPRESSED_BYTES / 1024 / 1024
+        )));
+    }
+
+    Ok(())
+}
+
+/// 上限 D：条目总数。只能在遍历开始前查一次（zip 中央目录里才有总数），
+/// 所以单列一个函数，让两条路径都记得调它。
+fn guard_entry_count(total: usize) -> Result<(), UnpackError> {
+    if total > MAX_ZIP_ENTRIES {
+        return Err(refuse(format!(
+            "包里有 {total} 个文件，超过 {} 个上限 —— 这类条目数通常是压缩炸弹的信号。",
+            MAX_ZIP_ENTRIES
+        )));
+    }
+    Ok(())
+}
+
+/// 一个技能集里「当人格用」的那一篇，外加它自己的条目路径。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillsetPersona {
+    /// 包内条目路径，例如 `skillsets/pdf-toolkit.md`。
+    /// **报给用户看**：人格原文来自哪一个文件必须可追，
+    /// 上游哪天改了结构，用户能一眼看出「换了一篇」。
+    pub source_file: String,
+    pub body: String,
+}
+
+/// 技能集包里装专家要的两样东西。
+///
+/// **一趟读完，不解两遍**：zip 要重新开、要重新过四道上限，
+/// 而包是外部服务给的字节，多读一次就多一次被压缩炸弹打中的机会。
+#[derive(Debug, Clone)]
+pub struct SkillsetContents {
+    pub persona: SkillsetPersona,
+    /// 包里那份 `manifest.json`。**允许缺失** —— 见 [`skillset_contents`]
+    /// 里为什么这一条是「我们的选择」而不是照抄 Octop。
+    pub manifest: Option<crate::skillhub::HubManifest>,
+}
+
+/// 从技能集包里取出「当专家人格用的那一篇」与它点名的下游技能。
+///
+/// ## 为什么不能直接用 [`unpack`]
+///
+/// [`unpack`] 按 [`sanitize_name`] 把条目拍平成 basename，这是装技能要的
+/// （落盘时拼的是技能目录，不想要目录成分）。但挑人格**恰恰要靠目录**：
+/// 上游把编排提示放在 `skillsets/<slug>.md`，而包里的
+/// `skills/<slug>/SKILL.md` 是它引用的各个技能 —— 两者拍平之后都叫
+/// 一个 basename，就分不出哪一篇才是人格了。
+///
+/// 挑法照抄 Octop 的 `_parse_skillset_package`
+/// （`.octop-ref/octop/src/octop/infra/agents/experts/skillhub_market.py:611-621`）：
+/// 先找 `skillsets/<slug>.md`，没有就取 `skillsets/` 下的第一篇，
+/// 再退到 `identify.md`。**顺序照抄，不自己发挥** —— 上游哪天调了优先级，
+/// 我们跟着调，而不是让两边选到不同的文件。
+///
+/// 四道安全上限与 [`unpack`] 共用（见 [`guard_entry`]），
+/// 这里不重复写一遍，也不因为「只是读文本」就放松。
+///
+/// ## 与 Octop 的一处**有意不同**
+///
+/// Octop 把 `manifest.json` 当**必备**（`.octop-ref/octop/src/octop/infra/agents/experts/skillhub_market.py:608`，
+/// 缺了就 `PACKAGE_INVALID` 整单失败）。我们这里让 manifest **可缺失**：
+/// 缺了就退回上游列表项给的 `skillSlugs`，两者都没有就装一个「只有人格」的专家，
+/// 并如实回报「这个包没有列出技能」。
+/// 理由是人格本身是完整可用的 —— 为了一个描述性字段把整单废掉，
+/// 比装上一个用户能看见、也能改的专家更糟。这是**我们的选择**，不是上游做法。
+pub fn skillset_contents(bytes: &[u8], skillset_slug: &str) -> Result<SkillsetContents, UnpackError> {
+    let reader = std::io::Cursor::new(bytes);
+    let mut zip = zip::ZipArchive::new(reader).map_err(|e| UnpackError::Zip(e.to_string()))?;
+    guard_entry_count(zip.len())?;
+
+    let preferred = format!("skillsets/{skillset_slug}.md");
+    let mut first_in_skillsets: Option<String> = None;
+    let mut manifest_text: Option<String> = None;
+
+    for i in 0..zip.len() {
+        let mut entry = zip.by_index(i).map_err(|e| UnpackError::Zip(e.to_string()))?;
+        if entry.is_dir() {
+            continue;
+        }
+        let mut uncompressed_total = 0u64;
+        guard_entry(&entry, &mut uncompressed_total)?;
+
+        let name = entry.name().to_string();
+        let lower = name.to_ascii_lowercase();
+        // manifest 与人格候选都要**按条目路径**判断，所以这里不拍平。
+        if lower.ends_with("manifest.json") && manifest_text.is_none() {
+            let mut text = String::new();
+            entry
+                .read_to_string(&mut text)
+                .map_err(|e| UnpackError::Zip(format!("读取 {name} 失败：{e}")))?;
+            manifest_text = Some(text);
+            continue;
+        }
+        if !lower.ends_with(".md") {
+            continue;
+        }
+        if first_in_skillsets.is_none() && name.starts_with("skillsets/") {
+            first_in_skillsets = Some(name);
+        }
+    }
+
+    let persona = match preferred_exists(&mut zip, &preferred) {
+        true => {
+            let mut entry = zip
+                .by_name(&preferred)
+                .map_err(|e| UnpackError::Zip(e.to_string()))?;
+            read_persona_entry(&mut entry, &preferred)?
+        }
+        false => match first_in_skillsets {
+            Some(name) => {
+                let mut entry =
+                    zip.by_name(&name).map_err(|e| UnpackError::Zip(e.to_string()))?;
+                read_persona_entry(&mut entry, &name)?
+            }
+            None => {
+                let mut entry = zip.by_name("identify.md").map_err(|_| UnpackError::NoSkill)?;
+                read_persona_entry(&mut entry, "identify.md")?
+            }
+        },
+    };
+
+    let manifest = match manifest_text {
+        // 解析失败不算整单失败：这份 manifest 只用来点名下游技能，
+        // 坏掉的最诚实后果是「没认出它要哪些技能」，而不是「连人格一起不给」。
+        Some(text) => crate::skillhub::parse_manifest(&text),
+        None => None,
+    };
+
+    Ok(SkillsetContents { persona, manifest })
+}
+
+fn preferred_exists<R: std::io::Read + std::io::Seek>(zip: &mut zip::ZipArchive<R>, name: &str) -> bool {
+    zip.by_name(name).is_ok()
+}
+
+fn read_persona_entry<R: std::io::Read>(
+    entry: &mut R,
+    source_file: &str,
+) -> Result<SkillsetPersona, UnpackError> {
+    let mut body = String::new();
+    entry
+        .read_to_string(&mut body)
+        .map_err(|e| UnpackError::Zip(format!("读取 {source_file} 失败：{e}")))?;
+    if body.trim().is_empty() {
+        // 空正文当人格等于给模型一段空白，还标着「已设置人格」。直接说没有。
+        return Err(UnpackError::NoSkill);
+    }
+    Ok(SkillsetPersona {
+        source_file: source_file.to_string(),
+        body: strip_frontmatter(&body),
+    })
+}
+
+/// 去掉正文开头那一段 YAML frontmatter。
+///
+/// Octop 也要去掉（`_dedupe_frontmatter`）：那段是上游给**包**写的元数据，
+/// 不是给人格的。而 quill 的人格会整段发给模型，让模型先读一段
+/// `slug:`/`version:` 的包装，等于在人格最前面塞了一段与它无关的话。
+fn strip_frontmatter(body: &str) -> String {
+    let trimmed = body.trim_start_matches('\u{feff}').trim_start();
+    if !trimmed.starts_with("---") {
+        return body.to_string();
+    }
+    let rest = match trimmed.find('\n') {
+        Some(idx) => &trimmed[idx + 1..],
+        None => return body.to_string(),
+    };
+    // frontmatter 的结束行必须正好是 `---`（允许尾随空白），
+    // 找不到就当它不是 frontmatter —— 宁可多留一段，也别把正文吃掉。
+    let mut end: Option<(usize, usize)> = None;
+    let mut offset = 0usize;
+    for line in rest.split_inclusive('\n') {
+        let t = line.trim_end_matches(['\r', '\n']).trim_end();
+        if t == "---" || t == "..." {
+            end = Some((offset, offset + line.len()));
+            break;
+        }
+        offset += line.len();
+    }
+    match end {
+        Some((_, after)) => rest[after..].trim_start().to_string(),
+        None => body.to_string(),
+    }
 }
 
 /// 从单技能包里挑出**唯一一篇**正文。
@@ -589,5 +778,101 @@ mod tests {
         assert_eq!(unpack(&bytes).expect("应当解开").files.len(), 2);
         // 单技能模式：只收一篇。
         assert_eq!(unpack_skill(&bytes).expect("应当解开").files.len(), 1);
+    }
+
+    // --- 装专家要用的那一趟读 ---------------------------------------------
+
+    #[test]
+    fn the_persona_is_the_skillset_named_file_and_not_a_skill_it_references() {
+        // 包里同时有编排提示与它引用的技能文档。选错的话，
+        // 装出来的专家人格就是一篇技能说明。
+        // **`skillsets/` 下故意放了两篇**：只按「第一篇」选的话，
+        // 这条测试挑不出毛病 —— 排在前面的偏偏不是该选的那篇。
+        let bytes = make_zip(&[
+            ("skillsets/other-name.md", "别的包留下的编排提示"),
+            ("skillsets/pdf-toolkit.md", "你是 PDF 工具箱助手。"),
+            ("skills/pdf-extract/SKILL.md", "怎么抽文本"),
+        ]);
+        let out = skillset_contents(&bytes, "pdf-toolkit").expect("应当读出人格");
+        assert_eq!(out.persona.source_file, "skillsets/pdf-toolkit.md");
+        assert!(out.persona.body.contains("PDF 工具箱助手"));
+        assert!(
+            !out.persona.body.contains("别的包"),
+            "不能选到别人的编排提示"
+        );
+    }
+
+    #[test]
+    fn without_the_named_file_any_markdown_under_skillsets_is_used() {
+        let bytes = make_zip(&[
+            ("skillsets/other-name.md", "换个名字的编排提示"),
+            ("skills/x/SKILL.md", "技能说明"),
+        ]);
+        let out = skillset_contents(&bytes, "wanted-name").expect("应当读出人格");
+        assert_eq!(out.persona.source_file, "skillsets/other-name.md");
+        assert!(
+            !out.persona.body.contains("技能说明"),
+            "不能退而选一篇技能说明当人格"
+        );
+    }
+
+    #[test]
+    fn identify_md_is_the_last_resort_and_its_absence_is_reported() {
+        let with = make_zip(&[("identify.md", "兜底编排")]);
+        let out = skillset_contents(&with, "nope").expect("应当退回 identify.md");
+        assert_eq!(out.persona.source_file, "identify.md");
+
+        // 三处都没有 → 报错，不返回空人格。
+        let none = make_zip(&[("skills/x/SKILL.md", "只有技能")]);
+        match skillset_contents(&none, "nope") {
+            Err(UnpackError::NoSkill) => {}
+            other => panic!("没有可当人格的条目时应报错，实际：{other:?}"),
+        }
+    }
+
+    #[test]
+    fn frontmatter_is_stripped_because_it_describes_the_package_not_the_persona() {
+        let bytes = make_zip(&[(
+            "identify.md",
+            "---\nslug: pdf-toolkit\nversion: 1.0.0\n---\n\n先问用途。",
+        )]);
+        let out = skillset_contents(&bytes, "pdf-toolkit").expect("应当读出人格");
+        assert_eq!(out.persona.body, "先问用途。");
+        assert!(!out.persona.body.contains("version:"), "包装元数据不该进人格");
+    }
+
+    #[test]
+    fn a_package_without_a_manifest_still_yields_a_persona() {
+        // 这是**我们的选择**，与 Octop 不同（它缺 manifest 就整单失败）。
+        // 缺 manifest 的诚实后果是「没认出它要哪些技能」，不是「人格也没了」。
+        let bytes = make_zip(&[("skillsets/x.md", "有人格")]);
+        let out = skillset_contents(&bytes, "x").expect("应当读出人格");
+        assert!(out.manifest.is_none(), "这个包本来就没有 manifest");
+        assert!(out.persona.body.contains("有人格"));
+    }
+
+    #[test]
+    fn a_manifest_naming_skills_is_read_as_the_dependency_list_not_as_the_persona() {
+        let bytes = make_zip(&[
+            (
+                "manifest.json",
+                r#"{"slug":"pdf-toolkit","skills":[{"slug":"pdf-extract"}]}"#,
+            ),
+            ("skillsets/pdf-toolkit.md", "人格正文"),
+        ]);
+        let out = skillset_contents(&bytes, "pdf-toolkit").expect("应当读出人格");
+        assert_eq!(out.manifest.expect("manifest 应可解析").referenced_slugs(), vec!["pdf-extract"]);
+        assert_eq!(out.persona.source_file, "skillsets/pdf-toolkit.md");
+    }
+
+    #[test]
+    fn the_zip_bomb_limits_apply_to_the_expert_path_too() {
+        // 新增一条读 zip 的路径，就必须同样过四道上限。
+        // 换成「只是读文本所以放松」的话，外部服务就能拿一个包把内存打爆。
+        let bytes = vec![b'0'; 300 * 1024 * 1024];
+        match skillset_contents(&bytes, "x") {
+            Err(_) => {}
+            Ok(_) => panic!("压缩炸弹必须被拒"),
+        }
     }
 }
