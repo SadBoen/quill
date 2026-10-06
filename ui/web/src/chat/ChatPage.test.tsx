@@ -207,7 +207,13 @@ it('发送失败后仍能看到自己发出去的那条消息（ISSUE-039）', a
 
   // 失败横幅照样要显示
   await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument())
-  expect(sent).toBeGreaterThan(0)
+  // 这一条原来写的是**裸断言** `expect(sent).toBeGreaterThan(0)`。
+  // 上面那个 waitFor 只要界面出现任何一条 alert 就满足 —— 而 alert 完全可能
+  // 先由别的请求（比如 experts / healthz）触发，那一刻 POST /messages
+  // 还没发出去。于是这条断言就成了一个竞态：机器慢、并发跑全套时更容易红。
+  // 实测：Linux 上同一份代码第一轮全绿、第二轮红，单独跑又永远绿。
+  // 它断言的是「发送确实发生过」，那就等它发生，而不是假设它已经发生。
+  await waitFor(() => expect(sent).toBeGreaterThan(0))
   // 关键：欢迎屏不能再留着把消息挡住 / 抹掉
   await waitFor(() => expect(screen.getByText('帮我算一下 1+1')).toBeInTheDocument())
   expect(screen.queryByText('开始一段对话')).not.toBeInTheDocument()
