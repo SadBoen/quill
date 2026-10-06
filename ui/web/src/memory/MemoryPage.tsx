@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { type FormEvent, type ReactNode, useEffect, useState } from 'react'
+import { type FormEvent, type ReactNode, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { ApiError } from '../api/client'
@@ -15,24 +15,30 @@ function isNotFound(error: unknown): boolean {
 
 export function MemoryPage(): ReactNode {
   const { t } = useTranslation()
-  const [paths, setPaths] = useState<string[]>([])
   const [currentPath, setCurrentPath] = useState(DEFAULT_PATH)
   const [newPath, setNewPath] = useState('')
 
   const list = useQuery({ queryKey: ['wiki-pages'], queryFn: listPages, staleTime: 15_000 })
   const index = useQuery({ queryKey: ['wiki-index'], queryFn: readIndex, staleTime: 30_000 })
   const log = useQuery({ queryKey: ['wiki-log'], queryFn: readLog, staleTime: 30_000 })
-  const content = useQuery({
-    queryKey: ['wiki-page', currentPath],
-    queryFn: () => readPage(currentPath),
-    enabled: currentPath.trim().length > 0,
-  })
 
-  useEffect(() => {
-    const found = list.data?.pages ?? []
-    setPaths(found)
-    if (found.length && !found.includes(currentPath)) setCurrentPath(found[0])
-  }, [list.data, currentPath])
+  const paths = useMemo(() => list.data?.pages ?? [], [list.data])
+
+  // 当前该显示哪一页，是**算出来的**，不是存在 state 里再由 effect 纠正。
+  //
+  // 原来这里是 `useEffect(() => { setPaths(found); if (...) setCurrentPath(found[0]) }, ...)`，
+  // 也就是把「算得出」的值先存一遍、再在副作用里改一遍：多一轮渲染，
+  // 而且规则那条 lint（set-state-in-effect）说的正是这个 —— 派生状态放进
+  // state，就会和它的来源各跑各的。这里改成纯推导，行为不变：
+  // 列表非空且当前页不在其中时，仍然落到第一页；列表还没加载（空数组）
+  // 时不动它，所以不会一上来就把用户填的路径顶掉。
+  const activePath = paths.length > 0 && !paths.includes(currentPath) ? paths[0] : currentPath
+
+  const content = useQuery({
+    queryKey: ['wiki-page', activePath],
+    queryFn: () => readPage(activePath),
+    enabled: activePath.trim().length > 0,
+  })
 
   const submitNewPath = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault()
@@ -58,7 +64,7 @@ export function MemoryPage(): ReactNode {
                 key={path}
                 type="button"
                 className="secondary-button"
-                aria-current={currentPath === path ? 'page' : undefined}
+                aria-current={activePath === path ? 'page' : undefined}
                 onClick={() => setCurrentPath(path)}
               >
                 {path}
@@ -111,7 +117,7 @@ export function MemoryPage(): ReactNode {
         ) : null}
         {isNotFound(content.error) ? (
           <Card
-            title={currentPath}
+            title={activePath}
             description={t('memory.notFound', { defaultValue: '资料库里还没有这个页面。' })}
           >
             <p className="empty-card-copy">

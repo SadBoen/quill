@@ -79,6 +79,8 @@ export function ChatPage(): ReactNode {
   const session = sessions.data?.find((candidate) => candidate.id === sessionId)
   const [history, setHistory] = useState<ChatMessage[] | null>(null)
   const [historyError, setHistoryError] = useState<string | null>(null)
+  /** 当前 `history` 属于哪个会话。换会话时用它判断该不该擦掉画面。 */
+  const [historyFor, setHistoryFor] = useState<string | null>(sessionId)
   const [expertId, setExpertId] = useState('')
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
@@ -118,25 +120,51 @@ export function ChatPage(): ReactNode {
   const compactionThreshold = health.data?.llm.compaction_threshold_tokens ?? 0
   const usedTokens = lastUsage ? lastUsage.input + lastUsage.output : 0
 
+  // 「历史属于哪个会话」与历史本身一起记下来。
+  //
+  // 换会话时要清空 history，这个 reset **不能**放在 effect 里同步做：
+  // 那正是 `react-hooks/set-state-in-effect` 指的那件事（effect 体里
+  // 同步 setState 会引起级联渲染），而这里要挡的还不是性能问题 ——
+  // 是下面这个 effect 里的 `if (sending) return`。
+  //
+  // 从 /chat 直接发第一条消息时，navigate 换掉 sessionId 与「开始发送」
+  // 是同一轮里发生的。此时**绝不能**清空：那一轮已经把 user_message
+  // 帧插进 history 了，一清空，迟到的 GET 再落回来，用户看着自己的话
+  // 凭空消失（这个坑真的踩过，注释在下半个 effect 里）。
+  //
+  // 所以规则是：只在**不发送时**且会话确实换了，才把上一会话的画面擦掉。
+  // 发送期间一律不动，界面内容由那一轮自己维护。
+  //
+  // `historyFor` 必须在**开始发送时**就跟着一起改成新会话（见 handleSubmit
+  // 里的 setHistoryFor）。否则从 /chat 直接发第一条消息会踩这么一下：
+  // navigate 把 sessionId 换成新 id 时 sending 还是 true，所以这一段没擦；
+  // 等流结束 sending 变 false，而 historyFor 仍是旧的 null —— 条件成立，
+  // 刚流出来的那一屏被当成「上一个会话的画面」擦掉，用户看着自己刚收到的
+  // 答案凭空消失。**这正是当初把擦除搬出 effect 要保住的行为**，
+  // 搬的时候必须一起搬。
+  if (!sending && historyFor !== sessionId) {
+    setHistoryFor(sessionId)
+    setHistory(null)
+    setHistoryError(null)
+  }
+
   useEffect(() => {
-    if (!sessionId) {
-      setHistory(null)
-      setHistoryError(null)
-      return
-    }
-    // 正在发送时**不要**重新拉历史。
-    //
-    // 从 /chat 直接发第一条消息时，navigate 换掉 sessionId 会触发这个 effect，
-    // 而它的 GET 与 POST 是并发发出的 —— GET 先落地（那时用户消息还没写库，
-    // 返回空列表），POST 随后把 `user_message` 帧插进 history，于是这条刚画
-    // 出来的气泡被迟到的 GET 冲掉，用户看着自己的话凭空消失。
-    // 发送中界面上的内容由这一轮自己负责维护，不交给历史拉取。
+    if (!sessionId) return
+    // 正在发送时**不要**重新拉历史（理由见上面那段注释）。
     if (sending) return
     let disposed = false
     generation.current += 1
     const current = generation.current
-    setHistory(null)
-    setHistoryError(null)
+    // 这里**不再**清空 history：擦画面这件事已经交给上面那段渲染期判断，
+    // 它只在「真的换了会话且不在发送中」时才做。
+    //
+    // 原来这个 effect 开头也有一份 setHistory(null)。两份清空各有各的触发
+    // 条件，于是同一个「换会话」被清两次；而 effect 里同步 setState 正是
+    // set-state-in-effect 指的那件事。现在只剩渲染期那一处。
+    //
+    // 少掉的那次清空不损失任何东西：发送结束后这一轮重拉的是**同一个**
+    // 会话，期间界面上的内容由流式回调一路维护，本来就是准的；让它继续
+    // 显示到新数据落地，比闪一下 loading 更贴近用户正在看的东西。
     void loadMessageHistory(sessionId)
       .then((body) => {
         if (!disposed && generation.current === current) setHistory(body.messages)
@@ -222,6 +250,12 @@ export function ChatPage(): ReactNode {
     try {
       const targetId = sessionId ?? (await createSession(expertId || generalExpert?.id)).id
       targetIdForNotice = targetId
+      // 从 /chat 直接发第一条消息时，navigate 会把 sessionId 从 null 换成
+      // 这个新会话 id。上面那段渲染期判断靠 `historyFor` 认「画面属于谁」，
+      // 所以这里必须**在 navigate 之前**就把归属改掉：等流结束 sending 变 false
+      // 时，historyFor 要已经是新会话，否则那一屏刚出来的回复会被当成
+      // 「上一个会话的残留」擦掉。
+      setHistoryFor(targetId)
       if (!sessionId) navigate(`/chat/${targetId}`, { replace: true })
       setHistory((current) => current ?? [])
       setLive({ started: false, text: '', reasoning: '', tools: [] })

@@ -376,3 +376,79 @@ it('思考增量与正文分开，不会被当成答案渲染', async () => {
   emit(frame('done', DONE))
   close()
 })
+
+// ——— 换会话（2026-10-07）———
+
+/**
+ * 「换会话时擦掉上一会话的画面」这条搬到了渲染期（见 ChatPage 里那段注释），
+ * 搬动的理由是 lint 那条 `set-state-in-effect`。搬错了的后果用户直接可见：
+ * 要么两个会话的话混在一屏，要么刚发完的那一屏被当成残留擦掉。
+ * 之前没有测试覆盖这一段 —— 那次搬动正是靠上面那条流式用例撞出来的。
+ */
+it('切到另一个会话时，上一个会话的话不会留在屏幕上', async () => {
+  /** 造一条字段齐全的消息：少一个字段，渲染时就会在 `messageBlocks` 上炸。 */
+  const msg = (id: string, seq: number, role: 'user' | 'assistant', content: string) => ({
+    id,
+    seq,
+    role,
+    status: 'complete',
+    content,
+    reasoning: '',
+    input_tokens: 0,
+    output_tokens: 0,
+    turn_ms: 0,
+    error_code: '',
+    created_at: seq,
+  })
+
+  const HISTORY: Record<string, ReturnType<typeof msg>[]> = {
+    SESSION_A: [msg('A1', 1, 'user', 'A 会话里问的'), msg('A2', 2, 'assistant', 'A 会话的回答')],
+    SESSION_B: [msg('B1', 1, 'user', 'B 会话里问的'), msg('B2', 2, 'assistant', 'B 会话的回答')],
+  }
+
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.includes('/api/experts')) return jsonResponse(EXPERTS)
+    if (url.includes('/healthz')) return jsonResponse({ llm: { max_context_tokens: 8192 } })
+    // 列表是裸的 `/api/sessions`（`loadSessions()` 不带查询串），
+    // 而带 id 的会话详情/历史是 `/api/sessions/<id>/…` —— 两者必须分开判，
+    // 否则 `/api/sessions/SESSION_A/messages` 会被当成列表。
+    const hit = Object.keys(HISTORY).find((sid) => url.includes(`/sessions/${sid}/`))
+    if (hit === 'SESSION_B') {
+      // B 的历史**故意不返回**：让切换停在新数据落地之前。
+      //
+      // 这样才能测到「A 的话有没有被擦掉」。若 B 的历史立刻回来，
+      // `setHistory(B)` 会把 A 覆盖掉，于是无论换会话时有没有做 reset，
+      // 「A 不在屏幕上」这条断言都成立 —— 那个测试是空的。
+      // 卡住 B 才能分辨这两种实现。
+      return new Promise<Response>(() => {})
+    }
+    if (hit) return jsonResponse({ messages: HISTORY[hit] })
+    if (/\/api\/sessions\/?(\?|$)/.test(url)) {
+      return jsonResponse({
+        sessions: [
+          { id: 'SESSION_A', title: 'A 会话', expert_id: 'general', message_count: 2, model: 'm', last_active_at: 2 },
+          { id: 'SESSION_B', title: 'B 会话', expert_id: 'general', message_count: 2, model: 'm', last_active_at: 1 },
+        ],
+      })
+    }
+    return jsonResponse({})
+  })
+
+  renderPage('/chat/SESSION_A', fetchMock)
+  await waitFor(() => expect(screen.getByText('A 会话的回答')).toBeInTheDocument())
+
+  // 侧栏默认是收起的，会话按钮不在可访问性树里，得先把它打开。
+  // 这里按 class 找而不是按 aria-label：那条文案走 i18n，测试环境里
+  // 解析出来的字面量不该成为这个用例的依赖。
+  const toggle = document.querySelector('.chat-titlebar-toggle')
+  expect(toggle).not.toBeNull()
+  fireEvent.click(toggle as Element)
+  fireEvent.click(await screen.findByRole('button', { name: /B 会话/ }))
+
+  // B 的历史被故意卡住，所以这里断言的是**切换当下**：
+  // A 的话必须已经消失。留着它就是两个会话混在一屏 ——
+  // 而这正是换会话那段 reset 存在的原因。
+  await waitFor(() => expect(screen.queryByText('A 会话的回答')).not.toBeInTheDocument())
+  expect(screen.queryByText('A 会话里问的')).not.toBeInTheDocument()
+})
