@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 
 import { ApiError } from '../api/client'
 import { Card, ErrorNotice, StatusBadge } from '../components/Page'
+import { IconLayoutGrid, IconList, IconRefresh } from './icons'
 import {
   EXPERTS_KEY,
   MARKET_KEY,
@@ -43,6 +44,24 @@ import {
  * 英文界面于是整段显示中文。
  */
 
+/**
+ * 卡片 / 列表两种看法，**共用「我的专家」那个记忆键**（`octop:experts-view`）。
+ * 一个页面一个偏好：在「我的专家」选了列表，切到「市场」不该又变回卡片 ——
+ * 那会让用户以为切换丢了。
+ */
+const VIEW_STORAGE_KEY = 'octop:experts-view'
+
+type MarketView = 'card' | 'list'
+
+function loadView(): MarketView {
+  try {
+    return localStorage.getItem(VIEW_STORAGE_KEY) === 'list' ? 'list' : 'card'
+  } catch {
+    // 隐私模式下 localStorage 会抛。不因为存不下一个偏好就把整页画不出来。
+    return 'card'
+  }
+}
+
 /** 后端这条路由还没接上时是 501，与「上游挂了」的 503 必须分开讲。 */
 function isRouteMissing(error: unknown): boolean {
   return error instanceof ApiError && (error.status === 501 || error.code === 'not_implemented')
@@ -59,6 +78,7 @@ function skillStatusTone(status: MarketSkillStatus): 'success' | 'neutral' | 'da
 export function MarketTab(): ReactNode {
   const { t } = useTranslation()
   const [page, setPage] = useState(1)
+  const [view, setView] = useState<MarketView>(loadView)
   const query = useQuery({
     queryKey: [...MARKET_KEY, page],
     queryFn: () => listMarketExperts(page),
@@ -73,6 +93,15 @@ export function MarketTab(): ReactNode {
   // 不是拿它当总数显示。
   const hasMore = data ? items.length >= (data.page_size ?? MARKET_PAGE_SIZE) : false
 
+  const onViewChange = (next: MarketView): void => {
+    setView(next)
+    try {
+      localStorage.setItem(VIEW_STORAGE_KEY, next)
+    } catch {
+      /* 存不下就算了：这一次的切换已经生效，不必因此报错打扰用户 */
+    }
+  }
+
   return (
     <div className="settings-stack">
       <Card
@@ -81,17 +110,49 @@ export function MarketTab(): ReactNode {
           route: MARKET_ROUTE,
           defaultValue: '数据来自 {{route}}，来源是外部市场的 skillset 目录。这里没有下载量、评分、在线状态 —— 上游没给，我们就不显示。',
         })}
-        actions={(
+        actions={undefined}
+      >
+        {/* 控件放正文里而不是卡片的 actions 槽：那个槽只有约 150px 宽，
+            看法切换 + 刷新放不下，会折成两行、看起来像没排完。 */}
+        <div className="experts-market-controls">
+          <span className="experts-view-mode" role="group">
+            <button
+              type="button"
+              aria-pressed={view === 'card'}
+              className="experts-view-mode-item"
+              data-testid="experts-market-view-card"
+              onClick={() => onViewChange('card')}
+            >
+              <span className="experts-view-mode-label">
+                <IconLayoutGrid />
+                {t('experts.market.viewCard', { defaultValue: '卡片' })}
+              </span>
+            </button>
+            <button
+              type="button"
+              aria-pressed={view === 'list'}
+              className="experts-view-mode-item"
+              data-testid="experts-market-view-list"
+              onClick={() => onViewChange('list')}
+            >
+              <span className="experts-view-mode-label">
+                <IconList />
+                {t('experts.market.viewList', { defaultValue: '列表' })}
+              </span>
+            </button>
+          </span>
           <button
             type="button"
-            className="secondary-button"
+            className="experts-toolbar-icon-btn"
             data-testid="experts-market-refresh"
+            aria-label={t('common.refresh', { defaultValue: '刷新' })}
+            title={t('common.refresh', { defaultValue: '刷新' })}
+            disabled={query.isFetching}
             onClick={() => void query.refetch()}
           >
-            {t('common.refresh', { defaultValue: '刷新' })}
+            <IconRefresh />
           </button>
-        )}
-      >
+        </div>
         {/* 上游地址必须显示：这**不是内置列表**，断网时用户得知道去哪里看。 */}
         {data?.host ? (
           <p className="field-help experts-market-host">
@@ -150,11 +211,9 @@ export function MarketTab(): ReactNode {
         ) : null}
 
         {items.length > 0 ? (
-          <ul className="experts-market-list">
+          <ul className="experts-market-list" data-view={view}>
             {items.map((item) => (
-              <li className="experts-market-card" key={item.slug} data-slug={item.slug}>
-                <MarketItem item={item} />
-              </li>
+              <MarketItem key={item.slug} item={item} />
             ))}
           </ul>
         ) : null}
@@ -211,7 +270,12 @@ function MarketItem({ item }: { item: MarketExpert }): ReactNode {
   })
 
   return (
-    <>
+    <li
+      className="experts-market-card"
+      data-slug={item.slug}
+      // 装完那张卡要横跨整行：结果块挤在 1/3 宽的一格里根本读不了。
+      data-expanded={install.isSuccess ? 'true' : undefined}
+    >
       <div className="experts-market-main">
         <div className="experts-market-head">
           <strong>{label || t('experts.market.noName', { defaultValue: '（上游没给名称）' })}</strong>
@@ -247,7 +311,7 @@ function MarketItem({ item }: { item: MarketExpert }): ReactNode {
         </p>
       </div>
       <MarketAction item={item} install={install} />
-    </>
+    </li>
   )
 }
 

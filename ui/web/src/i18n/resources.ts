@@ -753,6 +753,8 @@ export const en = {
       marketNext:
         'Pick a skillset, install it, then turn the skills it brought in on from “Skill packs”. They land disabled on purpose.',
       market: {
+        viewCard: 'Cards',
+        viewList: 'List',
         description:
           'Data comes from {{route}}; the source is the skillset catalog of an external market. There are no download counts, ratings, or online states here — upstream does not give them, so we do not show them.',
         host:
@@ -1462,6 +1464,8 @@ export const zhCN = {
       marketNext:
         '挑一个专家包装进来，然后去「技能包」页把它带进来的技能打开 —— 它们落库时是停用的，这是刻意的。',
       market: {
+        viewCard: '卡片',
+        viewList: '列表',
         description:
           '数据来自 {{route}}，来源是外部市场的 skillset 目录。这里没有下载量、评分、在线状态 —— 上游不给，我们就不显示。',
         host: '上游是 {{host}}。它挂了或断网时这一页连不上 —— 那不影响你已经装好的专家。',

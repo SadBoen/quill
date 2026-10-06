@@ -218,6 +218,37 @@ it('上游连不上（503）显示错误原文与下一步，不画空列表', a
   expect(document.querySelectorAll('.experts-market-card')).toHaveLength(0)
 })
 
+it('卡片与列表两种看法都能切，且偏好被记住', async () => {
+  // 同一页里两种版式：切换只改排法，不改内容 —— 断言的是那份列表的 data-view，
+  // 因为条目仍然是同一批（同一个 data-slug 节点，不是两套组件）。
+  renderTab(withInstall(() => Promise.resolve(jsonResponse(INSTALL_OK))))
+  await waitForCard('pdf-toolkit')
+
+  const list = document.querySelector('.experts-market-list')
+  expect(list?.getAttribute('data-view')).toBe('card')
+
+  fireEvent.click(screen.getByTestId('experts-market-view-list'))
+  expect(list?.getAttribute('data-view')).toBe('list')
+  expect(document.querySelectorAll('[data-slug="pdf-toolkit"]')).toHaveLength(1)
+  // 记忆键与「我的专家」共用一个：在那边选过列表，这边不该又变回卡片。
+  expect(localStorage.getItem('octop:experts-view')).toBe('list')
+
+  fireEvent.click(screen.getByTestId('experts-market-view-card'))
+  expect(list?.getAttribute('data-view')).toBe('card')
+  expect(localStorage.getItem('octop:experts-view')).toBe('card')
+})
+
+it('装完那张卡横跨整行，结果说明不会挤在窄格里', async () => {
+  renderTab(withInstall(() => Promise.resolve(jsonResponse(INSTALL_OK))))
+  const card = await waitForCard('pdf-toolkit')
+  expect(card.getAttribute('data-expanded')).toBeNull()
+
+  fireEvent.click(within(card).getByRole('button', { name: '安装为我的专家' }))
+  await waitFor(() => expect(card.getAttribute('data-expanded')).toBe('true'))
+  // 仍然只有一张卡：一个包两条路径各画一遍，用户会以为装了两个。
+  expect(document.querySelectorAll('[data-slug="pdf-toolkit"]')).toHaveLength(1)
+})
+
 it('上游没给总数时显示「共 ? 个」，分页控件仍然保留', async () => {
   renderTab(() => Promise.resolve(jsonResponse({ ...LIST, total: null })))
   await waitFor(() => expect(screen.getByText(/第 1 页 · 共 \? 个（上游没给总数/)).toBeInTheDocument())
