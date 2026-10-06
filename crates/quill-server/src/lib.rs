@@ -24,6 +24,10 @@ pub mod ratelimit;
 pub mod routes;
 pub mod server;
 pub mod session_metrics;
+/// 技能市场的上游客户端（SkillHub）。
+pub mod skillhub;
+/// SkillHub 技能包的解包与安全上限。
+pub mod skillhub_unpack;
 pub mod skills_repo;
 pub mod state;
 pub mod teams_repo;

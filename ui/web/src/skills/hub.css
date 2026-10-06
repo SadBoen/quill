@@ -1,0 +1,140 @@
+/* 技能市场。刻意不复用 skills.css 的行样式：那一行是「开关 + 一段说明」，
+   这里一行是「一个包 + 一个安装按钮」，右侧是主动作而不是开关。 */
+
+.hub-host {
+  background: var(--accent-soft);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin: 0 0 12px;
+  padding: 8px 10px;
+}
+
+.hub-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.hub-card {
+  align-items: flex-start;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 10px 12px;
+}
+
+.hub-card-main {
+  min-width: 0;
+}
+
+.hub-card-head {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.hub-slug {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.hub-summary {
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.hub-action {
+  flex-shrink: 0;
+  max-width: 320px;
+  text-align: right;
+}
+
+.hub-installed {
+  max-width: 340px;
+  text-align: right;
+}
+
+.hub-ok {
+  color: var(--success);
+  font-size: 12px;
+  margin: 0 0 4px;
+}
+
+/* 「点名了但没装」这一段要显眼但不能刺眼 —— 它是解释，不是报错：
+   包真的缺那几个技能的上游正文，这是事实，不是用户的操作失误。 */
+.hub-referenced {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.hub-referenced-list {
+  color: var(--faint);
+  display: block;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  margin-top: 2px;
+}
+
+.hub-pager {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  margin-top: 12px;
+}
+
+/* 单技能那一层的搜索框 + 榜单页签。 */
+.hub-search {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+
+.hub-search input {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  flex: 1 1 260px;
+  font: inherit;
+  font-size: 12px;
+  min-width: 0;
+  padding: 7px 10px;
+}
+
+.hub-search input:focus-visible {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent-soft);
+}
+
+.hub-kinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 12px;
+}
+
+/* 「这一页不完整」要说清楚，但它不是报错：
+   6 个榜单里少拉了 1 个是上游的现状，不是用户的操作失误。
+   颜色与 .hub-referenced 一致，理由相同。 */
+.hub-partial {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+  margin: 0 0 10px;
+  overflow-wrap: anywhere;
+}

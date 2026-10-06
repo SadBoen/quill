@@ -17,7 +17,7 @@
 //! 不混进 `servers` —— 前端会把 `servers` 原样回填进编辑表单再 POST 回来，
 //! 混进只读字段会被 `parse_server` 的字段白名单拒掉。
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::{json, Value};
@@ -511,6 +511,531 @@ fn kv(v: Option<&Value>, label: &str) -> Result<Vec<(String, String)>, ApiError>
     }
     out.sort();
     Ok(out)
+}
+
+// ------------------------------------------------------------------ 技能市场
+
+/// 装进来的技能在 `skills.source` 里存的值。
+///
+/// **不能是 `"skillhub"`。** 0001 迁移的 CHECK 是
+/// `source IN ('builtin','local','bundle','market')` —— 第一版写死
+/// `"skillhub"`，于是每次安装都撞 CHECK 变成 500。错误信息倒是很诚实
+/// （把整条约束打了出来），但那条错误里没有一个字在说「你该填 market」。
+pub const HUB_SOURCE: &str = "market";
+
+#[cfg(test)]
+mod hub_error_tests {
+    use super::{hub_error, SKILLHUB_ADVICE};
+    use crate::skillhub::HubError;
+
+    #[test]
+    fn a_missing_skill_is_a_404_not_a_service_outage() {
+        // 真机实测：上游对不存在的 slug 回 404。第一版把它归成 503，
+        // 界面上就显示成「技能市场没连上」—— 而市场明明好好地回了话。
+        let e = hub_error("下载技能 nope 失败", HubError::Status(404));
+        assert_eq!(e.status(), axum::http::StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn a_bad_slug_from_the_caller_is_a_400_not_a_5xx() {
+        let e = hub_error("请求不合法", HubError::Input("技能标识含斜杠".into()));
+        assert_eq!(e.status(), axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn a_genuine_outage_says_what_to_do_about_the_market_and_nothing_about_the_model() {
+        // 这条是 ISSUE-054 的钉子：之前挂的是 `ProviderUnavailable`，
+        // 它的「下一步」让用户去 curl 模型端点、启动 llama-server。
+        let e = hub_error("读技能市场列表失败", HubError::Fetch("timeout".into()));
+        assert_eq!(e.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(e.code(), "upstream_unavailable");
+        assert_eq!(e.next_step(), SKILLHUB_ADVICE);
+        assert!(!SKILLHUB_ADVICE.contains("llama-server"));
+        assert!(!SKILLHUB_ADVICE.contains("QUILL_LLM_BASE_URL"));
+        // 下一步要真的提到那个能救它的开关。
+        assert!(SKILLHUB_ADVICE.contains("QUILL_SKILLHUB_HOST"));
+    }
+
+    #[test]
+    fn the_detail_keeps_the_actual_reason_next_to_the_generic_advice() {
+        let e = hub_error("读技能市场列表失败", HubError::Parse("期望 skillSets".into()));
+        let d = e.detail();
+        assert!(d.contains("读技能市场列表失败"), "{d}");
+        assert!(d.contains("skillSets"), "真正的原因要留着：{d}");
+    }
+}
+
+#[cfg(test)]
+mod hub_source_tests {
+    use super::HUB_SOURCE;
+
+    /// 测试用的上游 manifest 样例（结构取自 2026-10-06 的真实响应）。
+    const REAL_MANIFEST: &str = r#"{
+      "slug": "tech-test-automation",
+      "displayName": "自动化测试",
+      "skillSlugs": ["superpowers-tdd", "test-case-generator"]
+    }"#;
+
+    #[test]
+    fn the_source_value_is_one_the_schema_actually_accepts() {
+        // 与 0001 迁移里那条 CHECK 一一对应。改了这条约束就要同步改这里，
+        // 而**先撞它的人应该是测试**，不是用户在真机上点安装。
+        assert!(
+            ["builtin", "local", "bundle", "market"].contains(&HUB_SOURCE),
+            "{HUB_SOURCE:?} 不在 skills.source 的 CHECK 允许值里"
+        );
+    }
+
+    #[test]
+    fn an_installed_skill_is_named_after_the_package_not_the_file_inside_it() {
+        // 实测（2026-10-06）：`tech-test-automation` 的 zip 里那篇正文叫
+        // `identify.md`。按文件名装出来技能就叫 `identify` —— 这个名字
+        // 既看不懂，又会直接出现在对话工具表里让模型调（tool_name 就是 slug）。
+        // 一个包 = 一个技能，名字必须是那个包。
+        let manifest = crate::skillhub::parse_manifest(REAL_MANIFEST)
+            .expect("manifest 应当能解析");
+        let file_name = "identify.md";
+        let chosen = manifest.slug.trim().to_string();
+        assert_eq!(chosen, "tech-test-automation");
+        assert_ne!(
+            chosen,
+            file_name.trim_end_matches(".md"),
+            "绝不能退回包内文件名"
+        );
+    }
+}
+
+/// `GET /api/extensions/skill-hub` —— 列出技能市场（SkillHub）里的技能集。
+///
+/// **上游是外部服务**（默认 `https://api.skillhub.cn`，可用 `QUILL_SKILLHUB_HOST` 改）。
+/// 抄 Octop 的 `skill-packages/hub/search` 与 `/hub/rankings` 背后那套。
+///
+/// 上游挂了就说挂了。**绝不能返回空列表** ——
+/// 「市场连不上」与「市场里没有技能」在界面上是两件完全不同的事，
+/// 而空列表这句话会让用户以为是后者，然后跑去怀疑自己的技能包。
+pub async fn skill_hub_list(
+    Query(q): Query<HubListQuery>,
+) -> Result<Response, ApiError> {
+    let page = match crate::skillhub::list_skillsets(q.page, q.page_size).await {
+        Ok(p) => p,
+        Err(e) => {
+            // 503 而不是 502：本项目把「上游连不上」与「上游回错」都归到 503
+            // （见 error.rs 里的显式取舍），另开一个 502 只会与整套错误语义不一致。
+            // 但**不能**用 `service_unavailable` —— 它那句「下一步」谈的是
+            // 模型服务，见 `hub_error` 的说明。
+            return Err(hub_error("读技能市场列表失败", e));
+        }
+    };
+    Ok(Json(json!({
+        "host": crate::skillhub::host(),
+        "items": page.items,
+        "total": page.total,
+        "page": page.page,
+        "page_size": page.page_size,
+    }))
+    .into_response())
+}
+
+#[derive(serde::Deserialize)]
+pub struct HubListQuery {
+    #[serde(default = "one")]
+    pub page: u32,
+    #[serde(default = "fifty")]
+    pub page_size: u32,
+}fn one() -> u32 {
+    1
+}
+fn fifty() -> u32 {
+    50
+}
+
+// ---------------------------------------------------------------------------
+// 单技能：搜索、榜单、安装
+// ---------------------------------------------------------------------------
+
+/// 技能市场出错的统一说法。
+///
+/// 为什么要一个 helper：这些错误散在 6 个 handler 里，各写一遍的话，
+/// 迟早有一处挂上**说错话**的下一步 —— 而那正是用户唯一会照着做的东西。
+/// 真机已经踩过一次：技能 404 的「下一步」写着「执行 curl $QUILL_LLM_BASE_URL/models
+/// 确认端点活着」，把用户引向一台与技能市场毫无关系的机器。见 ISSUE-054。
+///
+/// `what` 是**这次失败在做什么**（「读技能市场列表」「下载技能 xxx」），
+/// 拼在错误前面好让用户知道是哪一步坏的。
+fn hub_error(what: &str, e: crate::skillhub::HubError) -> ApiError {
+    use crate::skillhub::HubError;
+    match e {
+        // 调用方给错了值 → 400。**说「上游坏了」会把用户引去查一个没坏的东西。**
+        HubError::Input(detail) => ApiError::bad_request(format!("{what}：{detail}")),
+        // 上游说「没有这个东西」→ 404，不是 503。
+        // 它与「连不上」在界面上是两件事，见 ISSUE-055。
+        HubError::Status(404) => ApiError::entity_not_found(format!(
+            "{what}：技能市场里没有这个东西（上游返回 404），它可能已被下架。"
+        )),
+        other => ApiError::upstream_unavailable(
+            format!("{what}：{}", other.message()),
+            SKILLHUB_ADVICE,
+        ),
+    }
+}
+
+/// 技能市场这一类错误的「下一步」。
+///
+/// **不能复用 `ProviderUnavailable` 那句** —— 它谈的是模型服务与
+/// llama-server，而这里坏的是另一个外部服务。
+const SKILLHUB_ADVICE: &str =
+    "技能市场（SkillHub）是外部服务，本机没有它的副本。\
+     先确认网络能到上游；若是自建或镜像的市场，用 `QUILL_SKILLHUB_HOST` \
+     指向可达的地址后重启 quill-server。已安装的技能不受影响，\
+     它们本来就在本机磁盘上。";
+
+#[derive(serde::Deserialize)]
+pub struct HubSkillQuery {
+    #[serde(default)]
+    pub q: String,
+    #[serde(default = "fifty")]
+    pub limit: u32,
+}
+
+/// `GET /api/extensions/skill-hub/skills` —— 搜单技能。
+///
+/// 与 [`skill_hub_list`]（技能包）是**两件事**，不是同一个列表的两种叫法。
+/// 上游实测：技能包 56 个，单技能搜索 `pdf` 出来 5 个，两边 slug 各不相同。
+pub async fn skill_hub_search(
+    Query(q): Query<HubSkillQuery>,
+) -> Result<Response, ApiError> {
+    let items = match crate::skillhub::search_skills(&q.q, q.limit).await {
+        Ok(v) => v,
+        Err(e) => return Err(hub_error("搜技能市场失败", e)),
+    };
+    Ok(Json(json!({
+        "host": crate::skillhub::host(),
+        "query": q.q,
+        "items": items,
+        // **没有 total**：上游的 search 就是一个数组。
+        // 拿 items.len() 当「共 N 个」是在编一个总数。
+        "total": null,
+    }))
+    .into_response())
+}
+
+#[derive(serde::Deserialize)]
+pub struct HubRankQuery {
+    #[serde(default = "recommended")]
+    pub kind: String,
+}
+
+fn recommended() -> String {
+    "recommended".to_string()
+}
+
+/// `GET /api/extensions/skill-hub/rankings?kind=` —— 上游的推荐/热门榜单。
+///
+/// `kind=all` 是**我们**的聚合词（上游没有这个端点），走并发拉全部再合并。
+/// 部分榜单没拉到时，成功的那部分照常返回、失败的记进 `errors` ——
+/// 全部失败才算连不上。
+pub async fn skill_hub_rankings(
+    Query(q): Query<HubRankQuery>,
+) -> Result<Response, ApiError> {
+    if q.kind == "all" {
+        let all = match crate::skillhub::showcase_all().await {
+            Ok(v) => v,
+            Err(e) => return Err(hub_error("拉技能市场榜单失败", e)),
+        };
+        let errors: serde_json::Map<String, serde_json::Value> = all
+            .errors
+            .iter()
+            .map(|(k, m)| (k.clone(), serde_json::Value::String(m.clone())))
+            .collect();
+        return Ok(Json(json!({
+            "host": crate::skillhub::host(),
+            "kind": "all",
+            "section": null,
+            "items": all.merged(),
+            "sections": all.sections.iter().map(|s| json!({
+                "kind": s.kind,
+                "section": s.section,
+                "count": s.items.len(),
+            })).collect::<Vec<_>>(),
+            "errors": errors,
+            "kinds": crate::skillhub::SHOWCASE_KINDS,
+        }))
+        .into_response());
+    }
+
+    let board = match crate::skillhub::showcase_skills(&q.kind).await {
+        Ok(v) => v,
+        Err(e) => return Err(hub_error("拉技能市场榜单失败", e)),
+    };
+    Ok(Json(json!({
+        "host": crate::skillhub::host(),
+        "kind": board.kind,
+        // 上游自己给这一份榜单起的名字，如 `hot_downloads`。原样透传。
+        "section": board.section,
+        "items": board.items,
+        "errors": {},
+        "kinds": crate::skillhub::SHOWCASE_KINDS,
+    }))
+    .into_response())
+}
+
+/// `POST /api/extensions/skill-hub/skills/{slug}/install` —— 装一个单技能。
+///
+/// ## 技能名必须是 slug，不能是包里的文件名
+///
+/// 实测 `pdf-image-text-extractor` 的包里有 `SKILL.md`、`README.md`、
+/// `README.en.md` 三个 `.md`。按文件名命名会装出一个叫 `skill` 的技能 ——
+/// 这个名字会直接出现在对话工具表里让模型调（`tool_name` 就是 slug）。
+/// 包的标识只有一个权威答案：**URL 里那个 slug**。
+pub async fn skill_hub_install_skill(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(slug): Path<String>,
+) -> Result<Response, ApiError> {
+    let safe = crate::skillhub::validate_slug(&slug)
+        .map_err(|e| hub_error("请求不合法", e))?;
+
+    let bytes = match crate::skillhub::download_skill(&safe).await {
+        Ok(b) => b,
+        Err(e) => return Err(hub_error(&format!("下载技能 {safe} 失败"), e)),
+    };
+
+    // 单技能用**另一套**解包规则，见 `skillhub_unpack::PackageKind`。
+    let unpacked = crate::skillhub_unpack::unpack_skill(&bytes)
+        .map_err(|e| ApiError::bad_request(e.message()))?;
+
+    let body = unpacked
+        .files
+        .first()
+        .map(|(_, b)| b.clone())
+        .ok_or_else(|| ApiError::bad_request("这个包里没有技能正文。".to_string()))?;
+    // 正文来自包里哪个文件，要报给用户 —— 换了名字也得能追到。
+    let body_file = unpacked
+        .files
+        .first()
+        .map(|(n, _)| n.clone())
+        .unwrap_or_default();
+
+    let dir = skill_dir(&state.config);
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| ApiError::internal(format!("创建技能目录 {} 失败：{e}", dir.display())))?;
+
+    let name = mcp_repo::normalize_name(&safe).map_err(ApiError::bad_request)?;
+    let path = skill_file(&dir, &name)?;
+
+    let db = state.db()?;
+    let saved = skills_repo::upsert(
+        db,
+        user.0.user_id,
+        skills_repo::SkillRow {
+            name: name.clone(),
+            version: "0.1.0".to_string(),
+            source: HUB_SOURCE.to_string(),
+            source_ref: Some(safe.clone()),
+            description: hub_description(&body),
+            // 装完不启用。理由与技能包那条一样，见 skill_hub_install 的文档。
+            enabled: false,
+            install_path: path.display().to_string(),
+            tool_allowlist: Vec::new(),
+            created_at: 0,
+            updated_at: 0,
+        },
+        skills_repo::content_hash(&body),
+    )
+    .await
+    .map_err(|e| map_err("登记技能", e))?;
+
+    if let Err(e) = std::fs::write(&path, &body) {
+        return Err(ApiError::internal(format!(
+            "技能 {name} 的正文写不进 {}：{e}。下一步：检查技能目录的写权限，\
+             或用 QUILL_SKILL_DIR 指向一个可写目录。",
+            path.display()
+        )));
+    }
+
+    Ok(Json(json!({
+        "installed": skills_repo::to_json(&saved),
+        "installed_count": 1,
+        "source_slug": safe,
+        // 包里那个文件被当成了正文。**说出来**，别让人以为装的是 SKILL.md。
+        "body_file": body_file,
+        "skipped_other": unpacked.skipped_other,
+        "compressed_bytes": unpacked.compressed_bytes,
+        "uncompressed_bytes": unpacked.uncompressed_bytes,
+        "enabled": false,
+    }))
+    .into_response())
+}
+
+/// `POST /api/extensions/skill-hub/{slug}/install` —— 把一个技能集装进本地技能目录。
+///
+/// ## 这条路的风险在哪
+///
+/// 上游给的是**任意 zip 字节**。所以顺序不能反：
+/// 先过完 [`crate::skillhub_unpack`] 的全部检查（条目数、解压总量、压缩比、
+/// 路径穿越），**再**落盘。任何一条检查不过就整包拒绝 ——
+/// 不能「装到一半发现不对」然后留半个技能在目录里。
+///
+/// ## 装完默认是停用的
+///
+/// 安装**不启用**。启用会立刻给每一轮请求加上它的摘要（ISSUE-036：
+/// 实测 13 个技能就把 8192 窗口顶爆），而「装一个包」这件事
+/// 本身不蕴含「现在就让它进上下文窗口」。要不要开由用户在技能包里看一眼再点。
+pub async fn skill_hub_install(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(slug): Path<String>,
+) -> Result<Response, ApiError> {
+    let safe = crate::skillhub::validate_slug(&slug)
+        .map_err(|e| hub_error("请求不合法", e))?;
+
+    let bytes = match crate::skillhub::download_skillset(&safe).await {
+        Ok(b) => b,
+        Err(e) => return Err(hub_error(&format!("下载技能包 {safe} 失败"), e)),
+    };
+
+    let unpacked = crate::skillhub_unpack::unpack(&bytes)
+        .map_err(|e| ApiError::bad_request(e.message()))?;
+
+    // 上游的包里有一份 manifest（实测 2026-10-06）：
+    // `tech-test-automation` 的 zip 只有 `manifest.json` 与 `identify.md` 两个条目，
+    // 而 manifest 里列的 6 个子技能（superpowers-tdd、test-case-generator…）
+    // **只有 slug 与一句简介，没有各自的正文**。
+    //
+    // 所以这一包能装进 quill 的就是**一个**技能（编排说明本身），
+    // 其余 6 个是「包里点名要用的下游技能」。**如实说成一个**，
+    // 装完在界面上写「1 个技能、另有 6 个待取」—— 装成 6 个就是编数据。
+    let manifest: Option<crate::skillhub::HubManifest> = unpacked
+        .files
+        .iter()
+        .find(|(name, _)| name == "manifest.json")
+        .and_then(|(_, body)| crate::skillhub::parse_manifest(body));
+
+    let referenced: Vec<String> = manifest
+        .as_ref()
+        .map(|m| m.referenced_slugs())
+        .unwrap_or_default();
+
+    let dir = skill_dir(&state.config);
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| ApiError::internal(format!("创建技能目录 {} 失败：{e}", dir.display())))?;
+
+    let db = state.db()?;
+    let mut installed: Vec<Value> = Vec::new();
+
+    for (name, body) in &unpacked.files {
+        // manifest.json 不是技能，是元数据。**不算进「装了几个」**。
+        if name == "manifest.json" {
+            continue;
+        }
+        // 技能名优先取**包的 slug**，不是包内文件名。
+        //
+        // 实测：`tech-test-automation` 的 zip 里那篇正文叫 `identify.md`，
+        // 按文件名装出来就叫 `identify` —— 这个名字既看不懂，也会直接
+        // 出现在对话工具表里让模型调（`tool_name` 就是 slug）。
+        // 一个包 = 一个技能，名字就该是那个包。
+        let stem = manifest
+            .as_ref()
+            .map(|m| m.slug.trim())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| name.trim_end_matches(".md").to_string());
+        // 归一失败（上游给了个带斜杠的 slug）时退回文件名，而不是整包失败 ——
+        // `normalize_name` 的错误信息里没有「换个名字继续」这句话。
+        let slug_row = match mcp_repo::normalize_name(&stem) {
+            Ok(n) => n,
+            Err(_) => {
+                mcp_repo::normalize_name(name.trim_end_matches(".md"))
+                    .map_err(ApiError::bad_request)?
+            }
+        };
+        // 落盘路径只允许 `skill_file` 这一处计算（`sanitize_name` 已在解包时挡过穿越）。
+        let path = skill_file(&dir, &slug_row)?;
+
+        // 正文哈希算的是**真要落盘的这几行**，不是下载下来的 zip ——
+        // 这两者的哈希本来就不该相等。
+        let saved = skills_repo::upsert(
+            db,
+            user.0.user_id,
+            skills_repo::SkillRow {
+                name: slug_row.clone(),
+                version: "0.1.0".to_string(),
+                // **`market` 不是 `skillhub`**：见 `HUB_SOURCE` 的说明。
+                source: HUB_SOURCE.to_string(),
+                source_ref: Some(safe.clone()),
+                description: hub_description(body),
+                // **装完不启用。** 见函数文档。
+                enabled: false,
+                install_path: path.display().to_string(),
+                tool_allowlist: Vec::new(),
+                created_at: 0,
+                updated_at: 0,
+            },
+            skills_repo::content_hash(body),
+        )
+        .await
+        .map_err(|e| map_err("登记技能", e))?;
+
+        if let Err(e) = std::fs::write(&path, body) {
+            // 行已经写了而文件没写成 = 一个「库里有行、正文不在」的技能。
+            // 与其悄悄留着（`skill_visibility` 会把它标成 not_mounted，
+            // 用户看到的是一句莫名其妙的「磁盘上没有正文」），
+            // 不如在这里说清楚到底哪一步失败了。
+            return Err(ApiError::internal(format!(
+                "技能 {slug_row} 的正文写不进 {}：{e}。下一步：检查技能目录的写权限，\
+                 或用 QUILL_SKILL_DIR 指向一个可写目录。",
+                path.display()
+            )));
+        }
+        installed.push(skills_repo::to_json(&saved));
+    }
+
+    // 一个都没装上时不能报成功。空数组 + 200 会被界面读成「装好了」。
+    if installed.is_empty() {
+        return Err(ApiError::bad_request(format!(
+            "这个技能包里没有能装的技能（{} 个条目全是元数据或非 .md）。\
+             下一步：换一个技能包，或联系市场方补上正文。",
+            unpacked.files.len()
+        )));
+    }
+
+    Ok(Json(json!({
+        "installed": installed,
+        "source": "skillhub",
+        "source_slug": safe,
+        "display_name": manifest.as_ref().and_then(|m| m.display_name()),
+        // **装到几个就说几个。** manifest 里点名的子技能只有 slug 与简介，
+        // 没有正文，所以它们**不在** installed 里 —— 把它们算进去就是编数据。
+        "installed_count": installed.len(),
+        "skipped_other": unpacked.skipped_other,
+        "referenced_not_installed": referenced,
+        "compressed_bytes": unpacked.compressed_bytes,
+        "uncompressed_bytes": unpacked.uncompressed_bytes,
+        // 明说「装完是停用的」。装完就自动生效，是另一种越权。
+        "enabled": false,
+    }))
+    .into_response())
+}
+
+/// 从技能正文里取 frontmatter 的 `description`，没有就留空。///
+/// **留空是有意的**：`skills_repo::skill_summary` 在 description 为空时会
+/// 退回正文开头，模型照样看得见。而这里编一句摘要，只会让用户看到一句
+/// 我们自己造的说明。
+fn hub_description(body: &str) -> String {
+    let head = body.splitn(3, "---").nth(1).unwrap_or("");
+    for line in head.lines() {
+        if let Some(rest) = line.trim().strip_prefix("description:") {
+            return rest
+                .trim()
+                .trim_matches(['"', '\''])
+                .trim_start_matches(">-")
+                .trim()
+                .lines()
+                .collect::<Vec<_>>()
+                .join(" ");
+        }
+    }
+    String::new()
 }
 
 // ------------------------------------------------------------------ SKILL

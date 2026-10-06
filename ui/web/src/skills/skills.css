@@ -1,6 +1,33 @@
 /* 技能包页。刻意不复用别处的卡片类：这一页的行是「开关 + 一段说明」，
    结构跟表单行、跟表格行都不同，硬套用会让三处互相牵制。 */
 
+.skills-tabs {
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.skills-tab {
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  margin-bottom: -1px;
+  padding: 8px 12px;
+}
+
+/* 选中态用下边线而不是背景块：这一页整体是白卡片，
+   填色块会显得像另一个层级。 */
+.skills-tab[aria-selected='true'] {
+  border-bottom-color: var(--accent);
+  color: var(--ink);
+  font-weight: 600;
+}
+
 .skills-cost {
   /* 每次点开关都会改这个数，所以它得显眼一点，但不该抢过列表本身。 */
   background: var(--accent-soft);

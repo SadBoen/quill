@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 
 import { Card, ErrorNotice, PageHeader, StatusBadge } from '../components/Page'
 import { chatErrorMessage } from '../chat/chatApi'
+import { HubList } from './HubList'
 import {
   deleteSkill,
   enabledSummaryChars,
@@ -206,11 +207,7 @@ function SkillRow({ skill }: { skill: Skill }): ReactNode {
 
 export function SkillsPage(): ReactNode {
   const { t } = useTranslation()
-  const query = useQuery({ queryKey: SKILLS_KEY, queryFn: listSkills, retry: false })
-  const skills = skillsOf(query.data)
-  const enabled = skills.filter((s) => s.enabled)
-  const visible = skills.filter((s) => s.model_can_see)
-  const summaryChars = enabledSummaryChars(skills)
+  const [tab, setTab] = useState<'installed' | 'market'>('installed')
 
   return (
     <div className="page-scroll">
@@ -219,6 +216,56 @@ export function SkillsPage(): ReactNode {
         title={t('skills.title', { defaultValue: '技能包' })}
         description={t('skills.description', {
           defaultValue: '技能包就是挂进对话工具表的一篇方法说明：模型调得到它，正文才在那一刻回灌。',
+        })}
+      />
+
+      <div className="skills-tabs" role="tablist">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'installed'}
+          className="skills-tab"
+          data-testid="skills-tab-installed"
+          onClick={() => setTab('installed')}
+        >
+          {t('skills.tabInstalled', { defaultValue: '已安装' })}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'market'}
+          className="skills-tab"
+          data-testid="skills-tab-market"
+          onClick={() => setTab('market')}
+        >
+          {t('skills.tabMarket', { defaultValue: '技能市场' })}
+        </button>
+      </div>
+
+      {tab === 'market' ? <HubList /> : <InstalledSkills />}
+    </div>
+  )
+}
+
+/** 「已安装」那一块。刷新的按钮跟着它走 —— 市场有自己的刷新。 */
+function InstalledSkills(): ReactNode {
+  const { t } = useTranslation()
+  const query = useQuery({ queryKey: SKILLS_KEY, queryFn: listSkills, retry: false })
+  const skills = skillsOf(query.data)
+  const enabled = skills.filter((s) => s.enabled)
+  const visible = skills.filter((s) => s.model_can_see)
+  const summaryChars = enabledSummaryChars(skills)
+
+  return (
+    <div className="settings-stack">
+      <Card
+        title={t('skills.listTitle', { defaultValue: '已安装的技能' })}
+        description={t('skills.listDescription', {
+          count: skills.length,
+          enabled: enabled.length,
+          visible: visible.length,
+          defaultValue:
+            '共 {{count}} 个，启用 {{enabled}} 个 —— 其中模型这一轮真的看得见 {{visible}} 个。',
         })}
         actions={(
           <button
@@ -229,9 +276,7 @@ export function SkillsPage(): ReactNode {
             {t('common.refresh', { defaultValue: '刷新' })}
           </button>
         )}
-      />
-
-      <div className="settings-stack">
+      >
         {query.isError ? (
           <ErrorNotice
             error={chatErrorMessage(
@@ -243,47 +288,38 @@ export function SkillsPage(): ReactNode {
           />
         ) : null}
 
-        <Card
-          title={t('skills.listTitle', { defaultValue: '已安装的技能' })}
-          description={t('skills.listDescription', {
-            count: skills.length,
-            enabled: enabled.length,
-            visible: visible.length,
-            defaultValue:
-              '共 {{count}} 个，启用 {{enabled}} 个 —— 其中模型这一轮真的看得见 {{visible}} 个。',
-          })}
-        >
-          {query.isPending ? (
-            <p className="empty-state">{t('common.loading', { defaultValue: '加载中…' })}</p>
-          ) : null}
-          {!query.isPending && skills.length === 0 ? (
-            <p className="empty-state">
-              {t('skills.empty', { defaultValue: '还没有安装任何技能包。' })}
-            </p>
-          ) : null}
+        {query.isPending ? (
+          <p className="empty-state">{t('common.loading', { defaultValue: '加载中…' })}</p>
+        ) : null}
+        {!query.isPending && skills.length === 0 ? (
+          <p className="empty-state">
+            {t('skills.empty', {
+              defaultValue: '还没有安装任何技能包。可以到「技能市场」里挑一个装上。',
+            })}
+          </p>
+        ) : null}
 
-          {skills.length > 0 ? (
-            <p className="field-help skills-cost">
-              {t('skills.cost', {
-                chars: summaryChars,
-                defaultValue:
-                  '当前启用技能里，模型每一轮都会看到的说明合计 {{chars}} 字符。这部分每一轮请求都带着 —— 开太多会把上下文窗口顶爆，下次请求直接失败。',
-              })}
-            </p>
-          ) : null}
+        {skills.length > 0 ? (
+          <p className="field-help skills-cost">
+            {t('skills.cost', {
+              chars: summaryChars,
+              defaultValue:
+                '当前启用技能里，模型每一轮都会看到的说明合计 {{chars}} 字符。这部分每一轮请求都带着 —— 开太多会把上下文窗口顶爆，下次请求直接失败。',
+            })}
+          </p>
+        ) : null}
 
-          {/* 空列表时不渲染 <ul>：留一个空壳在 DOM 里，读屏软件会念出
-              「列表，0 项」，而界面上写的是「还没有安装任何技能包」——
-              两句话在描述同一个空状态，不该同时出现。 */}
-          {skills.length > 0 ? (
-            <ul className="skills-list">
-              {skills.map((item) => (
-                <SkillRow key={item.slug} skill={item} />
-              ))}
-            </ul>
-          ) : null}
-        </Card>
-      </div>
+        {/* 空列表时不渲染 <ul>：留一个空壳在 DOM 里，读屏软件会念出
+            「列表，0 项」，而界面上写的是「还没有安装任何技能包」——
+            两句话在描述同一个空状态，不该同时出现。 */}
+        {skills.length > 0 ? (
+          <ul className="skills-list">
+            {skills.map((item) => (
+              <SkillRow key={item.slug} skill={item} />
+            ))}
+          </ul>
+        ) : null}
+      </Card>
     </div>
   )
 }

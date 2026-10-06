@@ -31,7 +31,7 @@ quill-agent = { path = "../quill-agent" }
 quill-wiki = { path = "../quill-wiki" }
 quill-provider = { path = "../quill-provider" }
 
-axum = { version = "0.8", features = ["http1", "json", "tokio"] }
+axum = { version = "0.8", features = ["http1", "json", "query", "tokio"] }
 
 # stdio MCP 客户端。本轮只铺 stdio：`transport-child-process` 提供子进程传输，
 # `client` 提供 `ServiceExt::serve` 与 `tools/list`。刻意 `default-features = false`
@@ -57,7 +57,12 @@ tokio = { version = "1", features = [
     "process",
     "io-util",
 ] }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# SkillHub 市场下回来的技能包是 zip。选 `zip` 而不是自己写解压器：
+# 解 zip 是**攻击面**（zip bomb、路径穿越、条目数爆炸），自己写等于自己造一遍
+# 这些坑。用 default-features=false 去掉时间戳等用不上的特性，减少依赖面。
+zip = { version = "2", default-features = false, features = ["deflate"] }
 # stdio MCP 客户端。本轮只铺 stdio：`transport-child-process` 给子进程传输，
 # `client` 给 `ServiceExt::serve` 与 `tools/list`。刻意 `default-features = false`
 # —— 默认那组带 server / macros / base64，客户端一个都用不上。

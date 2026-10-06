@@ -1,0 +1,313 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { type ReactNode, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+
+import { Card, ErrorNotice, StatusBadge } from '../components/Page'
+import {
+  hubRankings,
+  installHubSkill,
+  installsCount,
+  searchHubSkills,
+  skillLabel,
+  skillSummary,
+  type HubSkill,
+} from './hubApi'
+import './hub.css'
+
+/**
+ * 市场里的**单技能**列表。
+ *
+ * ## 为什么要和技能包分开
+ *
+ * 实测（2026-10-06）：技能集 `tech-test-automation` 的 zip 只有
+ * `identify.md`（一篇编排说明）与一份点名 6 个下游技能的 manifest，
+ * 而那 6 个**包里没有正文**。单技能 `pdf-image-text-extractor` 才有
+ * 15 KB 的 `SKILL.md`。
+ *
+ * 两者混在一张列表里，用户点一次安装、只拿到 1 个技能，就会以为
+ * 市场缺货 —— 实际是他装错了那一层。
+ *
+ * ## 这一层的两条如实呈现
+ *
+ * 1. **榜单可能只拉到一部分。**「全部」是并发拉 6 个榜合并的，
+ *    少的那几个在 `errors` 里，界面上要说出来。
+ * 2. **安装次数上游没给就是「—」。** 拿 0 顶替是编一个数字。
+ */
+
+const SKILL_KEY = ['skill-hub', 'skills'] as const
+const RANK_KEY = ['skill-hub', 'rankings'] as const
+const SEARCH_LIMIT = 20
+
+function SkillInstallButton({ item }: { item: HubSkill }): ReactNode {
+  const { t } = useTranslation()
+  const client = useQueryClient()
+
+  const install = useMutation({
+    mutationFn: () => installHubSkill(item.slug),
+    onSuccess: () => void client.invalidateQueries({ queryKey: RANK_KEY }),
+  })
+
+  if (install.isSuccess) {
+    const r = install.data
+    return (
+      <div className="hub-installed">
+        <p className="hub-ok" role="status">
+          {t('hub.skillInstalled', {
+            name: skillLabel(item),
+            defaultValue: '已装入「{{name}}」。',
+          })}
+        </p>
+        <p className="field-help">
+          {t('hub.installedDisabled', {
+            defaultValue: '装完是停用的：还没挂进对话工具表，模型这一轮看不到它。去「技能包」看一眼再打开开关。',
+          })}
+        </p>
+        {/* 正文取自包里哪个文件要说出来。上游今天用 SKILL.md，
+            哪天改了名，用户至少知道装进去的是哪一篇。 */}
+        <p className="field-help">
+          {t('hub.bodyFile', {
+            file: r.body_file,
+            defaultValue: '正文取自包里的 {{file}}。',
+          })}
+        </p>
+        {r.skipped_other > 0 ? (
+          <p className="field-help">
+            {t('hub.skipped', {
+              count: r.skipped_other,
+              defaultValue: '包里另有 {{count}} 个条目不是技能（图片、脚本之类），没有安装。',
+            })}
+          </p>
+        ) : null}
+      </div>
+    )
+  }
+
+  return (
+    <div className="hub-action">
+      <button
+        type="button"
+        className="primary-button"
+        data-testid={`hub-skill-install-${item.slug}`}
+        disabled={install.isPending}
+        onClick={() => install.mutate()}
+      >
+        {install.isPending
+          ? t('hub.installing', { defaultValue: '安装中…' })
+          : t('hub.install', { defaultValue: '安装' })}
+      </button>
+      {/* **把 error 对象原样交给 `ErrorNotice`**，不要先转字符串 ——
+          转了就把服务端那句中文说明与「下一步：…」全丢掉。 */}
+      {install.isError ? <ErrorNotice error={install.error} /> : null}
+    </div>
+  )
+}
+
+function SkillCards({ items }: { items: HubSkill[] }): ReactNode {
+  const { t } = useTranslation()
+  return (
+    <ul className="hub-list">
+      {items.map((item) => {
+        const summary = skillSummary(item)
+        const installs = installsCount(item)
+        return (
+          /* key 用 `slug@version`，**不是 `slug`**。
+             上游的同一份推荐榜里会出现同一个 slug 的多个版本
+             （实测 `dev-expert` 同时有 2.0.3 与 1.17.0），
+             拿 slug 当 key 会撞。
+             顺带一提：**不去重**。同一个技能列两行、各自标明版本，
+             是上游给的样子；替用户挑一个版本，等于我们替上游做决定。 */
+          <li className="hub-card" key={`${item.slug}@${item.version}`} data-slug={item.slug}>
+            <div className="hub-card-main">
+              <div className="hub-card-head">
+                <strong>{skillLabel(item)}</strong>
+                <code className="hub-slug">{item.slug}</code>
+                {item.version ? (
+                  <StatusBadge tone="neutral">
+                    {t('hub.version', {
+                      version: item.version,
+                      defaultValue: '版本 {{version}}',
+                    })}
+                  </StatusBadge>
+                ) : null}
+                <StatusBadge tone="neutral">
+                  {/* 上游没给安装次数就显示「—」。拿 0 顶替是在编一个数字。 */}
+                  {installs === null
+                    ? t('hub.installsUnknown', { defaultValue: '安装次数 —' })
+                    : t('hub.installs', {
+                        count: installs,
+                        defaultValue: '装过 {{count}} 次',
+                      })}
+                </StatusBadge>
+              </div>
+              {summary ? (
+                <p className="hub-summary">{summary}</p>
+              ) : (
+                <p className="field-help">
+                  {t('hub.noSummary', {
+                    defaultValue: '上游没给说明。没有说明就是没有，不拿 slug 顶替。',
+                  })}
+                </p>
+              )}
+            </div>
+            <SkillInstallButton item={item} />
+          </li>
+        )
+      })}
+    </ul>
+  )
+}
+
+/** 榜单页签。上游支持的类型由**服务端**给出，界面不自己编一份。 */
+const KIND_LABELS: Record<string, { zh: string; en: string }> = {
+  all: { zh: '全部', en: 'All' },
+  recommended: { zh: '推荐', en: 'Recommended' },
+  trending: { zh: '趋势', en: 'Trending' },
+  hot: { zh: '热门', en: 'Hot' },
+  featured: { zh: '精选', en: 'Featured' },
+  newest: { zh: '最新', en: 'Newest' },
+  paid: { zh: '付费', en: 'Paid' },
+}
+
+export function HubSkillList(): ReactNode {
+  const { t } = useTranslation()
+  const [kind, setKind] = useState('recommended')
+  const [term, setTerm] = useState('')
+  const [submitted, setSubmitted] = useState('')
+  // 搜索框里没提交就空着：**空查询不该发请求**，
+  // 上游对空 `q` 会回一整页随机内容（Octop 兜成 `q=a`）。
+  const searching = submitted.trim().length > 0
+
+  const search = useQuery({
+    queryKey: [...SKILL_KEY, submitted],
+    queryFn: () => searchHubSkills(submitted, SEARCH_LIMIT),
+    enabled: searching,
+    staleTime: 30_000,
+    retry: false,
+  })
+
+  const board = useQuery({
+    queryKey: [...RANK_KEY, kind],
+    queryFn: () => hubRankings(kind),
+    // 搜着的时候不同时拉榜单 —— 否则每次点「搜索」都白打一次榜单。
+    enabled: !searching,
+    staleTime: 30_000,
+    retry: false,
+  })
+
+  const active = searching ? search : board
+  const items = active.data?.items ?? []
+  const host = active.data?.host
+  const failedSections = Object.keys(board.data?.errors ?? {})
+
+  return (
+    <div className="settings-stack">
+      <Card
+        title={t('hub.skillTitle', { defaultValue: '市场里的单个技能' })}
+        description={t('hub.skillDescription', {
+          defaultValue:
+            '和上面的「技能包」不是一回事：技能包装的是一份编排说明，这里才是带正文的技能。',
+        })}
+        actions={(
+          <button
+            className="secondary-button"
+            data-testid="hub-skill-refresh"
+            onClick={() => void active.refetch()}
+          >
+            {t('common.refresh', { defaultValue: '刷新' })}
+          </button>
+        )}
+      >
+        {host ? (
+          <p className="field-help hub-host">
+            {t('hub.host', {
+              host,
+              defaultValue: '数据来自外部市场 {{host}}。它挂了或断网时这里会连不上 —— 那不影响已经装好的技能。',
+            })}
+          </p>
+        ) : null}
+
+        <form
+          className="hub-search"
+          onSubmit={(e) => {
+            e.preventDefault()
+            setSubmitted(term)
+          }}
+        >
+          <input
+            type="search"
+            value={term}
+            aria-label={t('hub.searchLabel', { defaultValue: '搜技能' })}
+            placeholder={t('hub.searchPlaceholder', { defaultValue: '按名字或用途搜，例如 pdf、翻译' })}
+            data-testid="hub-skill-search"
+            onChange={(e) => setTerm(e.target.value)}
+          />
+          <button type="submit" className="secondary-button" data-testid="hub-skill-search-go">
+            {t('hub.search', { defaultValue: '搜索' })}
+          </button>
+          {searching ? (
+            <button
+              type="button"
+              className="secondary-button"
+              data-testid="hub-skill-clear"
+              onClick={() => {
+                setTerm('')
+                setSubmitted('')
+              }}
+            >
+              {t('hub.clearSearch', { defaultValue: '回到榜单' })}
+            </button>
+          ) : null}
+        </form>
+
+        {!searching ? (
+          <div className="hub-kinds" role="tablist">
+            {(board.data?.kinds ?? ['recommended']).map((k) => (
+              <button
+                key={k}
+                type="button"
+                role="tab"
+                aria-selected={k === kind}
+                className={k === kind ? 'skills-tab is-active' : 'skills-tab'}
+                data-testid={`hub-kind-${k}`}
+                onClick={() => setKind(k)}
+              >
+                {t(`hub.kind.${k}`, { defaultValue: KIND_LABELS[k]?.zh ?? k })}
+              </button>
+            ))}
+          </div>
+        ) : null}
+
+        {active.isError ? <ErrorNotice error={active.error} /> : null}
+        {active.isPending ? (
+          <p className="empty-state">{t('common.loading', { defaultValue: '加载中…' })}</p>
+        ) : null}
+
+        {!active.isPending && !active.isError && items.length === 0 ? (
+          <p className="empty-state">
+            {searching
+              ? t('hub.searchEmpty', {
+                  term: submitted,
+                  defaultValue: '搜「{{term}}」没有结果 —— 这是上游回的结果，不是我们没去取。',
+                })
+              : t('hub.boardEmpty', {
+                  defaultValue: '这一份榜单上游返回了 0 条 —— 这是上游说的，不是我们没去取。',
+                })}
+          </p>
+        ) : null}
+
+        {/* 「全部」是并发拉 6 个榜合并的。少拉到的要说出来 ——
+            吞掉的话，这个页签会假装自己是完整的。 */}
+        {failedSections.length > 0 ? (
+          <p className="hub-partial" role="status">
+            {t('hub.boardPartial', {
+              names: failedSections.join('、'),
+              defaultValue: '这几个榜单这一轮没拉到：{{names}}。下面这些是成功的那部分，不是全部。',
+            })}
+          </p>
+        ) : null}
+
+        {items.length > 0 ? <SkillCards items={items} /> : null}
+      </Card>
+    </div>
+  )
+}

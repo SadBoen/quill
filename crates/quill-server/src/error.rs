@@ -69,6 +69,19 @@ pub enum ApiError {
         detail: String,
     },
 
+    /// **外部服务**（不是模型）没给出可用结果。
+    ///
+    /// 现在只有技能市场（SkillHub）在用。它与 `ProviderUnavailable` 必须分开：
+    /// 后者的「下一步」是「执行 `curl $QUILL_LLM_BASE_URL/models` 确认端点活着；
+    /// 本地模型请先启动 llama-server」—— 把这句话挂在「技能市场连不上」上，
+    /// 会把用户引到一台与这件事毫无关系的机器上去排查。见 ISSUE-054。
+    UpstreamUnavailable {
+        detail: String,
+        /// 「下一步」由调用方写，因为它随**是哪个上游**而变
+        /// （SkillHub 说检查 `QUILL_SKILLHUB_HOST`，别的上游说别的）。
+        advice: &'static str,
+    },
+
     /// 请求过于频繁。登录端点用它挡住「反复 POST 把 PBKDF2 的 CPU 打满」。
     TooManyRequests {
         detail: String,
@@ -148,6 +161,17 @@ impl ApiError {
         }
     }
 
+    /// **外部上游**（如技能市场）没给出可用结果。
+    ///
+    /// 不要拿 [`Self::service_unavailable`] 顶替：那条的「下一步」谈的是
+    /// 模型服务与 llama-server，挂在技能市场上会把用户带偏。
+    pub fn upstream_unavailable(detail: impl Into<String>, advice: &'static str) -> Self {
+        Self::UpstreamUnavailable {
+            detail: detail.into(),
+            advice,
+        }
+    }
+
     /// **模型服务活着、但它回了一个错误**（HTTP 4xx/5xx、响应不合法、上游拒绝）。
     ///
     /// 为什么要与 `ProviderUnavailable` 分开：`ProviderUnavailable` 的「下一步」是
@@ -221,9 +245,8 @@ impl ApiError {
             Self::BadRequest { .. } => StatusCode::BAD_REQUEST,
             Self::Conflict { .. } => StatusCode::CONFLICT,
             Self::NotImplemented { .. } => StatusCode::NOT_IMPLEMENTED,
-            Self::StorageUnavailable { .. } | Self::ProviderUnavailable { .. } => {
-                StatusCode::SERVICE_UNAVAILABLE
-            }
+            Self::StorageUnavailable { .. } | Self::ProviderUnavailable { .. }
+            | Self::UpstreamUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
             // 与 `ProviderUnavailable` 同一个状态码：**请求确实没拿到结果**。
             // 分开的是「下一步」说什么，不是「算不算失败」。
             Self::ProviderRejected { .. } => StatusCode::SERVICE_UNAVAILABLE,
@@ -248,6 +271,7 @@ impl ApiError {
             Self::NotImplemented { .. } => "not_implemented",
             Self::StorageUnavailable { .. } => "storage_unavailable",
             Self::ProviderUnavailable { .. } => "provider_unavailable",
+            Self::UpstreamUnavailable { .. } => "upstream_unavailable",
             Self::ProviderRejected { .. } => "provider_rejected",
             // 与上面两个 provider 码**必须不同**：连不上 / 被拒 / 不收敛
             // 是三件不同的事，界面要能分开说。见 ISSUE-027。
@@ -273,6 +297,7 @@ impl ApiError {
             }
             Self::StorageUnavailable { detail } => detail.clone(),
             Self::ProviderUnavailable { detail } => detail.clone(),
+            Self::UpstreamUnavailable { detail, .. } => detail.clone(),
             Self::ProviderRejected { detail, .. } => detail.clone(),
             Self::ToolLoopExhausted { detail, .. } => detail.clone(),
             Self::TooManyRequests { detail, .. } => detail.clone(),
@@ -327,6 +352,9 @@ impl ApiError {
                  本地模型请先启动 llama-server，再用 `QUILL_LLM_BASE_URL` / `QUILL_LLM_MODEL` \
                  指向正确的地址与模型名后重启 quill-server。"
             }
+            // 外部上游（技能市场等）：**不许**复用上面那句 ——
+            // 让用户去 curl 模型端点、启动 llama-server，跟技能市场没有一点关系。
+            Self::UpstreamUnavailable { advice, .. } => advice,
             // 「下一步」由调用方按 ProviderError 的种类挑好传进来。
             // 绝不能在这里给一句通用的「去确认端点活着」——模型明明回过话，
             // 让用户去检查一个活着的服务只会把他引到错误的分支上。

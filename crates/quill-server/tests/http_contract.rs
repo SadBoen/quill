@@ -397,7 +397,7 @@ async fn created_session_id_is_byte_identical_to_the_listed_one() {
 async fn every_contract_route_responds_and_is_never_a_false_success() {
     // 「已实现」清单必须跟着实现一起长，否则新接通的路由会因为不再返回 501
     // 而被判成「假成功」——这正是本测试要抓的东西，所以清单不能手懒。
-    const IMPLEMENTED: [(&str, &str); 44] = [
+    const IMPLEMENTED: [(&str, &str); 49] = [
         ("GET", "/api/version"),
         ("GET", "/api/auth/me"),
         ("GET", "/api/healthz"),
@@ -412,6 +412,18 @@ async fn every_contract_route_responds_and_is_never_a_false_success() {
         ("DELETE", "/api/extensions/mcp/{name}"),
         ("GET", "/api/extensions/skills"),
         ("POST", "/api/extensions/skills"),
+        // 技能市场。**上游是外部服务**（SkillHub），所以能不能返回 200
+        // 取决于网络，不取决于本地实现：断网时它走 503 并带 next_step。
+        // 本测试只要求「不是 404，且失败响应自带下一步」——
+        // 换句话说，它接受「市场连不上」这个诚实答案，但拒绝 501 那种
+        // 「假装这条路还没接」的假成功。
+        ("GET", "/api/extensions/skill-hub"),
+        ("POST", "/api/extensions/skill-hub/{slug}/install"),
+        // 单技能这三条：搜索、榜单、安装。上游确有（实测 200），
+        // 少了它们，用户在市场里只能看到「装编排说明」的那一层。
+        ("GET", "/api/extensions/skill-hub/skills"),
+        ("GET", "/api/extensions/skill-hub/rankings"),
+        ("POST", "/api/extensions/skill-hub/skills/{slug}/install"),
         // 技能开关。停用的技能不挂进对话工具表，而此前这条路由没登记，
         // 界面上也就没有任何一处能把技能打开 —— 后端做完了、开关没出口。
         ("PATCH", "/api/extensions/skills/{name}"),

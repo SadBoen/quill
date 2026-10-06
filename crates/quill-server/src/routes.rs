@@ -153,6 +153,31 @@ pub fn build_router(state: AppState) -> Router {
             // 工具表，模型调不到，等于后端做完了而功能没出口。
             patch(api_extensions::update_skill).delete(api_extensions::delete_skill),
         )
+        // 技能市场。上游是外部服务 SkillHub（默认 https://api.skillhub.cn，
+        // 可用 QUILL_SKILLHUB_HOST 改），照抄 Octop 的实现与其安全上限。
+        .route(
+            "/api/extensions/skill-hub",
+            get(api_extensions::skill_hub_list),
+        )
+        .route(
+            "/api/extensions/skill-hub/{slug}/install",
+            post(api_extensions::skill_hub_install),
+        )
+        // 单技能这一层。上游实测存在（2026-10-06）：
+        // search / showcase / download 三个端点都返回 200，
+        // 而技能包那层装出来的只是编排说明，**它点名的子技能没有正文**。
+        .route(
+            "/api/extensions/skill-hub/skills",
+            get(api_extensions::skill_hub_search),
+        )
+        .route(
+            "/api/extensions/skill-hub/rankings",
+            get(api_extensions::skill_hub_rankings),
+        )
+        .route(
+            "/api/extensions/skill-hub/skills/{slug}/install",
+            post(api_extensions::skill_hub_install_skill),
+        )
         .route(
             "/api/extensions/plugins",
             get(|_u: crate::auth::AuthUser| async {
@@ -416,6 +441,15 @@ pub const CONTRACT_ROUTES: &[(&str, &str)] = &[
     ("DELETE", "/api/extensions/mcp/{name}"),
     ("GET", "/api/extensions/skills"),
     ("POST", "/api/extensions/skills"),
+    // 技能市场。上游是外部服务，**这两条不是「本地实现」** ——
+    // 断网时它会 503，而这不代表本地技能坏了。
+    ("GET", "/api/extensions/skill-hub"),
+    ("POST", "/api/extensions/skill-hub/{slug}/install"),
+    // 技能市场的**单技能**这一层。与上面那两条不是同一个东西：
+    // 技能包装的是编排说明，单技能才是能直接用的技能正文。
+    ("GET", "/api/extensions/skill-hub/skills"),
+    ("GET", "/api/extensions/skill-hub/rankings"),
+    ("POST", "/api/extensions/skill-hub/skills/{slug}/install"),
     ("PATCH", "/api/extensions/skills/{name}"),
     ("DELETE", "/api/extensions/skills/{name}"),
     ("GET", "/api/extensions/plugins"),

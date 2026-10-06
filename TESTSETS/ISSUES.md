@@ -2264,3 +2264,146 @@ GET /api/extensions/mcp
 - **顺带修掉**：`AppShell.tsx` 有一行注释被此前的编辑搞丢了缩进（不影响编译）。
 - **状态**：已修已回归，已真机确认。
 
+---
+
+## ISSUE-054 · 技能市场的错误挂着「去启动 llama-server」的下一步
+
+- **发现于**：接 SkillHub 之后真机打接口（2026-10-06）
+- **现象**：装一个上游没有的技能，接口回 503，而 `next_step` 写着：
+  ```
+  模型服务不可用：先执行 `curl $QUILL_LLM_BASE_URL/models` 确认端点活着；
+  本地模型请先启动 llama-server，再用 `QUILL_LLM_BASE_URL` / `QUILL_LLM_MODEL` …
+  ```
+  坏的是**技能市场**（另一个外部服务），与模型服务没有一点关系。
+  用户照着这句话去启动 llama-server，做完发现技能还是装不上。
+- **根因**：`api_extensions` 里一律用 `ApiError::service_unavailable(...)`，
+  而它就是 `ProviderUnavailable` 的别名，`next_step` 写死在 `error.rs` 里谈模型。
+  **错误的种类是对的（上游没给结果），指向的机器是错的。**
+- **为什么这条要单记**：这是 ISSUE-027 的同一个教训在另一个方向上的复发 ——
+  ISSUE-027 修的是「detail 与 next_step 打架」，这条是「next_step 指向了
+  完全无关的子系统」。`advice` 是用户**唯一会照着做**的内容，
+  指错地方比不给建议更糟（用户会以为是自己哪里没起好）。
+- **修复**：
+  1. 新增 `ApiError::UpstreamUnavailable { detail, advice }`：
+     `code()` = `upstream_unavailable`，`status()` 仍是 **503**（请求确实没拿到结果），
+     `advice` 由调用方写。**分开的只是「下一步说什么」，不是「算不算失败」。**
+  2. `SKILLHUB_ADVICE` 说技能市场该说的话：确认网络能到上游、
+     自建/镜像用 `QUILL_SKILLHUB_HOST`、**已安装的技能不受影响**。
+  3. 新增 `api_extensions::hub_error(what, e)` 统一映射，
+     **6 个调用点全走它** —— 散着写迟早有一处挂上说错话的那句。
+- **回归**：
+  - `api_extensions::hub_error_tests`（4 条）：404 → 404、输入错 → 400、
+    真断线 → 503 + `upstream_unavailable` + `SKILLHUB_ADVICE`，
+    且断言 **`SKILLHUB_ADVICE` 里不出现 `llama-server` / `QUILL_LLM_BASE_URL`**，
+    必须出现 `QUILL_SKILLHUB_HOST`。
+  - `skillhub::tests::every_failure_has_a_next_step_and_no_advice_talks_about_the_model_server`
+    —— 6 种失败逐条过一遍，兜住「以后又有人在某个分支挂上模型服务的话术」。
+
+---
+
+## ISSUE-055 · 上游说「没有这个技能」，我们报成「技能市场没连上」
+
+- **发现于**：同上，真机打接口
+- **现象**：`POST /api/extensions/skill-hub/skills/<不存在的 slug>/install`
+  回 503，detail 是「技能市场没连上。下一步：稍后重试」。
+  而上游其实**好好地回了话**：`404 {"error":"Version not found"}`。
+- **两处错**：
+  1. **状态码错**：这是 404，被归成了 503。
+  2. **建议错**：「稍后重试」对一个**根本不存在**的技能是错的路 ——
+     用户会对着一个不存在的 slug 重试到天荒地老。
+     正确的下一步是「回到列表里重新选一个；也可能是它刚被下架」。
+- **与 ISSUE-037 的关系**：同一个更深的毛病 ——
+  **「没找到」被当成「没连上」**。区别在于 037 是我把 404 读成了 0 台服务器，
+  这条是**后端自己**把 404 归错了类。
+- **修复**：`HubError` 拆成四类，错误文案与状态码一一对应：
+  | 变体 | 状态码 | 该说的一句话 |
+  |---|---|---|
+  | `Input` | 400 | 「换一个名字再来」—— 调用方的错，不赖上游 |
+  | `Status(404)` | 404 | 「市场里没有这个，可能已下架」 |
+  | `Status(401/403)` | 503 | 「需要凭据」—— 与 5xx 的建议必须不同 |
+  | `Fetch` / `Parse` | 503 | 才是「连不上」/「接口变了」 |
+- **为什么 `Input` 要单列**：`validate_slug` 原来返回 `Parse`，
+  渲染出来是「技能市场的响应看不懂…这是上游改了接口」。
+  用户拿一个含 `../` 的 slug 撞了 400，界面却在教他去查上游 ——
+  **他会真的去重启那个市场，然后发现问题依旧。**
+- **回归**：`skillhub::tests` 里
+  `a_rejected_slug_is_blamed_on_the_caller_not_on_the_market`、
+  `a_404_is_its_own_story_and_not_a_connect_failure`、
+  `a_missing_credential_and_a_server_error_are_not_the_same_advice`（3 条）。
+
+---
+
+## ISSUE-056 · 上游一个 `icon_url: null` 就让整页搜索变成「市场没连上」
+
+- **发现于**：ISSUE-054/055 修完，浏览器里真机点搜索
+- **现象**：市场页搜「pdf」，界面上红字：
+  ```
+  搜技能市场失败：技能市场的响应看不懂（不是预期的 JSON）。
+  下一步：这是上游改了接口，本页暂时不能用
+  详情：invalid type: null, expected a string
+  ```
+  而市场**好好地回了 20 条结果**。
+- **根因**：`#[serde(default)]` **只在字段缺失时生效，管不了 `null`** ——
+  这是个很容易以为「已经防住了」的坑。实测（2026-10-06）：
+  - 搜 `pdf` 的 20 条里，`pdf-md` 的 `icon_url` 是 `null`；
+  - 搜「翻译」6 条里**至少 6 条** `icon_url` 是 `null`；
+  - `GET /api/v1/showcase/paid` 的 **`section` 就是 `null`**。
+- **为什么这条比看着严重**：它不是「某条数据显示不出来」，
+  是**一页 20 条数据因为其中一条的一个空图标而全部不可见**，
+  而且报出来的原因（上游改了接口）与真实原因（上游没给图标）毫无关系。
+- **修复**：新增 `de_text`，把上游的文本字段统一读成
+  **`null` 与非字符串都读成空串**。空串 = 「上游没给值」，
+  **不是**替上游编一个。`HubSkill` / `HubSkillSet` / `HubManifest` /
+  `HubManifestSkill` / `ShowcaseEnvelope.section` 的字符串字段全挂上。
+- **回归**（夹具全部来自真机观测，**没观测到的不写进样本**）：
+  - `a_null_field_does_not_take_the_whole_page_down` ——
+    样本里只把 `icon_url` 写成 null（实测值），并断言同一行里
+    `version` / `description_zh` / `installs` 照常读出。
+  - `a_board_whose_section_is_null_is_still_a_board`（`paid` 榜单，实测 null）。
+  - `a_skill_set_that_omits_optional_fields_still_parses` ——
+    **刻意测「缺键」而不是「null」**：实测 skillsets 的响应里
+    字段值一个 null 都没有，null 只是 search 的 `icon_url` 的毛病。
+    拿没观测到的情况当测试用例，就是拿想象冒充证据。
+
+---
+
+## ISSUE-057 · 市场装来的技能「装一个包只得到 1 个技能」——那是因为只接了包那一层
+
+- **发现于**：用户当场质疑 ——「你没发现，对方是有技能和技能包吗？」
+- **事实**：用户是对的，我第一版**只接了技能包（skillsets）那一层**。
+  上游其实有两层，抄 Octop 的 `infra/skills/skillhub_market.py` 才发现
+  （注意不是 `experts/` 下那个同名旧文件）。
+  | 层 | 端点（2026-10-06 实测 200） | 包里有什么 |
+  |---|---|---|
+  | 技能包 | `/api/v1/skillsets`、`/api/v1/skillsets/{slug}/download` | `manifest.json` + **一篇** `identify.md`；manifest 点名的 6 个下游技能**没有正文** |
+  | 单技能 | `/api/v1/search`、`/api/v1/showcase/{kind}`、`/api/v1/download` | **真正的 `SKILL.md`**（实测 `pdf-image-text-extractor` 15 KB）+ 4 个脚本 |
+- **为什么第一版不算错、但不够用**：包那一层是真实存在的，抄它没错；
+  但只接它的话，用户「装一个包 = 拿到一堆技能」的预期必然落空 ——
+  而那 6 个下游技能**通过包这条路根本装不上**（包里没有正文）。
+  **这不是上游缺货，是我们只铺了半条路。**
+- **三个只有真机才暴露的坑**：
+  1. **`/api/v1/download` 会 302**：不跟重定向的话收到的是 106 字节的
+     HTML（`<a href="…cos.accelerate.myqcloud.com/…">Found</a>`），
+     不是 zip。curl 不加 `-L` 就是这么翻车的。
+  2. **单技能包里有三篇 `.md`**（`SKILL.md` / `README.md` / `README.en.md`），
+     按技能包那套规则解会**当成三个技能**，而它们共用同一个 slug ——
+     落盘时后写的覆盖先写的，**用户拿到哪篇取决于 zip 里的条目顺序**。
+     「看起来装成功了、实际内容是随机的」比直接失败更糟。
+  3. **同一 slug 的多个版本同时出现在推荐榜里**（实测 `dev-expert` 有
+     2.0.3 与 1.17.0 两条）。拿 slug 当 React key 会撞；
+     而**去重合并是替用户挑版本**，所以两条都列、各自标版本。
+- **修复**：
+  - 后端：`search_skills` / `showcase_skills` / `showcase_all` / `download_skill`
+    + 三条路由（`GET …/skills`、`GET …/rankings`、`POST …/skills/{slug}/install`）。
+    契约数组 **46 → 49**。
+  - `skillhub_unpack` 拆出 `PackageKind::{SkillSet, Skill}`：
+    单技能**只取一篇正文**（优先 `SKILL.md`，否则只认根目录下那一篇，
+    两篇都说得通就**拒绝**而不是挑一个），其余**计入 `skipped_other`** 如实报出。
+  - 前端：市场页分「**单个技能** / **技能包**」两个页签，
+    **默认落在单个技能**（能直接用的技能在这一层）。
+- **状态**：已修已回归，已真机确认（搜 `pdf` → 点安装 → 「已安装」里出现
+  `pdf-extract`、未启用、正文 826 字符）。
+- **未做**：技能包那层的 `referenced_not_installed`（点名但没正文的 6 个）
+  **仍然不能一键装齐** —— 要装得逐个去单技能层搜。这是上游的现状，
+  本轮如实呈现，没有假装能装全。
+
