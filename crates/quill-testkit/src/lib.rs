@@ -42,7 +42,7 @@ impl TestDiagnostic {
 
 impl std::fmt::Display for TestDiagnostic {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "──────── 测试失败诊断 ─��───────")?;
+        writeln!(f, "──────── 测试失败诊断 ────────")?;
         writeln!(f, "用例    : {}", self.case_id)?;
         writeln!(f, "seed    : {}", self.seed)?;
         if let Some(p) = &self.fixture_dump {

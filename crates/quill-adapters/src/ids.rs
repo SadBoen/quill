@@ -437,7 +437,7 @@ mod tests {
         }
 
         let short = &HEX32[..31];
-        assert_eq!(short.len(), 31, "切片长度应��� 31");
+        assert_eq!(short.len(), 31, "切片长度应为 31");
         assert_eq!(
             UserId::parse(short).unwrap_err(),
             ParseIdError::BadLength { got: 31 }

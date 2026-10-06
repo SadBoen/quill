@@ -122,6 +122,28 @@ export function ChatPage(_props: ChatPageProps): ReactNode {
     await queryClient.invalidateQueries({ queryKey: ['sessions'] })
   }, [queryClient])
 
+  /**
+   * 发送失败后重新拉一次历史。
+   *
+   * 失败时那条用户消息**已经落库了**（实测：服务端 `/messages` 里有 1 条，
+   * `status=complete`），但界面可能停在欢迎屏上、用户那条消息**看不见**——
+   * 用户会以为自己根本没发出去，于是重发一遍，或者干脆以为 quill 坏了。
+   * 所以失败路径上必须以**服务端为准**重新对齐一次，不能只把文本塞回输入框。
+   */
+  const reloadHistory = useCallback(async (id: string | null) => {
+    if (!id) return
+    try {
+      const body = await loadMessageHistory(id)
+      generation.current += 1
+      setHistory(body.messages)
+      setHistoryError(null)
+    } catch (error) {
+      setHistoryError(
+        chatErrorMessage(error, t('chat.historyLoadFailed', { defaultValue: '历史加载失败。' })),
+      )
+    }
+  }, [t])
+
   function selectExpert(nextExpertId: string): void {
     setExpertId(nextExpertId)
     setSidebarOpen(false)
@@ -200,6 +222,8 @@ export function ChatPage(_props: ChatPageProps): ReactNode {
         sessionId: targetIdForNotice,
         message: chatErrorMessage(error, t('chat.sendFailed', { defaultValue: '消息发送失败，请重试。' })),
       })
+      // 消息其实已经落库了，把界面拉回服务端的样子（ISSUE-039）
+      await reloadHistory(targetIdForNotice)
     } finally {
       setSending(false)
       await refreshSessions()

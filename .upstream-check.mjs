@@ -1,4 +1,4 @@
-// 上游版本自检：把 UPSTREAM.md 里记录���版本和真实来源对一遍。
+// 上游版本自检：把 UPSTREAM.md 里记录的版本和真实来源对一遍。
 //
 // 用法：node .upstream-check.mjs            （只查本地，不联网）
 //      node .upstream-check.mjs --online   （顺带查上游最新，需要联网）

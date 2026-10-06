@@ -1,4 +1,4 @@
-//! 拿真机上的 llama.cpp（MiniCPM5-1B-Q8_0）跑一遍 provider，验���「能不能真用」。
+//! 拿真机上的 llama.cpp（MiniCPM5-1B-Q8_0）跑一遍 provider，验一下「能不能真用」。
 //! 需要先起本地服务：见 quill doctor 的 provider 段。
 
 use futures_util::stream::StreamExt;

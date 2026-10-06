@@ -89,7 +89,7 @@ git diff HEAD FETCH_HEAD --stat        # 改了哪些文件
 看完差异再决定要不要跟着改。**注意 sparse 集合只 checkout 了建图需要的目录**，
 `dashboard/src/pages/Experts`、`dashboard/src/pages/Chat`、`dashboard/src/components`、
 `dashboard/src/hooks`、`dashboard/src/api`、`dashboard/src/locales`、`dashboard/src/utils`、
-`dashboard/src/routes`、`src/octop/infra/agents/experts`——差���统计只覆盖这些目录。
+`dashboard/src/routes`、`src/octop/infra/agents/experts`——差异统计只覆盖这些目录。
 
 ### ⚠️ 线上站和仓库不是一回事
 

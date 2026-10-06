@@ -175,7 +175,7 @@ impl std::fmt::Display for InvalidChainHop {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::EmptyNode => f.write_str("委派链节点名为空"),
-            Self::EmptyTask => f.write_str("委派链任务号为��"),
+            Self::EmptyTask => f.write_str("委派链任务号为空"),
         }
     }
 }

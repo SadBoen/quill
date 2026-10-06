@@ -149,12 +149,66 @@ it('新建会话时发消息失败，必须把服务端写的「下一步」显�
 
   // 过去这里一直是失败的：catch 把 notice 记到「还没有 sessionId」上，
   // 而可见性是按 navigate 之后的**新**会话 id 过滤的，对不上就永远不渲染。
-  await waitFor(() =>
-    expect(fetchMock.mock.calls.map((c) => String(c[0])).some((u) => u.includes('/messages'))).toBe(true),
-  )
-  await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument())
-  const alert = screen.getByRole('alert').textContent ?? ''
+  await waitFor(() => expect(fetchMock.mock.calls.map((c) => String(c[0])).some((u) => u.includes('/messages'))).toBe(true))
+  await waitFor(() => expect(screen.getAllByRole('alert').length).toBeGreaterThan(0))
+  // 这个 mock 对 GET/POST 一视同仁（fetch 拿不到 init 里的 method），
+  // 所以拉历史也会拿到 503、可能多出一条横幅。这里断言的是
+  // 「服务端写的下一步必须让人看得见」，不是「横幅只有一条」。
+  const alert = screen
+    .getAllByRole('alert')
+    .map((n) => n.textContent ?? '')
+    .join('\n')
   expect(alert).toContain('exceeds the available context size')
   // 项目硬规矩：错误必须带「下一步：…」
   expect(alert).toContain('下一步：')
+})
+
+it('发送失败后仍能看到自己发出去的那条消息（ISSUE-039）', async () => {
+  // 实测过：503 之后服务端 `/messages` 里**已经有**那条 user 消息
+  // （status=complete），但界面停在欢迎屏上，用户那条消息看不见 ——
+  // 用户会以为自己没发出去，重发一遍或者干脆以为 quill 坏了。
+  let sent = 0
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.includes('/api/experts')) return jsonResponse(EXPERTS)
+    if (url.includes('/messages') && url.endsWith('/messages')) {
+      sent += 1
+      // 第一次是发送（失败），之后拉历史都应该拿到那条已落库的消息
+      return jsonResponse(
+        {
+          error: {
+            code: 'tool_loop_exhausted',
+            detail: '模型连续 4 轮都在请求调用工具，没有给出正文。',
+            next_step: '下一步：换个更直接的问法（把要什么一次说清楚）。',
+          },
+        },
+        503,
+      )
+    }
+    if (url.includes('/messages')) {
+      return jsonResponse({
+        messages: [
+          { id: 'm1', seq: 1, role: 'user', status: 'complete', content: '帮我算一下 1+1', created_at: '2026-10-06T08:00:00Z' },
+        ],
+      })
+    }
+    if (url.endsWith('/api/sessions')) return jsonResponse({ id: 'NEWSESSION01', title: '新对话', expert_id: 'general' })
+    if (url.includes('/api/sessions?')) return jsonResponse({ sessions: [] })
+    if (url.includes('/healthz')) return jsonResponse({ llm: {} })
+    return jsonResponse({})
+  })
+
+  renderPage('/chat', fetchMock)
+  await waitFor(() => expect(screen.getByRole('combobox')).toBeInTheDocument())
+
+  const box = await screen.findByRole('textbox', { name: '消息' })
+  fireEvent.change(box, { target: { value: '帮我算一下 1+1' } })
+  fireEvent.submit(box.closest('form') as HTMLFormElement)
+
+  // 失败横幅照样要显示
+  await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument())
+  expect(sent).toBeGreaterThan(0)
+  // 关键：欢迎屏不能再留着把消息挡住 / 抹掉
+  await waitFor(() => expect(screen.getByText('帮我算一下 1+1')).toBeInTheDocument())
+  expect(screen.queryByText('开始一段对话')).not.toBeInTheDocument()
 })
