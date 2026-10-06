@@ -158,6 +158,51 @@ Rust 工具链在 WSL2，node/npm 只在 Windows 侧。
 建议把 M1 判据改成「建专家团并编队（主持人 + 2~8 成员，刷新后还在）」，
 把「派工」留给 M2 —— 否则 M1 永远达不成，而这不是实现偷懒，是判据串了里程碑。
 
+### B1-6 专家市场（第一版：列表 + 安装）🟢
+
+**已接通并实点验收**。两条路由：`GET /api/experts/market`、`POST /api/experts/market/{slug}/install`
+（`routes.rs`，已登记进 `CONTRACT_ROUTES`），界面是「专家」页的「市场」页签
+（`ui/web/src/experts/MarketTab.tsx`）。上游就是已经在用的 SkillHub `skillsets` ——
+octop 的专家市场与它的技能市场是**同一个上游**，所以没有第二个客户端。
+
+2026-10-06 在 `/tmp/quill-m1-accept` 真连上游点过两遍，库里留下的东西：
+
+| 装的包 | 专家 id | 人格来源 | 连带技能 |
+|---|---|---|---|
+| tech-test-automation | `hub-tech-test-automation`（1316 字） | — | 6 个，`enabled=0` |
+| tech-bug-troubleshooting | `hub-tech-bug-troubleshooting`（1254 字） | `identify.md` | 6 个，`enabled=0` |
+
+**实测到的三件上游事实**（不是从代码推的）：
+
+1. 列表项的 `skillSlugs` 是**空数组**，但 `skillCount` 给 6。所以技能名单只能来自
+   包里的 manifest，取不到再退到 `GET /api/v1/skillsets/{slug}` 的详情 —— 这条兜底
+   本轮第一次上线就派上用场（否则两个专家都只会装出「只有人格」）。
+2. **包与包不一样**：`tech-test-automation` 里有 `skillsets/<slug>.md`，
+   `tech-bug-troubleshooting` 没有，退到了 `identify.md`。挑选顺序照抄 octop，实测两种都通。
+3. 上游 `total` 给的是 `3348`，不是本页条数。
+
+**本轮有意与 octop 不同的三处**（理由写在代码注释与 `UPSTREAM-USAGE.md`）：
+
+- 包内 manifest **允许缺失**：缺了就退回上游详情，再没有就装「只有人格」的专家并如实回报。
+  octop 缺 manifest 整单 `PACKAGE_INVALID`（`skillhub_market.py:608`）。
+- 专家 id 用 `hub-` 而非 octop 的 `skillhub-skillset-`，且**超长直接报错不截断**。
+  截断会造出撞名专家（两个长 slug 截完可能撞成一个 id）；报错文案带完整派生 id 与 64 上限。
+- 技能连带安装**逐个如实回报** `installed` / `already_present` / `failed`，单个失败不废整单。
+
+**真机点出来并已修的一个界面缺陷**：装完会失效市场列表重取，重取回来的项 `installed`
+已是 true；原先先判 `installed`，于是刚渲染出来的「哪个技能没装上、为什么」被一个禁用
+按钮顶掉，用户来不及看。已改成**成功结果优先**（`MarketTab.tsx` 的 `MarketAction`），
+并补了一条会在这个顺序被改回去时变红的测试（已用变异验证：只有它变红，其余 10 条仍绿）。
+
+**没做的（第一版范围外）**：
+
+- **详情页**：列表项已带 slug / 名字 / 说明 / 场景 / 技能数，够用，不为它开一条路由。
+- **`already_installed` 分支未经真机点测**：界面对已装项禁用按钮，从界面点不到。
+  代码路径是「查到就返回库里那份、不覆盖用户可能改过的人格」，需要用 API 直连才能点。
+- octop 还有 `/experts/published`（自家发布通道）与 `/plugins/market`（插件市场），
+  都还没接；MCP **没有同款市场**，只有内置连接器目录（`GET /connectors/catalog`），
+  quill 已有真 MCP、缺的是那层目录。
+
 ---
 
 ## M2 · 专家与专家团真执行

@@ -96,6 +96,11 @@
 | 上游地址可配置 | `crates/quill-server/src/skillhub.rs:113-121` | `.octop-ref/octop/src/octop/infra/agents/experts/skillhub_market.py:35` | 已接入 | 同样是「用同一个常量、但定义在 sparse 外」 |
 | 拉取超时与每页条数 | `crates/quill-server/src/skillhub.rs:123` | `.octop-ref/octop/src/octop/infra/agents/experts/skillhub_market.py:51-52` | 已接入 | 30 秒与 100 条，与它的 `_HTTP_TIMEOUT` / `_SKILLSET_PAGE_SIZE` 同值 |
 | 解 zip 的攻击面检查 | `crates/quill-server/src/skillhub_unpack.rs:1-8` | `.octop-ref/octop/src/octop/infra/agents/experts/skillhub_market.py:37-40` | 已接入 | 用 Rust 的 `zip` crate 解，不用自己写解压器；四个上限同值 |
+| 专家市场的上游就是 SkillHub 的 skillsets | `crates/quill-server/src/api_expert_market.rs:57-110` | `.octop-ref/octop/dashboard/src/api/modules/expertMarket.ts:99-112` | 已接入 | 它的 `/experts/hub` 与它的 `/skill-packages/hub` 指向同一份 `/api/v1/skillsets`；**没有第二个上游客户端**，直接复用已有的 `skillhub` / `skillhub_unpack` |
+| 装市场专家时人格取 skillsets/<slug>.md → skillsets/ 下第一篇 → identify.md | `crates/quill-server/src/skillhub_unpack.rs:298-352` | `.octop-ref/octop/src/octop/infra/agents/experts/skillhub_market.py:611-621` | 已接入 | 顺序照抄。**不能直接用 `unpack`**：它按 `sanitize_name` 把条目拍平成 basename，于是编排提示与它引用的技能正文拍平后撞名，分不出哪篇才是人格 |
+| 装包前先取一次技能集详情 | `crates/quill-server/src/skillhub.rs:376-402` | `.octop-ref/octop/src/octop/infra/agents/experts/skillhub_market.py:389` | 已接入 | 它的 manifest 缺失兜底本来就靠这个端点；我们额外用它兜「包里没有可用 manifest」的情形 |
+| 装进来的技能一律 `enabled=false` | `crates/quill-server/src/api_extensions.rs:1073` | `.octop-ref/octop/src/octop/infra/agents/experts/skillhub_market.py:388-418` | 已接入 | 与已有的技能包安装同一套决策（实测 13 个技能就能把 8192 上下文顶爆） |
+| 市场专家 id = `hub-<slug>` | `crates/quill-server/src/api_expert_market.rs:41-54` | `.octop-ref/octop/src/octop/infra/agents/experts/skillhub_market.py:50` | 我们的选择 | 它用 `skillhub-skillset-` 前缀；我们缩短成 `hub-` 且**超长直接报错不截断** —— 截断会造出撞名专家（见 `BACKLOG.md` 的 B1-6） |
 | 会话 hover 才出现操作按钮 | `ui/web/src/chat/chatShell.css:169` | `.octop-ref/octop/dashboard/src/pages/Chat/chatSidebar.partial.less:248` | 只读对齐 | `opacity` 行为对齐，按钮位置因侧栏宽度不同而不同 |
 | 两栏布局的基线宽度 238px | `ui/web/src/chat/chatShell.css:15` | `vendor/openoctopus-frontend/src/index.css:70` | 已接入 | 注意这是**第三个项目**（OpenOctopus，CSS 移植基准），不是 Octop。见 `UPSTREAM.md` 末尾的警告 |
 | 表格视图下点编辑 | `ui/web/src/experts/ExpertsPage.tsx:404` | `.octop-ref/octop/dashboard/src/pages/Experts/index.tsx:870` | 我们的选择 | 它开一个 Drawer；我们沿用现有内联表单挂在表格下方，少一层模态 |
@@ -113,6 +118,7 @@
 | 技能卡片只显示 `name`，丢掉 slug 与版本 | `ui/web/src/skills/HubSkillList.tsx:205-212` 把 slug 与 version 都印出来 | 见上面「技能卡片显示 slug 与版本」那一行：实测 `name` 是占位串时会撞名 |
 | 成员名册解析到未知 id 就 `continue` | `ui/web/src/experts/TeamsTab.tsx:308-315` 跳过但把缺失条数单列 | `.octop-ref/octop/dashboard/src/pages/Experts/components/TeamCard.tsx:80-82`。静默丢弃会让「团队有 5 个人」变成界面上只显示 3 个徽标 |
 | 两个永远走不到的错误码 | `crates/quill-server/src/api_teams.rs:12-16` 明写「等真出现这两件事时再随功能一起加」 | quill 没有常驻 agent 进程、没有团队分享。写一个永远走不到的分支等于凭空造状态 |
+| 包内 manifest 当**必备**，缺了整单 `PACKAGE_INVALID` | `crates/quill-server/src/skillhub_unpack.rs:298` 允许它缺失，退回上游详情接口给的 `skillSlugs`，两者都没有就装「只有人格」的专家并如实回报 | `.octop-ref/octop/src/octop/infra/agents/experts/skillhub_market.py:608`。人格本身完整可用，为一个描述性字段把整单废掉比装上一个用户能看见也能改的专家更糟 |
 
 ## Octop 核不到的地方（sparse 集合之外）
 
