@@ -134,3 +134,25 @@ export function IconUsers({ size = 13 }: { size?: number }): ReactNode {
     </StrokeIcon>
   )
 }
+
+/** Octop 技能市场卡片在没有 `icon_url` 时用 lucide Zap 占位
+ *  （`SkillHubTab.tsx` 的 `hubCardIconFallback`）。这里是同款描边。 */
+export function IconZap({ size = 16 }: { size?: number }): ReactNode {
+  return (
+    <StrokeIcon size={size}>
+      <path d="M4 14h6l-2 8 10-12h-6l2-8z" />
+    </StrokeIcon>
+  )
+}
+
+/** Octop 技能市场卡片左下角的下载数用 lucide Download 搭配
+ *  （`SkillHubTab.tsx` 的 `hubCardStat`）。这里是同款描边。 */
+export function IconDownload({ size = 14 }: { size?: number }): ReactNode {
+  return (
+    <StrokeIcon size={size}>
+      <path d="M12 15V3" />
+      <path d="M7 10l5 5 5-5" />
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    </StrokeIcon>
+  )
+}

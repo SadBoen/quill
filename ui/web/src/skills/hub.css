@@ -138,3 +138,172 @@
   margin: 0 0 10px;
   overflow-wrap: anywhere;
 }
+
+/* ── 卡片网格 ──────────────────────────────────────────────────────────────
+   结构抄 Octop 的 `index.module.less`：`repeat(auto-fill, minmax(320px, 1fr))`，
+   宽屏一排多张，窄屏自己折成一列。
+   **只抄布局**：配色、圆角、阴影都走 quill 自己的变量 ——
+   `index.css` 是 vendor 移植基准，一个字节都不能动。 */
+.hub-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px 12px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+@media (max-width: 767px) {
+  .hub-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.hub-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  /* 卡片是**整块可读的内容**，不是一排可点的行 —— 所以不设 cursor:pointer。
+     只有里面的按钮可点（Octop 整卡可点是因为它会开详情抽屉，
+     quill 卡片上没有那个动作，整卡可点会让人以为点了有反应）。 */
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.hub-card:hover {
+  border-color: var(--accent);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 8%);
+}
+
+/* 已经装过的：左边一道色条。用户扫一眼就知道哪几张不用再点。 */
+.hub-card.is-installed {
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.hub-card-head {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.hub-card-name {
+  color: var(--ink);
+  flex: 1;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hub-card-icon {
+  border-radius: 8px;
+  flex-shrink: 0;
+  height: 28px;
+  object-fit: cover;
+  width: 28px;
+}
+
+.hub-card-icon.is-fallback {
+  align-items: center;
+  background: var(--accent-soft);
+  color: var(--accent);
+  display: inline-flex;
+  justify-content: center;
+}
+
+/* 「需要 API Key」是橙色的提醒，「已安装」是中性的事实 ——
+   两者语气不同，颜色就不能一样。 */
+.hub-card-flag {
+  background: #fdeceb;
+  border-radius: 999px;
+  color: #b42318;
+  flex-shrink: 0;
+  font-size: 11px;
+  line-height: 18px;
+  padding: 0 7px;
+  white-space: nowrap;
+}
+
+.hub-card-flag.is-done {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* 两行截断，跟 Octop 的 `-webkit-line-clamp: 2` 一样。
+   完整简介在装完之后才看得到 —— 卡片上塞全文会把网格撑得参差不齐。 */
+.hub-grid .hub-summary {
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  display: -webkit-box;
+  flex: 1;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.hub-grid .hub-summary.is-empty {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.hub-card-foot {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  margin-top: auto;
+}
+
+/* slug 与版本。刻意做得比简介弱 —— 它们是**辨识用的**，不是正文。
+   但不能省：实测上游有一批技能的 name 是占位串
+   （`martin-pdf` 的 name 字面就是 `pdf`），省掉 slug 卡片就分不出是哪几个。 */
+.hub-card-meta {
+  align-items: center;
+  color: var(--faint);
+  display: flex;
+  font-size: 11px;
+  gap: 8px;
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.hub-card-meta code {
+  font-size: 11px;
+}
+
+.hub-card-version {
+  white-space: nowrap;
+}
+
+.hub-card-stat {
+  align-items: center;
+  color: var(--muted);
+  display: inline-flex;
+  font-size: 12px;
+  gap: 4px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.hub-card-stat-unit {
+  color: var(--faint);
+}
+
+/* 装完的说明块在卡片里要占满一行，否则会被挤到按钮旁边。 */
+.hub-grid .hub-installed,
+.hub-grid .hub-action {
+  max-width: none;
+  text-align: right;
+}
+
+.hub-grid .hub-installed {
+  text-align: left;
+}

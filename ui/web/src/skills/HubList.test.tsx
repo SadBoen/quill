@@ -76,11 +76,13 @@ interface Bodies {
   search?: unknown
   installPack?: unknown
   installSkill?: unknown
+  /** 本机已装的技能。市场卡片靠它标「已安装 / 重新安装」。 */
+  installed?: { slug: string; tool_name?: string }[]
 }
 
 /** 按 URL 分派。**URL 判断要贴住真实的路径形状** ——
  *  `/skill-hub/skills/pdf-.../install` 也含 `/skill-hub/`，不区分就会走错分支。 */
-function renderHub(bodies: Bodies): void {
+function renderHub(bodies: Bodies): ReturnType<typeof render> {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -109,20 +111,28 @@ function renderHub(bodies: Bodies): void {
         return bodies.rankError ? fail(bodies.rankError) : json(bodies.rank ?? OK_RANK)
       }
       if (url.includes('/skill-hub/skills?')) {
-        return json(bodies.search ?? { host: 'https://api.skillhub.cn', query: '', items: [], total: null })
+        return json(
+          bodies.search ?? { host: 'https://api.skillhub.cn', query: '', items: [], total: null },
+        )
       }
       if (url.includes('/skill-hub?')) {
         return bodies.listError ? fail(bodies.listError) : json(bodies.list ?? OK_LIST)
+      }
+      // 已装技能目录。**默认 0 个** —— 没有真实安装记录就不该显示「已安装」。
+      // 注意键名是 `skills`（见 `skills_api::skillsOf`），不是 `items`。
+      if (url.includes('/api/extensions/skills')) {
+        return json({ skills: bodies.installed ?? [] })
       }
       return json({})
     }),
   )
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  render(
+  const view = render(
     <QueryClientProvider client={client}>
       <HubList />
     </QueryClientProvider>,
   )
+  return view
 }
 
 /** 切到「技能包」页签。技能包的那些断言都在这一层。 */
@@ -244,8 +254,68 @@ describe('技能市场 · 单个技能', () => {
     })
     await waitFor(() => expect(screen.getByText('PDF和图片文字提取')).toBeInTheDocument())
     // 拿 0 顶替是在编一个数字。
-    expect(screen.getByText('安装次数 —')).toBeInTheDocument()
-    expect(screen.queryByText('装过 0 次')).toBeNull()
+    expect(screen.getByText('—')).toBeInTheDocument()
+    expect(screen.queryByText(/0\s*次安装/)).toBeNull()
+  })
+
+  it('有安装次数就照实显示那个数', async () => {
+    renderHub({ rank: { ...OK_RANK, items: [skill({ installs: 378 })] } })
+    await waitFor(() => expect(screen.getByText('378')).toBeInTheDocument())
+    expect(screen.getByText('次安装')).toBeInTheDocument()
+  })
+
+  it('上游标了要 API Key 就在卡片上标出来', async () => {
+    // 实测上游给的是字符串 "true"（不是布尔），两种都要认。
+    // 少了这个标记，用户装完才发现这个技能要自己的密钥。
+    // 分成两条用例：一个容器里只渲染一次，才不会互相干扰。
+    const { unmount } = renderHub({
+      rank: { ...OK_RANK, items: [skill({ labels: { requires_api_key: 'true' } })] },
+    })
+    await waitFor(() => expect(screen.getByText('需要 API Key')).toBeInTheDocument())
+    unmount()
+
+    renderHub({
+      rank: { ...OK_RANK, items: [skill({ labels: { requires_api_key: true } })] },
+    })
+    await waitFor(() => expect(screen.getByText('需要 API Key')).toBeInTheDocument())
+  })
+
+  it('没标 API Key 的技能不被标成需要', async () => {
+    renderHub({ rank: { ...OK_RANK, items: [skill({ labels: null })] } })
+    await waitFor(() => expect(screen.getByText('PDF和图片文字提取')).toBeInTheDocument())
+    expect(screen.queryByText('需要 API Key')).toBeNull()
+  })
+
+  it('已经装过的技能标出来，按钮写「重新安装」', async () => {
+    // 已装状态**从技能目录查**，不是市场自己说。
+    renderHub({ installed: [{ slug: 'pdf-image-text-extractor', tool_name: 'pdf-image-text-extractor' }] })
+    await waitFor(() => expect(screen.getByText('已安装')).toBeInTheDocument())
+    expect(screen.getByText('重新安装')).toBeInTheDocument()
+    // 卡片上要能一眼看出这张是装过的。
+    expect(screen.getByTestId('hub-card-pdf-image-text-extractor').className).toContain(
+      'is-installed',
+    )
+  })
+
+  it('没有图标时用占位图标，不留破图', async () => {
+    // 实测大量 icon_url 是 null 或外部链接，加载不出来是常态。
+    renderHub({ rank: { ...OK_RANK, items: [skill({ icon_url: '' })] } })
+    await waitFor(() => expect(screen.getByText('PDF和图片文字提取')).toBeInTheDocument())
+    expect(document.querySelector('.hub-card-icon.is-fallback')).not.toBeNull()
+    expect(document.querySelector('.hub-card-icon[src]')).toBeNull()
+  })
+
+  it('图标加载失败时换成占位图标', async () => {
+    renderHub({
+      rank: { ...OK_RANK, items: [skill({ icon_url: 'https://example.invalid/x.png' })] },
+    })
+    await waitFor(() => expect(screen.getByText('PDF和图片文字提取')).toBeInTheDocument())
+    const img = document.querySelector('.hub-card-icon[src]') as HTMLImageElement
+    expect(img).not.toBeNull()
+    fireEvent.error(img)
+    await waitFor(() =>
+      expect(document.querySelector('.hub-card-icon.is-fallback')).not.toBeNull(),
+    )
   })
 
   it('中文简介优先于英文', async () => {
@@ -335,8 +405,7 @@ describe('技能市场 · 单个技能', () => {
 
   it('同一个 slug 的多个版本都列出来，不替用户挑一个', async () => {
     // 真机实测：上游推荐榜里 `dev-expert` 同时有 2.0.3 与 1.17.0。
-    // 合并成一行 = 我们替上游做了「哪个版本更好」的判断；
-    // 顺手去重还会在 React 里撞 key（两行同为 `dev-expert`）。
+    // 合并成一行 = 我们替上游做了「哪个版本更好」的判断。
     renderHub({
       rank: {
         ...OK_RANK,
@@ -349,9 +418,9 @@ describe('技能市场 · 单个技能', () => {
     await waitFor(() => expect(screen.getByText('版本 2.0.3')).toBeInTheDocument())
     // 两个版本都在，各自标了自己的版本号。
     expect(screen.getByText('版本 1.17.0')).toBeInTheDocument()
-    // 两行都在（这里只数 slug 标签：第二行的 name 也叫 dev-expert，
+    // 两张卡片都在（数 slug 标签：第二行的 name 也叫 dev-expert，
     // 用 getAllByText 会把它一起数进来）。
-    expect(document.querySelectorAll('.hub-slug')).toHaveLength(2)
+    expect(document.querySelectorAll('.hub-card-meta code')).toHaveLength(2)
   })
 
   it('装失败时显示服务端的中文说明与下一步，不退化成「请求失败」', async () => {

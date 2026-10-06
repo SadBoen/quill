@@ -2,20 +2,24 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { type ReactNode, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { Card, ErrorNotice, StatusBadge } from '../components/Page'
+import { Card, ErrorNotice } from '../components/Page'
+import { IconDownload, IconZap } from '../experts/icons'
 import {
   hubRankings,
   installHubSkill,
   installsCount,
+  needsApiKey,
   searchHubSkills,
+  skillIcon,
   skillLabel,
   skillSummary,
   type HubSkill,
 } from './hubApi'
+import { listSkills, skillsOf } from './skillsApi'
 import './hub.css'
 
 /**
- * 市场里的**单技能**列表。
+ * 市场里的**单技能**列表（卡片网格）。
  *
  * ## 为什么要和技能包分开
  *
@@ -27,24 +31,44 @@ import './hub.css'
  * 两者混在一张列表里，用户点一次安装、只拿到 1 个技能，就会以为
  * 市场缺货 —— 实际是他装错了那一层。
  *
- * ## 这一层的两条如实呈现
+ * ## 卡片形态抄 Octop
+ *
+ * 结构照 `SkillHubTab.tsx` 的 `hubCard`：图标 + 名称 + 「需要 API Key」
+ * 橙标、两行截断的简介、footer 左下载数右安装按钮；
+ * 网格用 `repeat(auto-fill, minmax(320px, 1fr))`。
+ * **只抄结构**，配色与圆角走 quill 自己的变量 ——
+ * `index.css` 是 vendor 移植基准，一个字节都不能动。
+ *
+ * ## 这一层的三条如实呈现
  *
  * 1. **榜单可能只拉到一部分。**「全部」是并发拉 6 个榜合并的，
  *    少的那几个在 `errors` 里，界面上要说出来。
  * 2. **安装次数上游没给就是「—」。** 拿 0 顶替是编一个数字。
+ * 3. **同一个 slug 的多个版本都列出来。** 合并成一行等于替用户挑版本。
  */
 
 const SKILL_KEY = ['skill-hub', 'skills'] as const
 const RANK_KEY = ['skill-hub', 'rankings'] as const
+const INSTALLED_KEY = ['extensions', 'skills'] as const
 const SEARCH_LIMIT = 20
 
-function SkillInstallButton({ item }: { item: HubSkill }): ReactNode {
+function SkillInstallButton({
+  item,
+  installed,
+}: {
+  item: HubSkill
+  installed: boolean
+}): ReactNode {
   const { t } = useTranslation()
   const client = useQueryClient()
 
   const install = useMutation({
     mutationFn: () => installHubSkill(item.slug),
-    onSuccess: () => void client.invalidateQueries({ queryKey: RANK_KEY }),
+    onSuccess: () => {
+      // 装完它就进了「已装」集合，卡片上的「重新安装」与已安装标记要跟上。
+      void client.invalidateQueries({ queryKey: RANK_KEY })
+      void client.invalidateQueries({ queryKey: INSTALLED_KEY })
+    },
   })
 
   if (install.isSuccess) {
@@ -59,7 +83,8 @@ function SkillInstallButton({ item }: { item: HubSkill }): ReactNode {
         </p>
         <p className="field-help">
           {t('hub.installedDisabled', {
-            defaultValue: '装完是停用的：还没挂进对话工具表，模型这一轮看不到它。去「技能包」看一眼再打开开关。',
+            defaultValue:
+              '装完是停用的：还没挂进对话工具表，模型这一轮看不到它。去「已安装」看一眼再打开开关。',
           })}
         </p>
         {/* 正文取自包里哪个文件要说出来。上游今天用 SKILL.md，
@@ -93,7 +118,9 @@ function SkillInstallButton({ item }: { item: HubSkill }): ReactNode {
       >
         {install.isPending
           ? t('hub.installing', { defaultValue: '安装中…' })
-          : t('hub.install', { defaultValue: '安装' })}
+          : installed
+            ? t('hub.reinstall', { defaultValue: '重新安装' })
+            : t('hub.install', { defaultValue: '安装' })}
       </button>
       {/* **把 error 对象原样交给 `ErrorNotice`**，不要先转字符串 ——
           转了就把服务端那句中文说明与「下一步：…」全丢掉。 */}
@@ -102,57 +129,122 @@ function SkillInstallButton({ item }: { item: HubSkill }): ReactNode {
   )
 }
 
-function SkillCards({ items }: { items: HubSkill[] }): ReactNode {
+/**
+ * 一张技能卡片。
+ *
+ * `key` 用 `slug@version` 而不是 `slug`：上游的同一份榜单里会出现
+ * 同一个 slug 的多个版本（实测 `dev-expert` 同时有 2.0.3 与 1.17.0），
+ * 拿 slug 当 key 会撞。
+ */
+function SkillCard({
+  item,
+  installed,
+}: {
+  item: HubSkill
+  installed: boolean
+}): ReactNode {
   const { t } = useTranslation()
+  const summary = skillSummary(item)
+  const icon = skillIcon(item)
+  const [iconBroken, setIconBroken] = useState(false)
+  const installs = installsCount(item)
+  const apiKey = needsApiKey(item)
+
   return (
-    <ul className="hub-list">
-      {items.map((item) => {
-        const summary = skillSummary(item)
-        const installs = installsCount(item)
-        return (
-          /* key 用 `slug@version`，**不是 `slug`**。
-             上游的同一份推荐榜里会出现同一个 slug 的多个版本
-             （实测 `dev-expert` 同时有 2.0.3 与 1.17.0），
-             拿 slug 当 key 会撞。
-             顺带一提：**不去重**。同一个技能列两行、各自标明版本，
-             是上游给的样子；替用户挑一个版本，等于我们替上游做决定。 */
-          <li className="hub-card" key={`${item.slug}@${item.version}`} data-slug={item.slug}>
-            <div className="hub-card-main">
-              <div className="hub-card-head">
-                <strong>{skillLabel(item)}</strong>
-                <code className="hub-slug">{item.slug}</code>
-                {item.version ? (
-                  <StatusBadge tone="neutral">
-                    {t('hub.version', {
-                      version: item.version,
-                      defaultValue: '版本 {{version}}',
-                    })}
-                  </StatusBadge>
-                ) : null}
-                <StatusBadge tone="neutral">
-                  {/* 上游没给安装次数就显示「—」。拿 0 顶替是在编一个数字。 */}
-                  {installs === null
-                    ? t('hub.installsUnknown', { defaultValue: '安装次数 —' })
-                    : t('hub.installs', {
-                        count: installs,
-                        defaultValue: '装过 {{count}} 次',
-                      })}
-                </StatusBadge>
-              </div>
-              {summary ? (
-                <p className="hub-summary">{summary}</p>
-              ) : (
-                <p className="field-help">
-                  {t('hub.noSummary', {
-                    defaultValue: '上游没给说明。没有说明就是没有，不拿 slug 顶替。',
-                  })}
-                </p>
-              )}
-            </div>
-            <SkillInstallButton item={item} />
-          </li>
-        )
-      })}
+    <li
+      className={installed ? 'hub-card is-installed' : 'hub-card'}
+      data-slug={item.slug}
+      data-version={item.version}
+      data-testid={`hub-card-${item.slug}`}
+    >
+      <div className="hub-card-head">
+        {icon && !iconBroken ? (
+          <img
+            className="hub-card-icon"
+            src={icon}
+            alt=""
+            loading="lazy"
+            // 外链图标挂掉是常态（实测大量 `icon_url` 指向外部存储），
+            // 留一个破图标比换个占位难看得多。
+            onError={() => setIconBroken(true)}
+          />
+        ) : (
+          <span className="hub-card-icon is-fallback" aria-hidden="true">
+            <IconZap size={16} />
+          </span>
+        )}
+        <strong className="hub-card-name">{skillLabel(item)}</strong>
+        {apiKey ? (
+          <span className="hub-card-flag">
+            {t('hub.needsApiKey', { defaultValue: '需要 API Key' })}
+          </span>
+        ) : null}
+        {installed ? (
+          <span className="hub-card-flag is-done">
+            {t('hub.alreadyInstalled', { defaultValue: '已安装' })}
+          </span>
+        ) : null}
+      </div>
+
+      <p className={summary ? 'hub-summary' : 'hub-summary is-empty'}>
+        {summary ||
+          t('hub.noSummary', {
+            defaultValue: '上游没给说明。没有说明就是没有，不拿 slug 顶替。',
+          })}
+      </p>
+
+      {/* slug 与版本：**不抄 Octop 的省略**。
+          Octop 的卡片只显示 `name`，可实测上游有一批技能的 `name`
+          是个占位串（`martin-pdf` 的 name 字面就是 `pdf`），
+          去掉 slug 之后三张卡片全都叫「pdf」，用户无从分辨。
+          版本同理：同一 slug 会同时有多个版本，不写出来就看不出差在哪。 */}
+      <p className="hub-card-meta">
+        <code>{item.slug}</code>
+        {item.version ? (
+          <span className="hub-card-version">
+            {t('hub.version', {
+              version: item.version,
+              defaultValue: '版本 {{version}}',
+            })}
+          </span>
+        ) : null}
+      </p>
+
+      <div className="hub-card-foot">
+        <span className="hub-card-stat">
+          <IconDownload size={13} />
+          {/* 上游没给安装次数就显示「—」。拿 0 顶替是在编一个数字。 */}
+          {installs === null
+            ? t('hub.installsUnknown', { defaultValue: '—' })
+            : installs.toLocaleString()}
+          {installs !== null ? (
+            <span className="hub-card-stat-unit">
+              {t('hub.installsUnit', { defaultValue: '次安装' })}
+            </span>
+          ) : null}
+        </span>
+        <SkillInstallButton item={item} installed={installed} />
+      </div>
+    </li>
+  )
+}
+
+function SkillCards({
+  items,
+  installedSlugs,
+}: {
+  items: HubSkill[]
+  installedSlugs: ReadonlySet<string>
+}): ReactNode {
+  return (
+    <ul className="hub-grid">
+      {items.map((item) => (
+        <SkillCard
+          key={`${item.slug}@${item.version}`}
+          item={item}
+          installed={installedSlugs.has(item.slug)}
+        />
+      ))}
     </ul>
   )
 }
@@ -194,6 +286,20 @@ export function HubSkillList(): ReactNode {
     retry: false,
   })
 
+  // 已装集合。**从技能目录查，而不是市场自己说「这个装过了」** ——
+  // 市场那边没有这个信息，猜一个「应该装过」就是在编。
+  const installedQuery = useQuery({
+    queryKey: INSTALLED_KEY,
+    queryFn: listSkills,
+    staleTime: 30_000,
+    retry: false,
+  })
+  const installedSlugs = new Set(
+    skillsOf(installedQuery.data)
+      .map((s) => s.slug)
+      .filter((s): s is string => typeof s === 'string' && s.length > 0),
+  )
+
   const active = searching ? search : board
   const items = active.data?.items ?? []
   const host = active.data?.host
@@ -221,7 +327,8 @@ export function HubSkillList(): ReactNode {
           <p className="field-help hub-host">
             {t('hub.host', {
               host,
-              defaultValue: '数据来自外部市场 {{host}}。它挂了或断网时这里会连不上 —— 那不影响已经装好的技能。',
+              defaultValue:
+                '数据来自外部市场 {{host}}。它挂了或断网时这里会连不上 —— 那不影响已经装好的技能。',
             })}
           </p>
         ) : null}
@@ -237,11 +344,17 @@ export function HubSkillList(): ReactNode {
             type="search"
             value={term}
             aria-label={t('hub.searchLabel', { defaultValue: '搜技能' })}
-            placeholder={t('hub.searchPlaceholder', { defaultValue: '按名字或用途搜，例如 pdf、翻译' })}
+            placeholder={t('hub.searchPlaceholder', {
+              defaultValue: '按名字或用途搜，例如 pdf、翻译',
+            })}
             data-testid="hub-skill-search"
             onChange={(e) => setTerm(e.target.value)}
           />
-          <button type="submit" className="secondary-button" data-testid="hub-skill-search-go">
+          <button
+            type="submit"
+            className="secondary-button"
+            data-testid="hub-skill-search-go"
+          >
             {t('hub.search', { defaultValue: '搜索' })}
           </button>
           {searching ? (
@@ -306,7 +419,9 @@ export function HubSkillList(): ReactNode {
           </p>
         ) : null}
 
-        {items.length > 0 ? <SkillCards items={items} /> : null}
+        {items.length > 0 ? (
+          <SkillCards items={items} installedSlugs={installedSlugs} />
+        ) : null}
       </Card>
     </div>
   )

@@ -65,6 +65,36 @@ where
     Ok(v.and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default())
 }
 
+/// `labels.requires_api_key` 这一类**开关型字段**。
+///
+/// 不用 [`de_text`]：那个只认字符串，遇到布尔 `true` 会读成空串
+/// —— 于是「上游说需要密钥」被读成「没说」，比报错更糟。
+/// 这里显式认两种形态：字符串 `"true"` 与布尔 `true`。
+/// **实测上游现在给的是字符串**，布尔只是替明天留的余地。
+fn de_flag<'de, D>(d: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = Option::<serde_json::Value>::deserialize(d)?;
+    Ok(match v {
+        Some(serde_json::Value::Bool(b)) => b.to_string(),
+        Some(other) => other.as_str().unwrap_or_default().to_string(),
+        None => String::new(),
+    })
+}
+
+/// `labels` 也是同类坑：上游有时给对象、有时给 `null`。
+/// `null` 读成「没有标签」—— 那是对的，一个没标签的技能不是错误。
+fn de_labels<'de, D>(d: D) -> Result<HubLabels, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = Option::<serde_json::Value>::deserialize(d)?;
+    Ok(v
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default())
+}
+
 /// 上游地址。**可以配置**而不是写死：Octop 支持 `SKILLHUB_HOST`，
 /// 自建或镜像的 SkillHub 就靠这个换。
 pub fn host() -> String {
@@ -282,6 +312,30 @@ pub struct HubSkill {
     pub installs: Option<i64>,
     #[serde(default)]
     pub downloads: Option<i64>,
+    /// 上游的标签。**只取一个字段** —— `requires_api_key`，Octop 的卡片上
+    /// 有「需要 API Key」的橙标（`SkillHubTab.tsx` 的 `requiresApiKey()`）。
+    /// 没有它的话，用户装完才发现这个技能要自己的密钥。
+    #[serde(default, deserialize_with = "de_labels")]
+    pub labels: HubLabels,
+}
+
+/// 上游 `labels` 里我们**真的用得到**的那一个。
+///
+/// 实测（2026-10-06）：`labels` 的值是**字符串**（`"true"`）而不是布尔，
+/// 所以这里收成 `String`，由 [`HubLabels::requires_api_key`] 认两种写法。
+/// 收成 `bool` 的话，上游哪天改成 `true` 就会解析失败 —— 那正是
+/// ISSUE-056 踩过的坑。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HubLabels {
+    #[serde(rename = "requires_api_key", default, deserialize_with = "de_flag")]
+    pub requires_api_key: String,
+}
+
+impl HubLabels {
+    /// 上游给的是字符串 `"true"`，但也见过布尔 `true`。**两种都认。**
+    pub fn requires_api_key(&self) -> bool {
+        matches!(self.requires_api_key.trim(), "true" | "1" | "yes")
+    }
 }
 
 impl HubSkill {
@@ -1041,6 +1095,40 @@ mod tests {
             .expect("应当能解析");
         assert_eq!(m.display_name(), None);
         assert!(m.referenced_slugs().is_empty());
+    }
+
+    /// `labels.requires_api_key` 的真实形态（2026-10-06 实测）：
+    /// 值是**字符串** `"true"`，不是布尔。
+    const REAL_LABELS_STRING: &str = r#"{"slug":"a","name":"A","labels":{"requires_api_key":"true"}}"#;
+    /// 同一字段的另一种形态：布尔。
+    const REAL_LABELS_BOOL: &str = r#"{"slug":"a","name":"A","labels":{"requires_api_key":true}}"#;
+
+    #[test]
+    fn a_skill_that_needs_an_api_key_says_so_in_both_upstream_shapes() {
+        // Octop 的卡片上有这个橙标（`requiresApiKey()`）。少了它，
+        // 用户装完才发现这个技能要自己的密钥。
+        let a: HubSkill = serde_json::from_str(REAL_LABELS_STRING).expect("应当能解析");
+        assert!(a.labels.requires_api_key(), "字符串 \"true\"");
+        // 收成 bool 的话，改成布尔 true 就会解析失败 —— 正是 ISSUE-056 的坑。
+        let b: HubSkill = serde_json::from_str(REAL_LABELS_BOOL).expect("应当能解析");
+        assert!(b.labels.requires_api_key(), "布尔 true");
+    }
+
+    #[test]
+    fn a_skill_without_labels_is_not_marked_as_needing_a_key() {
+        // 标签缺席是常态（`labels: null` 也出现过），不能当成「需要密钥」。
+        for raw in [
+            r#"{"slug":"a","name":"A"}"#,
+            r#"{"slug":"a","name":"A","labels":null}"#,
+            r#"{"slug":"a","name":"A","labels":{}}"#,
+            r#"{"slug":"a","name":"A","labels":{"requires_api_key":"false"}}"#,
+        ] {
+            let skill: HubSkill = serde_json::from_str(raw).expect("应当能解析");
+            assert!(
+                !skill.labels.requires_api_key(),
+                "不该标成需要密钥：{raw}"
+            );
+        }
     }
 
     #[test]

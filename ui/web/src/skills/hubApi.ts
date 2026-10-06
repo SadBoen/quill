@@ -91,10 +91,18 @@ export interface HubSkill {
   description_zh: string
   version: string
   category: string
+  /** 上游给的图标。**经常是空串** —— 实测搜「翻译」的 20 条里至少 6 条没有。 */
   icon_url: string
   /** 真实安装次数。**`null` 是上游没给**，界面显示「—」而不是 0。 */
   installs: number | null
   downloads: number | null
+  /**
+   * 上游的标签（只透传我们要用的那一个）。
+   *
+   * 值的类型是 `string | boolean`：实测上游给的是**字符串** `"true"`，
+   * 但也见过布尔 —— 后端两种都认了，前端就不能只认一种。
+   */
+  labels?: { requires_api_key?: string | boolean } | null
 }
 
 export interface HubSkillSearch {
@@ -179,4 +187,19 @@ export function skillSummary(item: HubSkill): string {
  * 进来只会逼调用方写 cast。数据与文案分开，判断「有没有这个数」也归组件。 */
 export function installsCount(item: HubSkill): number | null {
   return typeof item.installs === 'number' ? item.installs : null
+}
+
+/** 这个技能是不是**上游标了要 API Key**。
+ *
+ * 上游给的是字符串 `"true"`（实测），但也见过布尔 —— 后端两种都认了，
+ * 这里照着认，不写死一种。**没标就是没标**，不能当成「要密钥」。
+ */
+export function needsApiKey(item: HubSkill): boolean {
+  const v = item.labels?.requires_api_key
+  return v === 'true' || v === true || v === '1' || v === 'yes'
+}
+
+/** 有没有图标。实测大量技能没有 `icon_url`（`null` 读成空串）。 */
+export function skillIcon(item: HubSkill): string {
+  return item.icon_url?.trim() ?? ''
 }
