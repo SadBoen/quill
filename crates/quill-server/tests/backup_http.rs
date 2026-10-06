@@ -76,11 +76,19 @@ impl Harness {
     }
 
     fn state(&self) -> AppState {
+        self.state_as(true)
+    }
+
+    /// 同一套装置，但令牌可以**不是** admin。
+    ///
+    /// 备份三条现在都要求 admin，所以「非 admin 拿不到」这条边界必须用
+    /// 一个真的非 admin 令牌去打 —— 拿 admin 令牌打不出 403，等于没测。
+    fn state_as(&self, is_admin: bool) -> AppState {
         let resolver = EnvTokenResolver::new(vec![(
             TOKEN.to_string(),
             AuthContext {
                 user_id: quill_domain::UserId::parse(UID).expect("测试 UID 必须合法"),
-                is_admin: true,
+                is_admin,
             },
         )]);
         AppState {
@@ -682,4 +690,50 @@ async fn verify_on_a_missing_backup_is_404_not_501() {
     let text = body_text(resp).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{text}");
     assert!(!text.contains("\"ok\""), "404 里不该出现 ok 字段：{text}");
+}
+
+/// 8. **三条都只允许 admin**（2026-10-07 收紧）。
+///
+/// 备份的源是整个数据根，那里装着**所有**用户的会话全文；只凭「已登录」
+/// 放行，等于任何一个普通用户都能把别人的对话导出成文件。这一条钉住
+/// 鉴权边界，防止以后有人图省事把 `RequireAdmin` 换回 `AuthUser`。
+#[tokio::test]
+async fn a_logged_in_non_admin_cannot_reach_any_backup_route() {
+    let h = Harness::new("backup-nonadmin");
+
+    // 造一个真存在的备份，确保 403 来自**鉴权**而不是「目录不存在」。
+    let real = name("nonadmin-target");
+    export_ok(&h, &real).await;
+
+    for path in [
+        "/api/backup/export",
+        "/api/backup/verify",
+        "/api/backup/restore",
+    ] {
+        let req = Request::builder()
+            .method("POST")
+            .uri(path)
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .header("content-type", "application/json")
+            .body(Body::from(format!("{{\"name\":{real:?}}}")))
+            .expect("构造请求");
+
+        let resp = build_router(h.state_as(false))
+            .oneshot(req)
+            .await
+            .expect("请求失败");
+        let status = resp.status();
+        let text = body_text(resp).await;
+
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "{path} 对非 admin 必须 403，而不是把备份内容给出去：{text}"
+        );
+        // 最要紧的一条：响应里不能出现任何备份内容或服务端绝对路径。
+        assert!(
+            !text.contains(&real) || !text.contains("db_sha256"),
+            "{path} 的 403 里不该夹带备份信息：{text}"
+        );
+    }
 }

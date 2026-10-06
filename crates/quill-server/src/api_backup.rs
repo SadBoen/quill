@@ -2,13 +2,17 @@
 //!
 //! 三条约束贯穿本文件：
 //!
-//! 1. `name` 只是备份根目录下的**相对名**，不是路径。浏览器无权决定服务端
+//! 1. **三条都只允许 admin**（`RequireAdmin`）。备份的源是整个数据根，
+//!    那里有**所有**用户的会话全文；校验会读全量文件并回报目录级信息；
+//!    还原那条虽不写盘，却会回显服务端绝对路径与一条可直接执行的命令。
+//!    三者都是「实例级」操作，与 `/api/admin/config` 同类，不能只凭登录放行。
+//! 2. `name` 只是备份根目录下的**相对名**，不是路径。浏览器无权决定服务端
 //!    往哪儿写：绝对路径、盘符、`..` 一律 400，拼完之后还要过
 //!    `pathsafe::is_within`（全项目唯一的包含判定）才作数。
-//! 2. 校验在这里实现：`quill-backup` 只有导出与还原，没有 verify。判据就是
+//! 3. 校验在这里实现：`quill-backup` 只有导出与还原，没有 verify。判据就是
 //!    「清单里记的摘要」与「文件当前内容重算的摘要」逐条对比，外加数据库快照
 //!    摘要重算。**不许**另写一套「大致校验」—— 那正是备份功能最容易骗人的地方。
-//! 3. 还原**不在进程内做**：服务正持有 SQLite 文件，边服务边覆盖它会写坏正在
+//! 4. 还原**不在进程内做**：服务正持有 SQLite 文件，边服务边覆盖它会写坏正在
 //!    用的库。所以这条路由说清原因并给出停服后要跑的命令 —— 既不是 501
 //!    （能力在 CLI 里是有的），也不是假成功。
 
@@ -26,7 +30,7 @@ use quill_backup::{
 };
 
 use crate::api_experts::only_keys;
-use crate::auth::AuthUser;
+use crate::auth::RequireAdmin;
 use crate::body::JsonBody;
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -121,12 +125,16 @@ fn resolve(state: &AppState, body: &Value, route: &str) -> Result<Target, ApiErr
 
 /// `POST /api/backup/export` → 201。
 ///
+/// **只允许 admin**（`RequireAdmin`，不是 `AuthUser`）：备份的源是整个数据根，
+/// 而数据根里有**所有**用户的会话与消息 —— 普通登录用户一旦能导出，就等于
+/// 拿到了别人的会话全文。这跟 `/api/admin/config` 是同一类「实例级」操作。
+///
 /// 目标非空、源不可用这两类在**进存储线程之前**就判掉：`create_backup`
 /// 也会拒绝非空目标，但它给出的只是一句话，我们要给的是能照着做的
 /// 409（带目录名）与 503（带真实原因）。
 pub async fn export(
     State(state): State<AppState>,
-    _user: AuthUser,
+    _admin: RequireAdmin,
     JsonBody(body): JsonBody,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let t = resolve(&state, &body, "POST /api/backup/export")?;
@@ -196,6 +204,9 @@ pub async fn export(
 
 /// `POST /api/backup/verify` → 200（通过）或 422（逐条点名不符的文件）。
 ///
+/// 同样**只允许 admin**：校验要逐个重算全量文件的 sha256，读的是整份备份内容，
+/// 而且会把「哪些文件不在了」这条目录级信息回给调用方。
+///
 /// 失败**不是** `ok: false` 的 200：一份校验不过的备份不能被任何客户端
 /// 读成「校验过了」。所以走标准错误信封，`detail` 里带路径与两个摘要。
 ///
@@ -203,7 +214,7 @@ pub async fn export(
 /// 校验失败换成名字不会有任何改变。
 pub async fn verify(
     State(state): State<AppState>,
-    _user: AuthUser,
+    _admin: RequireAdmin,
     JsonBody(body): JsonBody,
 ) -> Result<Json<Value>, ApiError> {
     let t = resolve(&state, &body, "POST /api/backup/verify")?;
@@ -305,13 +316,17 @@ pub async fn verify(
 
 /// `POST /api/backup/restore` → 200，但**没有**还原。
 ///
+/// 同样**只允许 admin**：这条虽不写盘，但它会把**服务端绝对路径**与
+/// 库文件位置回显给调用方，并把一条可直接照抄的 `quill restore` 命令交出去。
+/// 普通用户拿到这两样就等于拿到了实例布局，不该给。
+///
 /// 服务进程通过 `DbBridge` 一直开着 SQLite 文件；在线覆盖它等于在服务还在
 /// 读写的时候换掉底下的库。所以这里说清原因，并给出停服后要跑的**真实**命令
 /// （`quill restore <目录> --db <库> --root <数据根> --yes`，标志名取自
 /// `quill-cli/src/cmd_backup.rs`；注意 CLI 的 restore 把 `--root` 直接当数据根用）。
 pub async fn restore(
     State(state): State<AppState>,
-    _user: AuthUser,
+    _admin: RequireAdmin,
     JsonBody(body): JsonBody,
 ) -> Result<Json<Value>, ApiError> {
     let t = resolve(&state, &body, "POST /api/backup/restore")?;
