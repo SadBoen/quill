@@ -20,6 +20,10 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 RAW = ROOT / "TESTSETS" / "_raw"
 OUT = ROOT / "TESTSETS"
 
+# tasks.json 是入库文件，里面不能写死本机绝对路径。统一用这个占位符，
+# 发送前由 runner 换成本机仓库根目录（换不掉就报错，不带着占位符发出去）。
+REPO = "{REPO}"
+
 ATLAS_N = 50
 SKILL_N = 50
 
@@ -49,6 +53,13 @@ def load_atlas():
                     claims = json.loads(claims.replace("'", '"'))
             except (json.JSONDecodeError, ValueError):
                 claims = []
+            traj = row.get("TRAJECTORY") or ""
+            if isinstance(traj, list):
+                traj = json.dumps(traj, ensure_ascii=False)
+            missing = referenced_inputs(traj)
+            prompt = attach_atlas_source(
+                prompt, p, int(r.get("row_idx", 0)), row["TASK"], missing
+            )
             tasks.append(
                 {
                     # **整个 TASK 都拿来做 id，不许截断。**
@@ -68,9 +79,52 @@ def load_atlas():
                     "prompt": prompt,
                     "required_tools": tools,
                     "expected_claims": claims,
+                    "source_file": REPO + "/" + p.relative_to(ROOT).as_posix(),
+                    "source_row": int(r.get("row_idx", 0)),
+                    "referenced_inputs_missing": missing,
                 }
             )
     return tasks
+
+
+# 任务提示里引用、但上游数据集根本没随任务发布的输入路径。
+# 只出现在参考轨迹 TRAJECTORY 里（它记录了当年在评测环境里怎么调的）。
+# 把它们**明说**出来，是为了不让模型去凭空造数据 —— 这是诚实，不是给答案。
+DATA_PATH = re.compile(r"/data/[A-Za-z0-9_./\- ]*?[A-Za-z0-9](?:\.[A-Za-z0-9]{1,8})")
+
+
+def referenced_inputs(traj_text: str):
+    found = []
+    for m in DATA_PATH.finditer(traj_text or ""):
+        s = m.group(0).strip().rstrip('.,;"\'')
+        if s not in found:
+            found.append(s)
+    return sorted(found)
+
+
+def attach_atlas_source(prompt: str, src_file: pathlib.Path, row_idx: int, task_id: str, missing):
+    src_rel = src_file.relative_to(ROOT).as_posix()
+    lines = ["", "---", "", "【本条任务的出处与输入现状】"]
+    lines.append(f"数据集原始记录：{REPO}/{src_rel}  第 {row_idx} 行，TASK={task_id}")
+    if missing:
+        lines.append("")
+        lines.append(
+            "这条任务当年在评测环境里依赖下列输入文件。上游仓库只发布了任务文本与"
+            "参考轨迹，**这些数据文件本身没有随数据集发布，本机也不存在**："
+        )
+        for s in missing[:MAX_LISTED_FIXTURES]:
+            lines.append(f"  - {s}")
+        if len(missing) > MAX_LISTED_FIXTURES:
+            lines.append(f"  …… 共 {len(missing)} 个，只列了前 {MAX_LISTED_FIXTURES} 个")
+        lines.append("")
+        lines.append(
+            "所以：不要编造这些文件的内容。如果任务必须依赖它们才能作答，"
+            "请直接说明缺哪个、为什么缺，而不是猜一个答案。"
+        )
+    else:
+        lines.append("")
+        lines.append("这条任务不依赖任何随数据集发布的输入文件。")
+    return prompt + "\n".join(lines) + "\n"
 
 
 # -------------------------------------------------------------- SkillsBench
@@ -140,6 +194,96 @@ def scalar(v):
     return str(v)
 
 
+# ---------------------------------------------------------------- 输入夹具
+#
+# 这些任务包**确实带输入数据**（packets.pcap / wave.mseed / handbook.pdf /
+# sensor_data.csv …）。早前只下载了 task.md 与 SKILL.md，于是每个任务看上去
+# 「零输入夹具」，任务提示因此既没路径也没数据，模型只能回一句「缺少 xxx」——
+# 那是在如实汇报环境，不算模型能力问题。路径必须写进任务提示。
+#
+# oracle/ 与 verifier/ 一律排除：里面是 solve.sh 和 ground_truths，
+# 写进提示等于把标准答案抄给模型。
+
+EXCLUDE_DIR_PARTS = ("/oracle/", "/verifier/", "/.git/")
+EXCLUDE_NAMES = ("task.md", "Dockerfile", "solve.sh", "solve.py")
+MAX_LISTED_FIXTURES = 40
+
+
+def collect_fixtures(pkg_dir: pathlib.Path):
+    """列出这个任务包真实存在的输入文件（仓库内相对路径 + 字节数）。
+
+    路径用**仓库相对路径 + {REPO} 占位符**，不写死绝对路径：
+    `tasks.json` 是入库文件，写死 `/mnt/d/96_CoderWorld/quill/...` 会让别的
+    机器 clone 下来就指向一个不存在的目录。发送前由 runner 把 `{REPO}`
+    换成本机仓库根目录，换不掉就直接报错，不让它带着占位符发出去。
+    """
+    out = []
+    for p in sorted(pkg_dir.rglob("*")):
+        if not p.is_file():
+            continue
+        rel = p.relative_to(pkg_dir).as_posix()
+        posix = "/" + rel
+        if any(x in posix for x in EXCLUDE_DIR_PARTS):
+            continue
+        if p.name in EXCLUDE_NAMES or rel in EXCLUDE_NAMES:
+            continue
+        if "/skills/" in posix and ("/scripts/" in posix or "/references/" in posix):
+            continue  # 技能自带脚本，随技能正文走，不算任务输入
+        try:
+            size = p.stat().st_size
+        except OSError:
+            continue
+        out.append({
+            "rel": rel,
+            "path": REPO + "/" + p.relative_to(ROOT).as_posix(),
+            "size": size,
+        })
+    return out
+
+
+def human_size(n: int) -> str:
+    if n >= 1048576:
+        return f"{n / 1048576:.1f} MB"
+    if n >= 1024:
+        return f"{n / 1024:.1f} KB"
+    return f"{n} B"
+
+
+def attach_paths(prompt: str, pkg_dir: pathlib.Path, skills, fixtures):
+    """把真实存在的文件路径追加到任务提示末尾。"""
+    if not fixtures and not skills:
+        return prompt
+
+    pkg_rel = pkg_dir.relative_to(ROOT).as_posix()
+    lines = ["", "---", "", "【本机可读的真实文件路径】"]
+
+    if skills:
+        lines.append("技能正文（已剥掉 frontmatter，与 quill 的技能文件格式一致）：")
+        for s in skills:
+            lines.append(
+                f"  - {REPO}/TESTSETS/skills/{s['slug']}.md  <- 技能 {s['slug']}"
+            )
+
+    if fixtures:
+        lines.append("任务输入文件（真实存在，可直接打开）：")
+        shown = fixtures[:MAX_LISTED_FIXTURES]
+        for f in shown:
+            lines.append(f"  - {f['path']}  ({human_size(f['size'])})")
+        if len(fixtures) > MAX_LISTED_FIXTURES:
+            lines.append(
+                f"  …… 本任务包共 {len(fixtures)} 个输入文件，上面只列了前 "
+                f"{MAX_LISTED_FIXTURES} 个；目录 {REPO}/{pkg_rel}/ 下是完整的那一份。"
+            )
+    else:
+        lines.append(f"本任务包没有输入文件；技能与参考材料都在 {REPO}/{pkg_rel}/ 下。")
+
+    lines.append("")
+    lines.append(
+        "以上路径是本机真实路径，可直接读取；不要另造路径，也不要凭想象编造文件内容。"
+    )
+    return "\n".join(lines) + "\n"
+
+
 def load_skillsbench():
     root = RAW / "skillsbench"
     out_skills = OUT / "skills"
@@ -167,6 +311,9 @@ def load_skillsbench():
             (out_skills / f"{slug}.md").write_text(sk_body.strip() + "\n", encoding="utf-8")
             skills.append({"slug": slug, "description": sk_meta.get("description", "")})
 
+        fixtures = collect_fixtures(d)
+        prompt = attach_paths(prompt, d, skills, fixtures)
+
         tasks.append(
             {
                 "id": f"sb-{d.name}",
@@ -181,6 +328,7 @@ def load_skillsbench():
                 "category": scalar(meta.get("category")),
                 "interface": as_list(meta.get("interface")),
                 "skills": skills,
+                "fixtures": fixtures,
                 "expected_claims": [],
                 "required_tools": [],
             }

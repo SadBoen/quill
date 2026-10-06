@@ -1498,3 +1498,69 @@
 
 ---
 
+## ISSUE-034 · 「SkillsBench 没有输入夹具」是我下载漏了，不是数据集没有
+
+- **发现于**：用户当场质疑 —— 「不是改口径，你下载了任务集，就没有数据集？
+  你把数据集的路径一起写到任务提示里面呀。」
+- **现象**：我先前下了 71.8 MB 原始件后汇报「SkillsBench 50 个任务包共 182 个
+  `.md`，**零个输入夹具**」，并据此判定任务提示里无处可写路径。
+- **严重度**：严重（**结论是错的**，而且错的结论已经写进了 STATUS 与口径判断）
+- **根因**：`.scripts/fetch-testsets.sh` 第 39–43 行只按
+  `skillsbench-skillfiles.txt`（该文件由 `endswith("SKILL.md")` 过滤生成）
+  下载，所以**每个任务包只落了 `task.md` 与 `SKILL.md`**。夹具从来没被下载过，
+  于是「下载目录里没有」被读成了「上游数据集里没有」。
+  **这是我的下载脚本的 bug，不是数据集的性质。**
+- **复现**：查 HF tree API
+  `https://huggingface.co/api/datasets/benchflow/skillsbench/tree/main?recursive=true`
+  （4 页，共 **2154 个文件 / 516.7 MB / 87 个任务包**），前 50 个任务包就有
+  **662 个非技能文件 / 141.1 MB**，包含：
+  `dapt-intrusion-detection/environment/packets.pcap` (32.7 MB)、
+  `earthquake-phase-association/environment/data/wave.mseed` (28.8 MB)、
+  `mario-coin-counting/environment/super-mario.mp4` (15.4 MB)、
+  `glm-lake-mendota/environment/bcs/meteo.csv` (5.2 MB)、
+  `manufacturing-equipment-maintenance/environment/data/handbook.pdf` (2.3 MB)、
+  `3d-scan-calc/environment/scan_data.stl`、
+  `adaptive-cruise-control/environment/sensor_data.csv`、
+  `azure-bgp-oscillation-route-leak/environment/data/azuredeploy.json` 等。
+- **一并排除的可能**：MCP-Atlas 那份 14.91 MB 的 `MCP-Atlas.parquet` 之前从未
+  逐字段看过。本机 WSL 与 Windows 都缺 pyarrow/pandas，于是直接读 parquet footer
+  （尾部 `PAR1` + footer 长度，字段名是明文）确认 schema **只有 5 列**：
+  `TASK / ENABLED_TOOLS / PROMPT / GTFA_CLAIMS / TRAJECTORY`，与 5 个 JSON 分片
+  完全一致，**没有任何夹具字段**。又查 HF 仓库
+  `ScaleAI/MCP-Atlas` 的 tree：**整个仓库只有 3 个文件**
+  （`.gitattributes` / `MCP-Atlas.parquet` / `README.md`）。
+  全文件扫描到的 113 处 `/data/` 全部出现在 `TRAJECTORY` 里（当年评测环境的
+  调用参数与生成的代码），命中的 `fixture` 全是无关词（足球赛程、React 仓库
+  的 `__tests__/fixtures` 路径）。
+  **结论：MCP-Atlas 侧确实零夹具，SkillsBench 侧是我漏下。**
+- **修复**：
+  1. 新增 `TESTSETS/fetch_skillsbench.py`：走 tree API 分页枚举，按任务包
+     下**每一个**文件，`resolve/main` 跟随 LFS 跳转，8 线程 + 3 次重试。
+     实跑结果 **1071 个文件 / 143.8 MB / 0 失败**。
+  2. `build_tasks.py` 新增 `collect_fixtures()`：列出任务包内真实存在的输入
+     文件（绝对路径 + 字节数）。**`oracle/` 与 `verifier/` 一律排除** ——
+     那里是 `solve.sh` 与 `ground_truths`，写进提示等于抄答案给模型。
+  3. `build_tasks.py` 新增 `attach_paths()`：把技能正文路径与输入文件路径
+     （含体积）追加到任务提示末尾，并写明「以上路径是本机真实路径，可直接读取；
+     不要另造路径，也不要凭想象编造文件内容」。
+  4. `build_tasks.py` 对 MCP-Atlas 新增 `referenced_inputs()`：从 `TRAJECTORY`
+     里正则提取 `/data/...`，把「任务当年依赖、但上游根本没发布、本机也确实
+     没有」的输入路径**明说**在提示里，附一句「不要编造这些文件的内容；
+     缺哪个就直说缺哪个，而不是猜一个答案」。
+  5. `.scripts/fetch-testsets.sh` 改为调用新脚本，并新增第 4 步**落盘校验**：
+     任务提示里写出去的每一条路径都必须在磁盘上真实存在，否则直接退出码 1。
+- **回归**（实测，不是推断）：
+  - SkillsBench 50 条**全部**带夹具，夹具文件 **610 个 / 140.6 MB**，
+    **磁盘上不存在 0 个**；每任务 2~79 个，均值 12.2。
+  - 扩展名分布：`.md` 216、`.csv` 78、`.json` 69、`.txt` 46、`.xsd` 39、
+    `.lean` 29、`.jpg` 24、`.py` 14、`.cif` 11、`.tsx` 10、`.pdf` 7。
+  - MCP-Atlas 50 条里 **9 条**声明了缺失输入（如 `/data/Crime_records.csv`、
+    `/data/food and beverage consumption.csv`），其余 41 条不依赖随数据集发布的输入。
+- **状态**：已修已回归。
+
+### 为什么单开一条而不是顺手改口径
+
+我先前拿「夹具不存在」当理由，把「丢原文看模型回什么」批评成测不出东西。
+那个批评**只对 MCP-Atlas 那 50 条成立**，对 SkillsBench 那 50 条是错的 ——
+它们本来就有真实输入，是我没下。**用户的质疑推翻的是我的核查，不是口径本身。**
+

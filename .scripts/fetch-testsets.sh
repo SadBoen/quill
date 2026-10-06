@@ -5,55 +5,60 @@
 #   - MCP-Atlas   Scale AI   CC-BY-4.0  huggingface.co/datasets/ScaleAI/MCP-Atlas
 #   - SkillsBench v1.1      Apache-2.0  huggingface.co/datasets/benchflow/skillsbench
 #
-# 原始件落在 TESTSETS/_raw/（已 gitignore，71MB）。入库的只有派生结果。
+# 原始件落在 TESTSETS/_raw/（已 gitignore）。入库的只有派生结果。
 # 全程匿名，不需要 token。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RAW="$ROOT/TESTSETS/_raw"
 ATLAS_ROWS="https://datasets-server.huggingface.co/rows?dataset=ScaleAI/MCP-Atlas&config=default&split=train"
-SB_RAW="https://huggingface.co/datasets/benchflow/skillsbench/resolve/main"
 
-mkdir -p "$RAW/skillsbench"
+mkdir -p "$RAW"
 
-echo "== 1/4 SkillsBench 文件树 =="
-curl -sS "https://huggingface.co/api/datasets/benchflow/skillsbench" -o "$RAW/skillsbench-tree.json"
-python3 - "$RAW" <<'PY'
-import json, pathlib, sys
-raw = pathlib.Path(sys.argv[1])
-d = json.loads((raw / "skillsbench-tree.json").read_text(encoding="utf-8"))
-files = [s["rfilename"] for s in d.get("siblings", [])]
-tasks = sorted({f.split("/")[0] for f in files if f.endswith("task.md")})
-skills = [f for f in files if f.endswith("SKILL.md")]
-(raw / "skillsbench-tasks.txt").write_text("\n".join(tasks), encoding="utf-8")
-(raw / "skillsbench-skillfiles.txt").write_text("\n".join(skills), encoding="utf-8")
-print(f"  任务包 {len(tasks)} 个 / SKILL.md {len(skills)} 份")
-PY
+echo "== 1/4 SkillsBench 任务包（全量文件，含输入夹具） =="
+# 这里交给 fetch_skillsbench.py：它走 HF tree API 分页枚举，再把前 50 个
+# 任务包的**每一个**文件都拉下来。
+#
+# 早前这个脚本只下 task.md 与 SKILL.md，于是每个任务看上去「零输入夹具」，
+# 任务提示里也就没有任何可读路径——模型回「缺少 xxx」是在如实汇报环境，
+# 不是模型能力问题。真实夹具（packets.pcap / wave.mseed / handbook.pdf /
+# sensor_data.csv …）本来就在上游仓库里，只是没被下载。见 ISSUES.md。
+python3 "$ROOT/TESTSETS/fetch_skillsbench.py"
 
-echo "== 2/4 取前 50 个 SkillsBench 任务包 =="
-N=0
-while IFS= read -r t; do
-  [ "$N" -ge 50 ] && break
-  mkdir -p "$RAW/skillsbench/$t"
-  curl -sfL "$SB_RAW/$t/task.md" -o "$RAW/skillsbench/$t/task.md"
-  while IFS= read -r sf; do
-    rel="${sf#${t}/}"
-    mkdir -p "$RAW/skillsbench/$t/$(dirname "$rel")"
-    curl -sfL "$SB_RAW/$sf" -o "$RAW/skillsbench/$t/$rel"
-  done < <(grep "^${t}/" "$RAW/skillsbench-skillfiles.txt" || true)
-  N=$((N+1))
-done < "$RAW/skillsbench-tasks.txt"
-echo "  拉到 $N 个任务包，SKILL.md $(find "$RAW/skillsbench" -name SKILL.md | wc -l) 份"
-
-echo "== 3/4 MCP-Atlas 500 条任务 =="
+echo "== 2/4 MCP-Atlas 500 条任务 =="
 for off in 0 100 200 300 400; do
   # datasets-server 一次最多给 100 行，分 5 批。
   curl -sS "$ATLAS_ROWS&offset=$off&length=100" -o "$RAW/mcp-atlas-$off.json"
-  printf '  offset=%s → %s 字节\n' "$off" "$(stat -c%s "$RAW/mcp-atlas-$off.json")"
+  printf '  offset=%s -> %s bytes\n' "$off" "$(stat -c%s "$RAW/mcp-atlas-$off.json")"
 done
 
-echo "== 4/4 合成 tasks.json 与 skills/ =="
+echo "== 3/4 合成 tasks.json 与 skills/ =="
 python3 "$ROOT/TESTSETS/build_tasks.py"
+
+echo "== 4/4 抽查：任务提示里是否真写了路径 =="
+python3 - "$ROOT" <<'PY'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+tasks = json.loads((root / "TESTSETS" / "tasks.json").read_text(encoding="utf-8"))
+with_path = [t for t in tasks if "/mnt/" in t["prompt"] or "/mnt/" in json.dumps(t, ensure_ascii=False)]
+sb = [t for t in tasks if t["source"] == "SkillsBench"]
+sb_fx = [t for t in sb if t.get("fixtures")]
+atlas_missing = [t for t in tasks if t["source"] == "MCP-Atlas" and t.get("referenced_inputs_missing")]
+missing_on_disk = []
+for t in sb_fx:
+    for f in t["fixtures"]:
+        if not pathlib.Path(f["path"]).exists():
+            missing_on_disk.append(f["path"])
+print(f"  SkillsBench 任务 {len(sb)} 条，其中带真实输入夹具的 {len(sb_fx)} 条")
+print(f"  夹具路径总数 {sum(len(t['fixtures']) for t in sb_fx)}，磁盘上不存在的 {len(missing_on_disk)} 个")
+if missing_on_disk:
+    print("  如实报错：任务提示里写了磁盘上没有的路径", file=sys.stderr)
+    for p in missing_on_disk[:10]:
+        print("    " + p, file=sys.stderr)
+    raise SystemExit(1)
+print(f"  MCP-Atlas 提示里声明了缺失输入的任务 {len(atlas_missing)} 条")
+print("  全部路径可读")
+PY
 
 echo
 echo "完成。清单：$ROOT/TESTSETS/tasks.json"

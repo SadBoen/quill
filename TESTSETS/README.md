@@ -9,7 +9,7 @@
 | 来源 | 条数 | 许可 | 出处 | 测什么 |
 |---|---|---|---|---|
 | **MCP-Atlas**（Scale AI） | 50 | CC-BY-4.0 | [HF 数据集](https://huggingface.co/datasets/ScaleAI/MCP-Atlas) · [论文 arXiv:2602.00933](https://arxiv.org/abs/2602.00933) | **MCP 工具调用**：36 个真实 MCP 服务器、220 个工具；每条任务带 `required_tools` 与 `expected_claims`（标准答案断言） |
-| **SkillsBench v1.1** | 50 | Apache-2.0 | [HF 数据集](https://huggingface.co/datasets/benchflow/skillsbench) · [论文 arXiv:2602.12670](https://arxiv.org/abs/2602.12670) · [官网](https://www.skillsbench.ai) | **SKILL 使用**：每个任务包自带真实 `environment/skills/*/SKILL.md`，共 87 个任务包 / 232 份技能，本次取前 50 个任务包 / 120 份技能 |
+| **SkillsBench v1.1** | 50 | Apache-2.0 | [HF 数据集](https://huggingface.co/datasets/benchflow/skillsbench) · [论文 arXiv:2602.12670](https://arxiv.org/abs/2602.12670) · [官网](https://www.skillsbench.ai) | **SKILL 使用**：每个任务包自带真实 `environment/skills/*/SKILL.md` **与真实输入数据**，共 87 个任务包 / 232 份技能，本次取前 50 个任务包 / 120 份技能 / 610 个输入文件 |
 
 ### 筛选口径（`build_tasks.py` 里写死，不是随手抓前 100 条）
 
@@ -23,18 +23,36 @@
 
 ```
 TESTSETS/
-  build_tasks.py      合成脚本（幂等，可重跑）
-  tasks.json          100 条任务清单
-  skills/*.md         120 份真实 SKILL.md，已剥掉 frontmatter
-  STATUS.md           进度表（待跑 / 通过 / 失败 / 已知问题）
-  ISSUES.md           问题记录：现象 / 根因 / 复现 / 修复 / 回归
-  _raw/               原始下载件（gitignore，体积大）
+  build_tasks.py       合成脚本（幂等，可重跑）
+  fetch_skillsbench.py 下载 SkillsBench 任务包全量文件（走 HF tree API 分页）
+  tasks.json           100 条任务清单
+  skills/*.md          120 份真实 SKILL.md，已剥掉 frontmatter
+  STATUS.md            进度表（待跑 / 通过 / 失败 / 已知问题）
+  ISSUES.md            问题记录：现象 / 根因 / 复现 / 修复 / 回归
+  _raw/                原始下载件（gitignore，体积大）
 ```
 
 `skills/*.md` 是从 `SKILL.md` 剥掉 frontmatter 后的正文 —— 因为 quill 的
 `skills` 表本来就存 `name` 与 `description`（来自 frontmatter），正文落盘到
 `QUILL_SKILL_DIR/<slug>.md`。也就是说这批文件**就是 quill SKILL 功能的真实输入**，
 可以直接灌进去测。
+
+## 输入数据与路径
+
+**SkillsBench 任务包是真带输入数据的**：前 50 个任务包共有 **610 个输入文件 /
+140.6 MB**（`packets.pcap`、`wave.mseed`、`super-mario.mp4`、`meteo.csv`、
+`handbook.pdf`、`scan_data.stl`、`sensor_data.csv` …）。
+`build_tasks.py` 会把**这些文件的真实绝对路径与体积**追加到任务提示末尾，
+技能正文的路径也一并写进去，并注明「这些是本机真实路径，可直接读取；
+不要另造路径，也不要凭想象编造文件内容」。
+`oracle/` 与 `verifier/` 一律不写进提示 —— 那里是标准答案。
+
+**MCP-Atlas 反过来：上游仓库只有 3 个文件**
+（`.gitattributes` / `MCP-Atlas.parquet` / `README.md`），`parquet` 的 schema
+**只有 5 列** `TASK / ENABLED_TOOLS / PROMPT / GTFA_CLAIMS / TRAJECTORY`，
+**没有任何输入数据列**。少数任务当年依赖 `/data/xxx.csv` 这类评测环境内部文件，
+但那些文件上游没发布、本机也没有 —— 任务提示里会把这些缺失路径**明说**出来，
+好让模型直说「缺哪个」，而不是编一个答案。
 
 ## 怎么跑
 

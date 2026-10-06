@@ -44,6 +44,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import pathlib
 import re
 import sys
 import time
@@ -493,6 +494,29 @@ def verdict(res: dict) -> str:
 
 # ---------------------------------------------------------------- 主流程
 
+REPO_TOKEN = "{REPO}"
+
+
+def render_prompt(task: dict) -> str:
+    """把 tasks.json 里的 {REPO} 占位符换成本机仓库根目录。
+
+    tasks.json 是入库文件，里面写死绝对路径会让别的机器 clone 下来就指向一个
+    不存在的目录，所以路径一律用占位符。**换不掉就当场报错** —— 带着
+    `{REPO}` 字面量发出去的提示，等于告诉模型去读一个不存在的目录，
+    那比不发路径更糟。
+    """
+    root = str(pathlib.Path(__file__).resolve().parents[1])
+    text = task.get("prompt") or ""
+    if REPO_TOKEN in text:
+        text = text.replace(REPO_TOKEN, root)
+    if REPO_TOKEN in text:
+        raise SystemExit(
+            "任务 %s 的提示里还有没换掉的 {REPO} 占位符，拒绝发送。"
+            % task.get("id")
+        )
+    return text
+
+
 def run_task(q: Quillian, task: dict, dry: bool) -> dict:
     tid = task["id"]
     need = sorted({s for s in (tool_server(tool_name(x)) for x in (task.get("required_tools") or [])) if s})
@@ -511,13 +535,14 @@ def run_task(q: Quillian, task: dict, dry: bool) -> dict:
     if dry:
         chat = {"__http": 0, "error": {"code": "dry_run", "detail": "dry-run 没发这条消息"}}
     else:
+        content = render_prompt(task)
         st, session = q.post("/api/sessions", {"title": "runner: " + tid})
         if st not in (200, 201) or not session.get("id"):
             chat = {"__http": st, "error": session.get("error") or {"detail": "建会话没拿到 id"}}
         else:
             st2, chat = q.post(
                 "/api/sessions/%s/messages" % session["id"],
-                {"content": task["prompt"]},
+                {"content": content},
             )
             chat["__http"] = st2
             chat["__session"] = session["id"]
