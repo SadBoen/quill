@@ -1982,3 +1982,43 @@ GET /api/extensions/mcp
   （断言 `b.len() == a.len() - 关掉的那两个`，防止为了省预算把工具表掏空）。
 - **状态**：已修已回归（待真机复跑确认 `tool_loop_exhausted` 比例下降）。
 
+## ISSUE-044 · 测试夹具把迁移文件名写死，加了 0008 之后一片 HTTP 用例以 503 失败
+
+- **发现时机**：迁移 Token 统计（新增 `0008_token_metrics.sql`）后跑全量门禁。
+- **现象**：`cargo test --workspace` 里 `expert_persona_http` 的 3 条用例红了，
+  断言是 `left: 503, right: 200`。单独跑该文件也稳定复现；
+  `git stash` 回到改动前**同样这 3 条全绿**，确认是自己引入的。
+- **为什么**：503 有两个来源（`StorageUnavailable` / `ProviderUnavailable`），
+  光看状态码会往模型服务上猜 —— 而真因是**存储**：
+  `crates/quill-server/tests/common/mod.rs` 的 `migration_sql()` 里
+  **硬编码了 7 个迁移文件名**。新加的 0008 没被读进去，测试库的
+  `messages` 表没有 `cache_read_tokens` 列，于是 `append_message` 的
+  INSERT 直接报 SQL 错。
+- **讽刺之处**：那段代码自己的注释写着
+  「少读一个会让新列在测试库里不存在，而测试会假绿」——
+  写死的那份清单**保证**会和真实迁移脱节，只是这次没假绿，而是直接炸了。
+- **修复**：不再手写文件名，改为从 `quill_store::MIGRATIONS` 推导
+  （`format!("{}.sql", m.name)`）。单一出处，少读一个的可能性直接归零；
+  以后加迁移只改 `quill-store` 一处。
+- **回归**：`expert_persona_http` 7 条 + `session_metrics_http` 6 条全绿。
+- **状态**：已修已回归。
+
+## ISSUE-045 · 统计条建好了却忘了 import 它的 CSS —— DOM 在、样式全无
+
+- **发现时机**：浏览器实测 Token 统计条。
+- **现象**：`.chat-metrics-bar` 确实在 DOM 里，chip 文字也对，
+  但**完全没有样式**：没有顶部分隔线、没有 chip 间距、`·` 分隔符紧贴文字、
+  颜色也不是弱化色。截图上一行灰字挤在一起。
+- **根因**：我新建了 `SessionMetricsBar.css`，**忘了在组件里 import**。
+  项目用的是普通 `.css`（不是 CSS Module），样式必须显式 import 才进 bundle
+  —— 见 `ChatPage.tsx` 里的 `import './ChatPage.css'`。
+- **为什么单元测试没抓到**：14 个前端测试全绿，
+  `sessionMetrics.test.ts` 测的是纯函数、`SessionMetricsBar.test.tsx`
+  断言的是 DOM 结构与文本内容。**没有任何一条断言样式**，
+  所以「建了文件但没接线」这一类错误对测试完全隐形。
+- **修复**：在 `SessionMetricsBar.tsx` 顶部加 `import './SessionMetricsBar.css'`，
+  重新 `npm run build`，浏览器 reload 确认。
+- **教训**：「全绿」只覆盖了被断言过的东西。样式、布局这类**视觉正确性**
+  仍然只能靠真机看一眼 —— 本项目的浏览器实测环节不是冗余，是唯一能发现它的手段。
+- **状态**：已修（靠真机发现，不是靠测试）。
+

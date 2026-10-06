@@ -144,11 +144,35 @@ pub struct TokenUsage {
     pub input: Option<u32>,
 
     pub output: Option<u32>,
+
+    /// 命中缓存的入参 token 数。字段名与语义照抄 goose 的
+    /// `Usage::cache_read_input_tokens`（vendor/goose/crates/
+    /// goose-provider-types/src/conversation/token_usage.rs:99）。
+    ///
+    /// **它是 `input` 的子集**，不要重复计入 `total()`。
+    pub cache_read: Option<u32>,
+
+    /// 写入缓存的入参 token 数，对应 goose 的 `cache_write_input_tokens`。
+    /// 同样是 `input` 的子集。
+    pub cache_write: Option<u32>,
 }
 
 impl TokenUsage {
     pub fn new(input: Option<u32>, output: Option<u32>) -> Self {
-        Self { input, output }
+        Self {
+            input,
+            output,
+            cache_read: None,
+            cache_write: None,
+        }
+    }
+
+    /// 挂上缓存拆分项。只在模型**真的上报了**这两个数时才调 ——
+    /// 上游没给就是「不知道」，不能拿 0 冒充「没有缓存」。
+    pub fn with_cache(mut self, read: Option<u32>, write: Option<u32>) -> Self {
+        self.cache_read = read;
+        self.cache_write = write;
+        self
     }
 
     pub fn total(&self) -> Option<u32> {
@@ -156,6 +180,24 @@ impl TokenUsage {
             (Some(i), Some(o)) => Some(i.saturating_add(o)),
             _ => None,
         }
+    }
+
+    /// 缓存读中占入参的比例。
+    ///
+    /// 分母口径照 goose：入参总量本身**已经含**缓存，所以不需要再把
+    /// cache_read 加回来 —— 加了会得出 >1 的比例。
+    ///
+    /// 返回 `None` 的三种情况都要靠这个区分，不能塞 0：
+    ///   - 上游根本没报 cache_read（多数本地模型如此）→ 不知道命中率
+    ///   - 没有入参 → 无从算起
+    ///   - 真的是 0 命中 → 这才是 0.0
+    pub fn cache_read_ratio(&self) -> Option<f64> {
+        let read = self.cache_read?;
+        let input = self.input?;
+        if input == 0 {
+            return None;
+        }
+        Some(f64::from(read) / f64::from(input))
     }
 }
 

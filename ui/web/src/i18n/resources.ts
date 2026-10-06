@@ -228,6 +228,21 @@ export const en = {
           'Configured context limit {{limit}} tokens and compaction threshold {{threshold}} tokens — both are values from /healthz config, not measured from the model. The endpoint may actually allow fewer: quill does not guess, and a request over its real window gets rejected by the model service. Compaction is not implemented, so nothing is summarized automatically when you go over — start a new chat yourself.',
         noLimit: '/healthz has no max_context_tokens yet, so the limit is unknown.',
       },
+      metricsBar: {
+        label: 'Session metrics',
+      },
+      metrics: {
+        turns: 'turns',
+        steps: 'replies',
+        llmMs: 'model',
+        toolMs: 'tool call',
+        ttft: 'TTFT avg',
+        tokPerS: 'tok/s',
+        cacheHit: 'Cache hit',
+        inputTokens: 'Input',
+        outputTokens: 'Output',
+        cacheRead: 'Cache read',
+      },
     },
     automations: {
       eyebrow: 'Automations',
@@ -1285,6 +1300,21 @@ export const zhCN = {
         title:
           '已配置上下文上限 {{limit}} tokens、压缩阈值 {{threshold}} tokens —— 这两个都是 /healthz 里的配置值，不是模型实测值。模型端点的真实窗口可能更小，quill 不去猜它：超了会被模型服务直接拒绝。压缩尚未实现，超过上限不会自动摘要，需要自己新建会话。',
         noLimit: '/healthz 里还没有 max_context_tokens，上限未知。',
+      },
+      metricsBar: {
+        label: '会话统计',
+      },
+      metrics: {
+        turns: '轮次',
+        steps: '回复',
+        llmMs: '模型耗时',
+        toolMs: '工具耗时',
+        ttft: '首字延迟',
+        tokPerS: 'tok/s',
+        cacheHit: '缓存命中',
+        inputTokens: '入参',
+        outputTokens: '出参',
+        cacheRead: '缓存读',
       },
     },
   },

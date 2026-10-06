@@ -1,6 +1,7 @@
 import { ApiError, apiJson } from '../api/client'
 import type { CreateSessionResponse, HealthReport, SendMessageResponse, Session } from '../api/types'
 import type { MessageHistory } from './model'
+import type { SessionMetrics } from './sessionMetrics'
 
 export async function loadSessions(): Promise<Session[]> {
   const body = await apiJson<{ sessions: Session[] }>('/api/sessions')
@@ -27,6 +28,16 @@ export function sendChatMessage(sessionId: string, text: string): Promise<SendMe
     method: 'POST',
     body: JSON.stringify({ content: text }),
   })
+}
+
+/**
+ * 会话级 Token 统计。统计条的数据源。
+ *
+ * 返回值里大量字段是 `null` —— 那是「quill 没记这一项」，不是 0。
+ * 处理办法在 `sessionMetrics.visibleMetrics()`：直接过滤掉，别补 0。
+ */
+export function loadSessionMetrics(sessionId: string): Promise<SessionMetrics> {
+  return apiJson<SessionMetrics>(`/api/sessions/${encodeURIComponent(sessionId)}/metrics`)
 }
 
 /**

@@ -43,7 +43,17 @@ export interface SendMessageResponse {
   reasoning: string
   message: { id: string; seq: number; content: string; created_at: number }
   finish_reason: string | null
-  usage: { input: number; output: number }
+  /**
+   * 缓存两项是 nullable：上游没报就是 `null`。**别把它 default 成 0** ——
+   * 「模型端没报缓存用量」和「报的是 0」在界面上是两件完全不同的事，
+   * 前者该整格不显示，后者该显示 0.0%。
+   */
+  usage: {
+    input: number
+    output: number
+    cache_read?: number | null
+    cache_write?: number | null
+  }
   turn_ms: number
   /**
    * 这一段正文是**工具用尽之后、把工具摘掉逼出来的**，没有任何工具核实过。

@@ -23,6 +23,7 @@ pub mod middleware;
 pub mod ratelimit;
 pub mod routes;
 pub mod server;
+pub mod session_metrics;
 pub mod skills_repo;
 pub mod state;
 pub mod teams_repo;

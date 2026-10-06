@@ -168,6 +168,7 @@ pub const MIGRATION_0004: &str = include_str!("../migrations/0004_expert_persona
 pub const MIGRATION_0005: &str = include_str!("../migrations/0005_expert_source_template.sql");
 pub const MIGRATION_0006: &str = include_str!("../migrations/0006_teams.sql");
 pub const MIGRATION_0007: &str = include_str!("../migrations/0007_mcp_transport_alignment.sql");
+pub const MIGRATION_0008: &str = include_str!("../migrations/0008_token_metrics.sql");
 
 pub const MIGRATIONS_TABLES: &[&str] = &[
     "schema_version",
@@ -230,6 +231,11 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 7,
         name: "0007_mcp_transport_alignment",
         sql: MIGRATION_0007,
+    },
+    Migration {
+        version: 8,
+        name: "0008_token_metrics",
+        sql: MIGRATION_0008,
     },
 ];
 
@@ -545,8 +551,13 @@ mod tests {
         .expect("铺老格式 MCP 行");
 
         // 应用 0007。
-        let m7 = MIGRATIONS.last().expect("应有 0007");
-        assert_eq!(m7.version, 7, "最后一条应当是 0007");
+        //
+        // **按版本号找，不要用 `MIGRATIONS.last()`** —— 后来再加一条迁移，
+        // last() 就会指向新迁移，这条测试会静默地去验错误的东西。
+        let m7 = MIGRATIONS
+            .iter()
+            .find(|m| m.version == 7)
+            .expect("应当有 0007");
         run_migration(&pool, m7.sql).await.expect("0007 迁移");
 
         let t: String =

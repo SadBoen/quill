@@ -5,7 +5,7 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde_json::{json, Value};
 
-use quill_provider::Message;
+use quill_provider::{Message, TokenUsage};
 
 use crate::auth::AuthUser;
 use crate::body::JsonBody;
@@ -434,6 +434,73 @@ pub async fn list_messages(
     Ok(Json(json!({ "messages": rows })).into_response())
 }
 
+/// 会话级 Token 统计。界面那排指标 chip 的数据源。
+///
+/// 聚合口径全在 [`crate::session_metrics`] 里，是纯函数、测得到。
+/// 这里只负责把消息行取出来喂给它。
+///
+/// **注意 `null` 是有意义的返回值**：算不出来的指标就是 `null`，前端按
+/// 「跳过该 chip」处理。把它们填成 0 会让界面显示出一个从没被测量过的数字。
+pub async fn metrics(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+) -> Result<axum::response::Response, ApiError> {
+    let db = state.db()?;
+    let uid = user.0.user_id;
+    let sid = parse_id(&id)?;
+    ensure_session(db, uid, sid).await?;
+
+    let rows = db
+        .call(move |pool, _rt| {
+            Box::pin(async move {
+                let r: Result<Vec<crate::session_metrics::MessageUsage>, quill_agent::AgentError> =
+                    async {
+                        let out = sqlx::query(
+                            "SELECT role, input_tokens, output_tokens, turn_ms, cache_read_tokens \
+                             FROM messages WHERE user_id = ? AND session_id = ? ORDER BY seq",
+                        )
+                        .bind(uid.as_bytes().to_vec())
+                        .bind(sid.to_vec())
+                        .fetch_all(&pool)
+                        .await
+                        .map_err(|e| crate::db::storage_error("读会话统计", e))?;
+
+                        Ok(out
+                            .into_iter()
+                            .map(|row| {
+                                let role = s(&row, "role");
+                                crate::session_metrics::MessageUsage {
+                                    is_user: role == "user",
+                                    is_assistant: role == "assistant",
+                                    input_tokens: n(&row, "input_tokens"),
+                                    output_tokens: n(&row, "output_tokens"),
+                                    turn_ms: nullable_n(&row, "turn_ms"),
+                                    // 可空列必须区分「没上报」和「上报了 0」。
+                                    cache_read_tokens: nullable_n(&row, "cache_read_tokens"),
+                                }
+                            })
+                            .collect())
+                    }
+                    .await;
+                r
+            })
+        })
+        .map_err(storage)?;
+
+    Ok(Json(crate::session_metrics::aggregate(&rows).to_json()).into_response())
+}
+
+/// 读一个可空的整数列：`NULL` 保持 `None`，绝不塌成 `0`。
+///
+/// 塌成 0 是这套统计里最容易犯、后果也最直接的错误：`cache_read_tokens`
+/// 从 NULL 变成 0，界面就会理直气壮地显示「缓存命中 0.0%」—— 而真实情况
+/// 只是模型端没报这个数。
+fn nullable_n(row: &sqlx::sqlite::SqliteRow, key: &str) -> Option<i64> {
+    use sqlx::Row;
+    row.try_get::<Option<i64>, _>(key).unwrap_or(None)
+}
+
 fn parse_id(raw: &str) -> Result<[u8; 16], ApiError> {
     quill_domain::SessionId::parse(raw)
         .map(|s| *s.as_bytes())
@@ -496,7 +563,8 @@ pub async fn post_message(
         "complete",
         &content,
         None,
-        (None, None),
+        // 用户这一轮没调用模型，没有 token 概念。
+        TokenUsage::default(),
         None,
     )
     .await?;
@@ -689,7 +757,7 @@ pub async fn post_message(
         "complete",
         &text,
         Some(&reasoning),
-        (reply.usage.input, reply.usage.output),
+        reply.usage,
         Some(turn_ms),
     )
     .await?;
@@ -713,7 +781,14 @@ pub async fn post_message(
             "created_at": assistant_created_at,
         },
         "finish_reason": reply.finish_reason.map(|f| format!("{f:?}")),
-        "usage": { "input": reply.usage.input, "output": reply.usage.output },
+        // 缓存两项是 nullable：上游没报就是 null，前端据此决定「命中率」这一格
+        // 到底显示数字还是干脆不显示。别把它们 default 成 0。
+        "usage": {
+            "input": reply.usage.input,
+            "output": reply.usage.output,
+            "cache_read": reply.usage.cache_read,
+            "cache_write": reply.usage.cache_write,
+        },
         "turn_ms": turn_ms,
         "persona_applied": persona.instructions.is_some(),
         "expert_notice": persona.notice,
@@ -932,7 +1007,7 @@ async fn append_message(
     status: &str,
     content: &str,
     reasoning: Option<&str>,
-    usage: (Option<u32>, Option<u32>),
+    usage: TokenUsage,
     turn_ms: Option<i64>,
 ) -> Result<i64, ApiError> {
     let content = content.to_string();
@@ -940,16 +1015,19 @@ async fn append_message(
     let role = role.to_string();
     let status = status.to_string();
     let mid = mid.to_vec();
-    let input = i64::from(usage.0.unwrap_or(0));
-    let output = i64::from(usage.1.unwrap_or(0));
+    let input = i64::from(usage.input.unwrap_or(0));
+    let output = i64::from(usage.output.unwrap_or(0));
+    // None = 模型端没上报，不是 0。见 migration 0008 的说明。
+    let cache_read = usage.cache_read.map(i64::from);
+    let cache_write = usage.cache_write.map(i64::from);
     let created_at = now_ms();
     db.call(move |pool, _rt| {
         Box::pin(async move {
             let r: Result<i64, quill_agent::AgentError> = async {
                 sqlx::query(
                     "INSERT INTO messages(user_id,id,session_id,seq,role,status,content,reasoning,\
-                     input_tokens,output_tokens,turn_ms,created_at) \
-                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                     input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,turn_ms,created_at) \
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 )
                 .bind(uid.as_bytes().to_vec())
                 .bind(mid.clone())
@@ -961,6 +1039,8 @@ async fn append_message(
                 .bind(&reasoning)
                 .bind(input)
                 .bind(output)
+                .bind(cache_read)
+                .bind(cache_write)
                 .bind(turn_ms)
                 .bind(created_at)
                 .execute(&pool)

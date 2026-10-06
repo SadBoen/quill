@@ -7,8 +7,9 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { ApiError, apiJson, setToken, getToken } from '../api/client'
 import { EXPERTS_KEY, listExperts } from '../experts/api'
 import { Popconfirm } from '../experts/ExpertsUi'
-import { loadSessions, createSession, loadHealth, loadMessageHistory, sendChatMessage, chatErrorMessage } from './chatApi'
+import { loadSessions, createSession, loadHealth, loadMessageHistory, sendChatMessage, loadSessionMetrics, chatErrorMessage } from './chatApi'
 import { upsertMessage, type ChatMessage } from './model'
+import SessionMetricsBar from './SessionMetricsBar'
 import { ChatSidebar } from './ChatSidebar'
 import { ChatWelcome } from './ChatWelcome'
 import { useChatWelcome } from './welcomeContent'
@@ -50,6 +51,14 @@ export function ChatPage(_props: ChatPageProps): ReactNode {
   // 从专家页直接跳过来时命中的是数组，data.experts 为 undefined，下拉就空了。
   const experts = useQuery({ queryKey: EXPERTS_KEY, queryFn: listExperts, staleTime: 60_000 })
   const health = useQuery({ queryKey: ['health'], queryFn: loadHealth, staleTime: 30_000, retry: false })
+  // 会话级统计。发完一条消息后 invalidate 一下，让新数据进来。
+  const metrics = useQuery({
+    queryKey: ['session-metrics', sessionId],
+    queryFn: () => loadSessionMetrics(sessionId as string),
+    enabled: Boolean(sessionId),
+    staleTime: 5_000,
+    retry: false,
+  })
   const allExperts = experts.data ?? []
   const pickableExperts = allExperts.filter((expert) => expert.default_enabled)
   const hiddenExpertCount = allExperts.length - pickableExperts.length
@@ -192,6 +201,8 @@ export function ChatPage(_props: ChatPageProps): ReactNode {
       const result = await sendChatMessage(targetId, sentText)
       setLastUsage({ input: result.usage.input, output: result.usage.output })
       setForcedAnswer(Boolean(result.final_answer_forced))
+      // 刚这一轮的 token 已落库，会话级统计要跟着更新。
+      void queryClient.invalidateQueries({ queryKey: ['session-metrics', targetId] })
       setHistory((current) => (current ?? []).reduce(upsertMessage, [
         {
           id: result.user_message.id,
@@ -523,6 +534,9 @@ export function ChatPage(_props: ChatPageProps): ReactNode {
               </div>
             </div>
           </form>
+          {/* 会话级统计。放在输入框下面：它是会话整体的数据，不是「本次」的。
+              没数据时组件自己返回 null，不占位置。 */}
+          <SessionMetricsBar metrics={metrics.data ?? null} />
           <p className="chat-ai-disclaimer">
             {t('chat.disclaimer', { defaultValue: 'AI 生成内容，请注意甄别。' })}
           </p>

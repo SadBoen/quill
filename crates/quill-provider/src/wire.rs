@@ -266,6 +266,12 @@ fn strip_think_block(content: &str) -> Option<String> {
 /// Read token counts out of a `usage` object. Tolerates the double-wrapped
 /// `{"usage":{"usage":{…}}}` shape some gateways emit and servers that only
 /// report one half of the pair.
+///
+/// 缓存两项按两种真实形状都读，因为两种都在真机上出现过：
+///   - OpenAI 系：`prompt_tokens_details.cached_tokens`（vLLM / llama.cpp / OpenRouter）
+///   - Anthropic 系：`cache_read_input_tokens` / `cache_creation_input_tokens` 顶层字段
+/// 两者都**不存在**时返回 `None`（不知道），不是 `Some(0)`（真的没缓存）。
+/// 这个区分直接决定统计条敢不敢显示「命中率」。
 pub fn usage_from_value(usage: &Value) -> TokenUsage {
     let nested = usage.get("usage").filter(|n| n.is_object());
     let usage = nested.unwrap_or(usage);
@@ -278,7 +284,17 @@ pub fn usage_from_value(usage: &Value) -> TokenUsage {
             .and_then(Value::as_u64)
             .map(|v| u32::try_from(v).unwrap_or(u32::MAX))
     };
+    // OpenAI 形状嵌在 details 里；Anthropic 形状直接挂顶层。
+    let openai_cached = usage
+        .get("prompt_tokens_details")
+        .and_then(|d| d.get("cached_tokens"))
+        .and_then(Value::as_u64)
+        .map(|v| u32::try_from(v).unwrap_or(u32::MAX));
+    let cache_read = openai_cached.or_else(|| read("cache_read_input_tokens"));
+    let cache_write = read("cache_write_input_tokens").or_else(|| read("cache_creation_input_tokens"));
+
     TokenUsage::new(read("prompt_tokens"), read("completion_tokens"))
+        .with_cache(cache_read, cache_write)
 }
 
 pub fn extract_usage(response: &Value) -> TokenUsage {
@@ -660,6 +676,73 @@ mod tests {
         );
         assert_eq!(usage_from_value(&json!({})), TokenUsage::default());
         assert_eq!(usage_from_value(&json!("nope")), TokenUsage::default());
+    }
+
+    /// 缓存 token 是这轮迁移的核心：Octop 的统计条要显示「缓存命中」，
+    /// 而 quill 原本压根不读这两个数。读不到就只能显示空，不能显示 0。
+    #[test]
+    fn cache_tokens_are_read_from_both_real_world_shapes() {
+        // OpenAI 系：嵌在 prompt_tokens_details 里（vLLM / llama.cpp / OpenRouter）。
+        let openai = usage_from_value(&json!({
+            "prompt_tokens": 1000,
+            "completion_tokens": 20,
+            "prompt_tokens_details": { "cached_tokens": 900 },
+        }));
+        assert_eq!(openai.cache_read, Some(900));
+        assert_eq!(openai.cache_write, None, "OpenAI 形状没有缓存写，不许编一个 0");
+        assert_eq!(openai.input, Some(1000));
+        assert!((openai.cache_read_ratio().expect("应当能算") - 0.9).abs() < 1e-6);
+
+        // Anthropic 系：cache_read_input_tokens / cache_creation_input_tokens 挂顶层。
+        let anthropic = usage_from_value(&json!({
+            "prompt_tokens": 1000,
+            "completion_tokens": 20,
+            "cache_read_input_tokens": 700,
+            "cache_creation_input_tokens": 300,
+        }));
+        assert_eq!(anthropic.cache_read, Some(700));
+        assert_eq!(anthropic.cache_write, Some(300));
+    }
+
+    #[test]
+    fn a_missing_cache_field_means_unknown_not_zero() {
+        let u = usage_from_value(&json!({ "prompt_tokens": 500, "completion_tokens": 10 }));
+        assert_eq!(u.cache_read, None, "没上报就是不知道，绝不能塌成 Some(0)");
+        assert_eq!(u.cache_write, None);
+        assert_eq!(
+            u.cache_read_ratio(),
+            None,
+            "命中率不知道时不能报 0%，那等于凭空造一个数字"
+        );
+    }
+
+    #[test]
+    fn a_reported_zero_cache_count_stays_zero_and_not_none() {
+        let u = usage_from_value(&json!({
+            "prompt_tokens": 500,
+            "completion_tokens": 10,
+            "prompt_tokens_details": { "cached_tokens": 0 },
+        }));
+        assert_eq!(u.cache_read, Some(0), "上游确实报了 0，这是真实值");
+        assert_eq!(u.cache_read_ratio(), Some(0.0));
+    }
+
+    #[test]
+    fn cache_ratio_is_unknown_when_there_was_no_input() {
+        let u = usage_from_value(&json!({ "prompt_tokens_details": { "cached_tokens": 10 } }));
+        assert_eq!(u.cache_read, Some(10));
+        assert_eq!(u.cache_read_ratio(), None, "分母为 None，不能算比率");
+    }
+
+    #[test]
+    fn total_still_excludes_the_cache_breakdown() {
+        // goose 的口径：cache_read 是 input 的子集。再加一次会算重。
+        let u = usage_from_value(&json!({
+            "prompt_tokens": 1000,
+            "completion_tokens": 20,
+            "prompt_tokens_details": { "cached_tokens": 900 },
+        }));
+        assert_eq!(u.total(), Some(1020));
     }
 
     #[test]

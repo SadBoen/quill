@@ -65,19 +65,15 @@ impl Drop for TestDb {
 pub fn migration_sql() -> String {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../quill-store/migrations");
-    // 0001 → 0002 → … 顺序由文件名天然保证；只读这些，不读别的。
-    // 少读一个会让新列在测试库里不存在，而测试会假绿。
+    // 顺序与文件名**一律从 quill_store::MIGRATIONS 取**，不在这里手写。
+    //
+    // 原来这里是硬编码的 7 个文件名，于是新加 0008 时忘了加进来：
+    // 测试库里的 messages 没有新列，`append_message` 的 INSERT 直接报 SQL 错，
+    // 一片 HTTP 用例以 503 失败。写死的那份清单**保证**会和真实迁移脱节 ——
+    // 所以这里从单一出处推导，少读一个的可能性直接归零。
     let mut buf = String::new();
-    for name in [
-        "0001_init.sql",
-        "0002_admin_config.sql",
-        "0003_llm_providers.sql",
-        "0004_expert_persona.sql",
-        "0005_expert_source_template.sql",
-        "0006_teams.sql",
-        "0007_mcp_transport_alignment.sql",
-    ] {
-        let path = dir.join(name);
+    for m in quill_store::MIGRATIONS {
+        let path = dir.join(format!("{}.sql", m.name));
         buf.push_str(
             &std::fs::read_to_string(&path)
                 .unwrap_or_else(|e| panic!("读取迁移文件 {} 失败：{e}", path.display())),
