@@ -20,6 +20,11 @@
   padding: 8px 12px;
 }
 
+/* 选中态之下也要给悬停反馈，否则指针移上去毫无变化，用户不知道能不能点。
+   与 experts.css 的 .experts-tab:hover 同一套视觉语言：只变文字颜色，
+   下边线留给选中态。 */
+.skills-tab:hover { color: var(--ink); }
+
 /* 选中态用下边线而不是背景块：这一页整体是白卡片，
    填色块会显得像另一个层级。 */
 .skills-tab[aria-selected='true'] {
@@ -132,6 +137,11 @@
   padding: 0;
   text-decoration: underline;
 }
+
+.skills-link-button:hover { color: var(--ink); }
+/* 危险按钮悬停时保持危险色（与 .experts-table-action-btn.is-danger:hover 同一套写法）：
+   与普通 :hover 同权重、不写的话会掉回 var(--ink)，反而看不出这是个删除动作。 */
+.skills-link-button.is-danger:hover { color: var(--danger); }
 
 .skills-link-button.is-danger {
   color: var(--danger);

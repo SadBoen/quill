@@ -7,7 +7,7 @@ import type { ChatQuickPrompt } from './welcomeContent'
 /** 吉祥物占位：纯 SVG，不引用 Octop 的图片资源。 */
 function MascotMark(): ReactNode {
   return (
-    <svg className="chat-mascot" viewBox="0 0 96 96" role="img" aria-hidden="true" focusable="false">
+    <svg className="chat-mascot" viewBox="0 0 96 96" aria-hidden="true" focusable="false">
       <circle cx="48" cy="48" r="46" fill="var(--accent-soft)" />
       <path
         d="M66 24c-16 2-30 12-38 26-4 7-5 14-4 20 6 1 13 0 20-4 14-8 24-22 26-38z"

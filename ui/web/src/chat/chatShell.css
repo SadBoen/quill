@@ -59,7 +59,7 @@
 
 .chat-sidebar-close:hover { background: var(--accent-soft); color: var(--ink); }
 
-.chat-sidebar-scroll { flex: 1; min-height: 0; overflow: auto; padding: 0 8px 14px; }
+.chat-sidebar-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 0 8px 14px; }
 
 .chat-sidebar-group { margin-bottom: 16px; }
 
@@ -251,8 +251,12 @@
 
 .chat-titlebar-sep { color: var(--faint); font-size: 11px; }
 
+/* 页面标题是 <h1>，但视觉上仍是原来那个 <strong>：字重与字号由这里给死，
+   浏览器默认的 h1 margin / 2em 字号一并压掉。 */
 .chat-titlebar-title {
   font-size: 12px;
+  font-weight: 700;
+  margin: 0;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -320,7 +324,16 @@
   width: 100%;
 }
 
-.chat-input-card:focus-within { border-color: var(--accent); }
+/* 焦点环跟 index.css 的 textarea:focus-visible 一致（3px --accent-strong），
+   只是画在整张输入卡片上，让「输入框所在的那一块」成为明确的焦点区。 */
+.chat-input-card:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-strong), 0 12px 28px rgba(39, 51, 80, .08);
+}
+
+/* 焦点落在卡片里时，焦点环画在整张卡片上（见下方 :focus-within），
+   所以这里只压掉 textarea 自己那一圈，避免出现两层环。 */
+.chat-input-card textarea:focus-visible { outline: none; }
 
 .chat-input-card textarea {
   background: transparent;
@@ -332,7 +345,6 @@
   line-height: 1.6;
   max-height: 160px;
   min-height: 56px;
-  outline: none;
   padding: 4px 0;
   resize: none;
   width: 100%;
@@ -429,12 +441,13 @@
 
 @media (max-width: 767px) {
   .chat-second-sidebar {
-    bottom: 12px;
+    /* 刘海屏 / home indicator 区域：inset 为 0 的设备仍是原来的 12px。 */
+    bottom: max(12px, env(safe-area-inset-bottom));
     box-shadow: var(--shadow);
     flex-basis: auto;
-    left: 12px;
+    left: max(12px, env(safe-area-inset-left));
     position: fixed;
-    top: 12px;
+    top: max(12px, env(safe-area-inset-top));
     transform: translateX(calc(-100% - 16px));
     transition: transform 180ms ease;
     width: min(320px, calc(100vw - 24px));

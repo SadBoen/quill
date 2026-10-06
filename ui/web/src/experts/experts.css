@@ -288,6 +288,14 @@
 .experts-spinning { animation: experts-spin 0.9s linear infinite; display: inline-flex; }
 @keyframes experts-spin { to { transform: rotate(360deg); } }
 
+/* 刷新按钮转的是 IconRefresh 这个字形，所以 animation 关掉之后图标仍然完整可读，
+   只是不再一直转 —— 对前庭敏感的人，一个永不停歇的转圈比静止更难熬。
+   index.css 的全局块也压了 animation，这里再压一次是为了让这条保证属于本文件，
+   不依赖全局规则的写法。 */
+@media (prefers-reduced-motion: reduce) {
+  .experts-spinning { animation: none; }
+}
+
 .experts-toolbar-btn {
   align-items: center;
   background: transparent;

@@ -42,7 +42,7 @@ export function AppShell(): ReactNode {
   const health = useQuery({ queryKey: ['health'], queryFn: loadHealth, staleTime: 30_000, retry: false })
 
   return (
-    <main className="stage">
+    <div className="stage">
       <div className="app-shell">
         <aside className="sidebar">
           <Brand />
@@ -92,8 +92,8 @@ export function AppShell(): ReactNode {
             ) : null}
           </footer>
         </aside>
-        <section className="workspace"><Outlet /></section>
+        <main className="workspace"><Outlet /></main>
       </div>
-    </main>
+    </div>
   )
 }

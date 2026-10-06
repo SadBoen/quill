@@ -142,6 +142,7 @@ export function AuthPage(): ReactNode {
       return
     }
     setError(null)
+    setBusy(true)
     setToken(trimmed)
     queryClient.removeQueries({ queryKey: CURRENT_USER_KEY })
     const requested = (location.state as { from?: string } | null)?.from
@@ -154,6 +155,9 @@ export function AuthPage(): ReactNode {
       .catch((caught) => {
         setToken('')
         setError(caught)
+      })
+      .finally(() => {
+        setBusy(false)
       })
   }
 
@@ -249,6 +253,7 @@ export function AuthPage(): ReactNode {
             <input
               name="username"
               autoComplete="username"
+              spellCheck={false}
               value={username}
               onChange={(event) => setUsername(event.target.value)}
               required
@@ -280,10 +285,10 @@ export function AuthPage(): ReactNode {
         <form onSubmit={submitToken} className="auth-form">
           <label>
             {t('auth.token', { defaultValue: '访问令牌' })}
-            <input name="token" autoComplete="off" value={token} onChange={(event) => setTokenDraft(event.target.value)} required />
+            <input name="token" autoComplete="off" spellCheck={false} value={token} onChange={(event) => setTokenDraft(event.target.value)} required />
           </label>
           {error ? <ErrorNotice error={error} /> : null}
-          <button type="submit" className="primary-button auth-submit">
+          <button type="submit" className="primary-button auth-submit" disabled={busy}>
             {t('auth.connect', { defaultValue: '连接' })}
           </button>
         </form>
@@ -361,6 +366,7 @@ function SetupGate({ onDone }: { onDone: () => void }): ReactNode {
               <input
                 name="username"
                 autoComplete="username"
+                spellCheck={false}
                 value={username}
                 onChange={(event) => setUsername(event.target.value)}
                 required

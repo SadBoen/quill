@@ -123,8 +123,10 @@ export function AccountPage(): ReactNode {
                 <label>
                   <span className="sr-only">{t('account.timezone', { defaultValue: '时区' })}</span>
                   <input
+                    name="timezone"
                     aria-label={t('account.timezone', { defaultValue: '时区' })}
                     value={timezone}
+                    autoComplete="off"
                     maxLength={64}
                     onChange={(event) => setTimezone(event.target.value)}
                   />

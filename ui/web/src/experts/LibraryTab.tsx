@@ -21,6 +21,22 @@ import {
   type LibraryExpert,
 } from './library'
 
+/**
+ * `'2026-10-05'` → 按当前语言显示的抽取日期。
+ *
+ * 补 `T00:00:00` 是刻意的：只给日期时 `Date` 会按 UTC 解析，负时区会退到前一天，
+ * 用户看到的就不是数据里写的那一天。
+ */
+function formatExtractedAt(value: string, language?: string): string {
+  const d = new Date(`${value}T00:00:00`)
+  if (Number.isNaN(d.getTime())) return value
+  return new Intl.DateTimeFormat(language || 'zh-CN', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  }).format(d)
+}
+
 /** 与 EXPERT_ID_PATTERN 的 {1,64} 上限同口径。 */
 const EXPERT_ID_MAX_LEN = 64
 
@@ -151,7 +167,7 @@ export function LibraryTab(): ReactNode {
             repo: LIBRARY_SOURCE.repo,
             pin: LIBRARY_SOURCE.pin.slice(0, 12),
             license: LIBRARY_SOURCE.license,
-            date: LIBRARY_SOURCE.extractedAt,
+            date: formatExtractedAt(LIBRARY_SOURCE.extractedAt, i18n.resolvedLanguage),
             defaultValue: '数据逐字取自 {{repo}} @ {{pin}}（{{license}}，抽取于 {{date}}），人格 markdown 逐字节保留。',
           })}
         </p>

@@ -429,7 +429,7 @@ export function McpForm({
       {initial ? <input type="hidden" name="editing" value="true" /> : null}
       <label>
         {t('mcp.serviceName', { defaultValue: '服务名' })}
-        <input name="name" required pattern={MCP_NAME_PATTERN} placeholder="company-search" defaultValue={initial?.name ?? ''} />
+        <input name="name" autoComplete="off" spellCheck={false} required pattern={MCP_NAME_PATTERN} placeholder="company-search" defaultValue={initial?.name ?? ''} />
       </label>
       <label>
         {t('mcp.transport', { defaultValue: '传输方式' })}
@@ -457,13 +457,13 @@ export function McpForm({
       ) : (
         <label className="full-row">
           {t('mcp.url', { defaultValue: '地址' })}
-          <input name="url" type="url" required placeholder="https://mcp.example.com/mcp" defaultValue={initial && initial.transport !== 'stdio' ? initial.url : ''} />
+          <input name="url" type="url" autoComplete="off" required placeholder="https://mcp.example.com/mcp" defaultValue={initial && initial.transport !== 'stdio' ? initial.url : ''} />
         </label>
       )}
       <label className="full-row">
         {transport === 'stdio' ? t('mcp.environment', { defaultValue: '环境变量' }) : t('mcp.headers', { defaultValue: '请求头' })}{' '}
         {t('mcp.keyValueHelp', { defaultValue: '每行一条 KEY=VALUE' })}
-        <textarea key={transport} name="secrets" rows={3} defaultValue={secrets} />
+        <textarea key={transport} name="secrets" autoComplete="off" rows={3} defaultValue={secrets} />
       </label>
       <fieldset className="choice-field full-row">
         <legend>{t('mcp.capabilities', { defaultValue: '能力开关' })}</legend>

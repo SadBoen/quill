@@ -1,19 +1,34 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="Quill · 本地智能体对话入口" />
+    <meta name="theme-color" content="#eaf1f9" />
     <title>Quill</title>
     <script>
       (() => {
+        // 这段脚本必须早于 React 执行：主题闪烁与 lang 误报都发生在这之后、
+        // 模块加载之前，所以只能在这里定。改语言色要同步改这两处硬编码值 ——
+        // 它们与 index.css 的 --page 是同一组数，改一处就要改另一处。
         let mode = 'auto'
+        let lang = 'zh-CN'
         try {
           const saved = window.localStorage.getItem('quill-theme')
           if (saved === 'light' || saved === 'dark') mode = saved
+          const savedLang = window.localStorage.getItem('quill-language')
+          if (savedLang === 'en' || savedLang === 'zh-CN') lang = savedLang
         } catch {}
         const systemDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false
-        document.documentElement.dataset.theme = mode === 'auto' ? (systemDark ? 'dark' : 'light') : mode
+        const theme = mode === 'auto' ? (systemDark ? 'dark' : 'light') : mode
+        document.documentElement.dataset.theme = theme
+        // 不设 lang 的话，读屏软件会拿英文发音规则去念中文，选字体也会挑错。
+        // 运行时 i18n/index.ts 也会设，但那是模块加载之后的事了。
+        document.documentElement.lang = lang
+        // 移动端浏览器地址栏/工具栏会拿这个色。不跟实际主题走的话，浅色页配深色
+        // 工具栏（反之亦然）会很突兀。
+        const meta = document.querySelector('meta[name="theme-color"]')
+        if (meta) meta.setAttribute('content', theme === 'dark' ? '#0f151e' : '#eaf1f9')
       })()
     </script>
   </head>

@@ -9,11 +9,30 @@
  * **没有任何自己编的时刻**。
  */
 
-const pad = (n: number): string => String(n).padStart(2, '0')
+import i18n, { normalizeLanguage } from '../i18n'
 
-/** `2026-10-06T10:35:00Z` → `10-06 10:35`。时间戳非法时返回空串。 */
+/**
+ * `2026-10-06T10:35:00Z` → `10-06 10:35`。时间戳非法时返回空串。
+ *
+ * 取值全部交给 `Intl.DateTimeFormat`，不再用 `pad()` 手工拼 `MM-DD HH:mm` ——
+ * 手写拼接既拿不到当前语言，又得自己保证补零。这里从 `formatToParts` 里取回
+ * 四段数值再定宽拼接，是为了让**轴标签仍然定宽**（图表上等宽才排得齐），
+ * 而不是让每个语言各写一种分隔符：`Intl` 的 `zh-CN` 会给 `10/06`。
+ * 语言取自 i18n 单例，因为这个模块是普通 `.ts`，用不了 `useTranslation`。
+ */
 export function formatWhen(ts: number): string {
   const d = new Date(ts)
   if (Number.isNaN(d.getTime())) return ''
-  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+  const parts = new Intl.DateTimeFormat(normalizeLanguage(i18n.language), {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    // 写死 h23 而不是 `hour12: false`。后者按 ECMA-402 允许实现选 h23 **或** h24，
+    // 选到 h24 的引擎会把午夜印成 `24:35`；原来手写的 `getHours()` 永远是 0-23。
+    // 这里显式钉死，免得同一份数据换个浏览器就换个写法。
+    hourCycle: 'h23',
+  }).formatToParts(d)
+  const field = (type: Intl.DateTimeFormatPartTypes): string => parts.find((part) => part.type === type)?.value ?? ''
+  return `${field('month')}-${field('day')} ${field('hour')}:${field('minute')}`
 }

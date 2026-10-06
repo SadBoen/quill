@@ -117,6 +117,60 @@ Rust 工具链在 WSL2，node/npm 只在 Windows 侧。
 整条重写为 `disabling_also_blocks_an_env_token_and_says_so`：断言方向整个翻过来了。
 
 
+> 2026-10-07：装了 Vercel 的 `web-design-guidelines` 技能（规则已 vendored 到
+> `C:\Users\Boen\.minimax\skills\web-design-guidelines\`，**不运行时联网** ——
+> 上游原版是每次审之前现取规则，本仓库离线优先，改成装技能时取一次钉在本地）。
+> 用它把 `ui/web` 的 105 个文件审了一遍，79 条发现里**实修了 35 处**，
+> 其余 44 条分类记在 B1-1d，理由逐条写了 —— **审计报告不是施工单**。
+
+### B1-1d 前端审计发现：35 处已修，其余 44 条为什么不修 🟡
+
+用 `web-design-guidelines` 审了 `ui/web` 全部 105 个文件（19 个目录，3 个只读 agent
+分片 + 全局文件我自己审）。79 条发现里**真问题且低风险的修了 35 处**，其余分三类：
+
+**一、有意不修：与 octop 对齐冲突（5 条）**
+- `chat/sessionMetrics.ts:110-120` 的时长格式（`—`/`ms`/`s`/`m..s` 四档）
+- `chat/sessionMetrics.ts:123` 的令牌数 `k` 后缀、`chat/ChatPage.tsx:34` 的 `formatTokens`
+- `usage/ContextWindowChart.tsx:127`、`usage/UsageCharts.tsx:184,194` 的百分比格式
+
+审计建议这些改用 `Intl.NumberFormat`（compact / unit / percent 记法）。**不改**：
+前两条在 `UPSTREAM-USAGE.md:84` 明确登记为「逐字抄」octop 的展示格式；后者的
+「非零至少显示 1%」是 `:87` 登记的照抄规则。规则本身没错，但在这里它是**产品决策**，
+不是清理工作 —— 顺手改掉等于用一条通用规则拆掉一条有据可查的对齐。
+
+对比之下 `usage/formatWhen.ts` 同样被审计点名，却**可以**改：它不在对齐清单里，
+而且同一个仓库的 `chat/ChatSidebar.tsx:64`、`chat/Transcript.tsx:130`、
+`automations/Automations.tsx:437` 早就用 `Intl` 了 —— 那是修内部不一致。
+
+**二、需要你拍板：会改变产品行为（8 条）**
+- 6 处 `role="tablist"` 缺方向键导航（`auth.tsx:226`、`ModelsPage.tsx:220`、
+  `ExpertsPage.tsx:95`、`SkillsPage.tsx:222`、`HubList.tsx:106`、`HubSkillList.tsx:395`）。
+  真问题，但正解是抽一个共享 Tabs 原语 = 一次重构，得单独排期。
+- 6 处分页/筛选/标签页只存在 `useState` 里、不进 URL：页面不可收藏、后退键无效。
+  **改这个就是改路由行为**，属于产品决策。
+- `i18n/index.ts:21` 只从 `localStorage` 取语言，没有 `navigator.languages` 兜底 ——
+  首次访问一律中文。改了就等于替用户决定语言。
+
+**三、记录备查，收益不明确（31 条）**
+长列表虚拟化、弹窗焦点陷阱、内联校验替代表单级 `role="alert"`、
+`ChatPage.tsx:612` 那个只在 `title` 里的提示（鼠标专属）、
+`aria-live` 区域范围、`text-wrap: balance` 等排版细节。
+
+**这一轮的三条方法教训**
+
+1. **规则里有相当一部分是英文界面的排版惯例**（Title Case、`…` 代替 `...`、
+   straight vs curly quotes）。本项目界面文案是中文，硬套只会更糟 —— 审计时明确排除，
+   并写进技能本地的 SKILL.md，免得下次自己又忘了。
+2. **审计结论也会错。** 我让 worker 给 `workspace/WorkspacePage.tsx` 三处失败提示加
+   `role="alert"`，它发现 `components/Page.tsx:73` 的 `ErrorNotice` **本来就有** ——
+   照做会让同一个错误被读屏念两遍，还挂掉 2 个测试。它只加在真正没人播报的那一处
+   （`backup-error-unreadable`：服务端回了成功、压根没有 error 可播报）。
+   **派工时给的「已核实」只是我的判断，不是事实。**
+3. **「已核实」这个说法本身有代价。** 我给 worker 的修复清单里写着「all pre-verified —
+   do not re-investigate」，结果它仍然去实测了 `formatWhen.test.ts` 断言的是精确字符串，
+   发现直接换 `Intl` 会挂测试，于是改用 `formatToParts` 保住 `10-06 09:05` 的格式
+   （轴标签要定宽）。**幸好它没听我的。**
+
 ### B1-1c lint 配好了，还剩两条真问题没修 🟡
 
 `ui/web` 一直没有 `eslint.config.*`，于是 `npm run lint` 直接退 2 —— 而

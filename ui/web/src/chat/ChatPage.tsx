@@ -429,7 +429,7 @@ export function ChatPage(): ReactNode {
           <div className="chat-titlebar-copy">
             <span className="chat-titlebar-expert">{expertLabel}</span>
             <span className="chat-titlebar-sep" aria-hidden="true">·</span>
-            <strong className="chat-titlebar-title">{title}</strong>
+            <h1 className="chat-titlebar-title">{title}</h1>
           </div>
           <div className="chat-session-controls">
             {session ? (
@@ -477,7 +477,7 @@ export function ChatPage(): ReactNode {
             {renaming ? (
               <form className="chat-rename" onSubmit={(event) => void handleRename(event)}>
                 <label htmlFor="chat-title">{t('chat.sessionTitle', { defaultValue: '会话标题' })}</label>
-                <input id="chat-title" value={titleDraft} onChange={(event) => setTitleDraft(event.target.value)} maxLength={64} autoFocus />
+                <input id="chat-title" name="title" autoComplete="off" value={titleDraft} onChange={(event) => setTitleDraft(event.target.value)} maxLength={64} autoFocus />
                 <button type="submit" className="primary-button">{t('common.save', { defaultValue: '保存' })}</button>
                 <button type="button" className="chat-secondary-button" onClick={() => setRenaming(false)}>{t('common.cancel', { defaultValue: '取消' })}</button>
               </form>
@@ -523,6 +523,8 @@ export function ChatPage(): ReactNode {
           <form className="chat-input-card" onSubmit={(event) => void handleSubmit(event)}>
             <textarea
               ref={composerInput}
+              name="message"
+              autoComplete="off"
               aria-label={t('draftChat.message', { defaultValue: '消息' })}
               placeholder={t('draftChat.placeholder', { defaultValue: '输入消息，Enter 发送，Shift+Enter 换行' })}
               rows={2}

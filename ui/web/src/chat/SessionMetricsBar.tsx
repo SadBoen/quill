@@ -27,7 +27,11 @@ export default function SessionMetricsBar({ metrics }: { metrics: SessionMetrics
   if (entries.length === 0) return null
 
   return (
-    <div className="chat-metrics-bar" aria-label={t('chat.metricsBar.label', { defaultValue: '会话统计' })}>
+    <div
+      className="chat-metrics-bar"
+      role="group"
+      aria-label={t('chat.metricsBar.label', { defaultValue: '会话统计' })}
+    >
       {entries.map((entry, index) => (
         <span className="chat-metrics-chip-group" key={entry.key}>
           {index > 0 ? (

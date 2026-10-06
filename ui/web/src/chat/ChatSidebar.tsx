@@ -125,6 +125,7 @@ export function ChatSidebar({
         className={`chat-sidebar-scrim${open ? ' is-open' : ''}`}
         tabIndex={open ? 0 : -1}
         aria-hidden={!open}
+        aria-label={t('chat.sidebar.close', { defaultValue: '收起侧栏' })}
         onClick={onClose}
       />
       <aside

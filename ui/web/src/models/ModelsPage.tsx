@@ -953,6 +953,7 @@ function ProviderForm({
           name="model"
           value={draft.model}
           autoComplete="off"
+          spellCheck={false}
           disabled={isPending}
           onChange={(event) => patch({ model: event.target.value })}
         />

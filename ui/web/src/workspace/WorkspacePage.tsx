@@ -196,6 +196,8 @@ export function WorkspacePage(): ReactNode {
               <label>
                 {t('workspace.backupName', { defaultValue: '备份名' })}
                 <input
+                  name="backupName"
+                  autoComplete="off"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="backup-2026-10-06"
@@ -239,8 +241,13 @@ export function WorkspacePage(): ReactNode {
                 {backupFailureLabel(verifyFailure, t)}
               </p>
             ) : null}
+            {/* 下面两条失败码不挂 role="alert"：它们的 error 已经交给紧邻的
+                ErrorNotice 播报了（ErrorNotice 自带 role="alert"），再加一次
+                屏幕阅读器会把同一次失败读两遍。下面 unreadable 那条不一样：
+                服务端回的是成功、没有 error，ErrorNotice 什么都不渲染，
+                只能由它自己播报。 */}
             {exportUnreadable || verifyUnreadable ? (
-              <p className="oo-workspace-failure" data-testid="backup-error-unreadable">
+              <p className="oo-workspace-failure" role="alert" data-testid="backup-error-unreadable">
                 {t('workspace.backupResultUnreadable', {
                   defaultValue:
                     '服务端回了成功状态，但备份结果里有字段缺失或类型不对，所以这里不显示「已完成」。这不是一次成功的备份。下一步：去看服务端日志，核对 export / verify 的响应字段。',
@@ -288,6 +295,7 @@ export function WorkspacePage(): ReactNode {
               <button
                 className="secondary-button"
                 type="button"
+                disabled={upgrade.isFetching}
                 onClick={() => void upgrade.refetch()}
               >
                 {t('common.refresh', { defaultValue: '刷新' })}

@@ -455,7 +455,7 @@ function ExpertCard({
             >
               <span className="experts-copy-id-value">{expert.id}</span>
               {copied
-                ? <span className="experts-copied-tip">{t('experts.copied', { defaultValue: '已复制' })}</span>
+                ? <span className="experts-copied-tip" role="status">{t('experts.copied', { defaultValue: '已复制' })}</span>
                 : null}
             </button>
           </div>

@@ -217,7 +217,7 @@ export function AutomationsPage(): ReactNode {
           <div className="heartbeat-editor">
             <label>
               {t('automations.heartbeatFile', { defaultValue: '心跳文件（' + HEARTBEAT_PATH + '）' })}
-              <textarea rows={13} maxLength={32000} readOnly value={HEARTBEAT_TEMPLATE} />
+              <textarea rows={13} maxLength={32000} readOnly defaultValue={HEARTBEAT_TEMPLATE} />
             </label>
             <div className="form-actions">
               <button type="button" className="primary-button" disabled>
@@ -267,14 +267,13 @@ export function AutomationsPage(): ReactNode {
             <h2 id="delete-cron-title">{t('automations.deleteTitle', { defaultValue: '删除定时任务' })}</h2>
             <p>{t('automations.deleteWarning', { name: deleteTarget.name, defaultValue: '确认删除「{{name}}」？' })}</p>
             <div className="form-actions">
-              <button type="button" className="secondary-button" onClick={() => setDeleteTarget(null)}>
+              <button type="button" className="secondary-button" autoFocus onClick={() => setDeleteTarget(null)}>
                 {t('common.cancel', { defaultValue: '取消' })}
               </button>
               <button
                 type="button"
                 className="danger-button"
                 disabled={removeCron.isPending}
-                autoFocus
                 onClick={() => removeCron.mutate(deleteTarget.id)}
               >
                 {t('automations.confirmDelete', { defaultValue: '确认删除' })}
@@ -309,11 +308,11 @@ function CronForm({
     <form className="form-grid automation-form" onSubmit={submit}>
       <label>
         {t('automations.name', { defaultValue: '名称' })}
-        <input required value={draft.name} maxLength={120} onChange={(event) => onChange({ ...draft, name: event.target.value })} />
+        <input name="name" autoComplete="off" required value={draft.name} maxLength={120} onChange={(event) => onChange({ ...draft, name: event.target.value })} />
       </label>
       <label>
         {t('automations.scheduleType', { defaultValue: '触发方式' })}
-        <select value={draft.kind} onChange={(event) => onChange({ ...draft, kind: event.target.value as ScheduleKind })}>
+        <select name="scheduleType" autoComplete="off" value={draft.kind} onChange={(event) => onChange({ ...draft, kind: event.target.value as ScheduleKind })}>
           <option value="every">{t('automations.every', { defaultValue: '固定间隔' })}</option>
           <option value="cron">{t('automations.cron', { defaultValue: 'cron 表达式' })}</option>
           <option value="at">{t('automations.once', { defaultValue: '指定时刻' })}</option>
@@ -321,30 +320,30 @@ function CronForm({
       </label>
       <label className="full-row">
         {t('automations.task', { defaultValue: '要发送的内容' })}
-        <textarea rows={5} required maxLength={32000} value={draft.message} onChange={(event) => onChange({ ...draft, message: event.target.value })} />
+        <textarea name="message" autoComplete="off" rows={5} required maxLength={32000} value={draft.message} onChange={(event) => onChange({ ...draft, message: event.target.value })} />
       </label>
       {draft.kind === 'every' ? (
         <label>
           {t('automations.everySeconds', { defaultValue: '间隔秒数' })}
-          <input type="number" min="60" max="31536000" required value={draft.everySeconds} onChange={(event) => onChange({ ...draft, everySeconds: event.target.value })} />
+          <input name="everySeconds" autoComplete="off" type="number" min="60" max="31536000" required value={draft.everySeconds} onChange={(event) => onChange({ ...draft, everySeconds: event.target.value })} />
         </label>
       ) : null}
       {draft.kind === 'cron' ? (
         <label>
           {t('automations.cronExpression', { defaultValue: 'cron 表达式' })}
-          <input required maxLength={256} value={draft.cronExpr} placeholder="0 9 * * 1-5" onChange={(event) => onChange({ ...draft, cronExpr: event.target.value })} />
+          <input name="cronExpr" autoComplete="off" required maxLength={256} value={draft.cronExpr} placeholder="0 9 * * 1-5" onChange={(event) => onChange({ ...draft, cronExpr: event.target.value })} />
         </label>
       ) : null}
       {draft.kind === 'at' ? (
         <label>
           {t('automations.runAt', { defaultValue: '运行时刻' })}
-          <input required maxLength={128} value={draft.at} placeholder="2026-09-03T10:00:00+08:00" onChange={(event) => onChange({ ...draft, at: event.target.value })} />
+          <input name="runAt" autoComplete="off" required maxLength={128} value={draft.at} placeholder="2026-09-03T10:00:00+08:00" onChange={(event) => onChange({ ...draft, at: event.target.value })} />
         </label>
       ) : null}
       {draft.kind !== 'every' ? (
         <label>
           {t('automations.timezone', { defaultValue: '时区' })}
-          <input required maxLength={64} value={draft.timezone} onChange={(event) => onChange({ ...draft, timezone: event.target.value })} />
+          <input name="timezone" autoComplete="off" required maxLength={64} value={draft.timezone} onChange={(event) => onChange({ ...draft, timezone: event.target.value })} />
         </label>
       ) : null}
       <div className="form-actions full-row">

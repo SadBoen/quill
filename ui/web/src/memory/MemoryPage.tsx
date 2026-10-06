@@ -69,6 +69,8 @@ export function MemoryPage(): ReactNode {
             <label className="full-row">
               {t('memory.newPath', { defaultValue: '页面路径' })}
               <input
+                name="path"
+                autoComplete="off"
                 value={newPath}
                 onChange={(event) => setNewPath(event.target.value)}
                 placeholder="concepts/入门.md"
