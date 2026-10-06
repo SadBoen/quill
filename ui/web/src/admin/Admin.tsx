@@ -1,13 +1,21 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { type ReactNode, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router-dom'
 
 import { Card, ErrorNotice, PageHeader, StatusBadge } from '../components/Page'
-import { USERS_ROUTE, ADMIN_CONFIG_ROUTE, listUsers } from './api'
+import {
+  USERS_ROUTE,
+  ADMIN_CONFIG_ROUTE,
+  DEFAULT_PAGE_SIZE,
+  listUsers,
+  isAdminUserList,
+  setUserStatus,
+  userFailure,
+  userFailureLabel,
+} from './api'
 
 const USERS_KEY = ['admin-users'] as const
-const USER_PAGE_SIZE = 50
 
 const JEV_ROUTE = 'POST /api/admin/config/jev/check'
 
@@ -78,23 +86,60 @@ export function AdminInstancePage(): ReactNode {
 export function AdminUsersPage(): ReactNode {
   const { t } = useTranslation()
   const [offset, setOffset] = useState(0)
+  const [pending, setPending] = useState<string | null>(null)
+  const qc = useQueryClient()
   const users = useQuery({
     queryKey: [...USERS_KEY, offset],
-    queryFn: listUsers,
+    queryFn: () => listUsers(offset),
     retry: false,
   })
+  const mutation = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: 'active' | 'disabled' }) =>
+      setUserStatus(id, status),
+    onSuccess: () => {
+      // 启停之后名册变了。不重取的话，界面上会继续显示改之前的状态 ——
+      // 那正是这个项目最不能出的那种错：做了一件事，界面上什么都没发生。
+      void qc.invalidateQueries({ queryKey: USERS_KEY })
+    },
+  })
+
+  const total = users.data?.total ?? 0
+  // **逐字段自检后才认这份数据。** 不自检的话，服务端改了字段名或少给一个，
+  // 界面上照样渲染出一张「看起来有数据」的表 —— 那正是这一页以前的问题。
+  const roster = users.data && isAdminUserList(users.data) ? users.data : undefined
+  const unreadable = !!users.data && !roster
+  const page = roster?.users ?? []
+  // 列表失败与「点停用失败」都要说人话。原来只看 users.error，
+  // 结果 409「不能停用自己」点下去之后界面上一个字都不显示 ——
+  // 用户只会以为按钮坏了。
+  const failure = userFailure(users.error) ?? userFailure(mutation.error)
+  const lastPage = offset + DEFAULT_PAGE_SIZE
 
   return (
     <div className="page-scroll">
       <PageHeader
         eyebrow={t('nav.admin', { defaultValue: '管理' })}
         title={t('admin.users', { defaultValue: '用户' })}
-        description={t('admin.usersDescription', { defaultValue: 'quill 的账号来自服务端的令牌配置。' })}
+        description={t('admin.usersDescription', { defaultValue: '账号来自服务端的令牌配置与首个 owner 引导。' })}
         actions={<AdminTabs />}
       />
       <ErrorNotice error={users.error} />
+      <ErrorNotice error={mutation.error} />
+      {unreadable ? (
+        <p className="field-help full-row" data-testid="users-unreadable">
+          {t('admin.usersUnreadable', {
+            defaultValue:
+              '服务端回了成功状态，但名册里有字段缺失或类型不对，所以这里不显示任何用户行。这不是一份空名册。',
+          })}
+        </p>
+      ) : null}
+      {failure ? (
+        <p className="field-help full-row" data-testid="users-failure-help">
+          {userFailureLabel(failure, t)}
+        </p>
+      ) : null}
       <Card
-        title={users.data ? t('admin.pageUsers', { count: users.data.length, defaultValue: '本页 {{count}} 个用户' }) : t('admin.users', { defaultValue: '用户' })}
+        title={t('admin.totalUsers', { total, defaultValue: '共 {{total}} 个账号' })}
         description={t('admin.usersApiHelp', { defaultValue: '数据来自 {{route}}。', route: USERS_ROUTE })}
       >
         <div className="table-wrap">
@@ -104,40 +149,75 @@ export function AdminUsersPage(): ReactNode {
                 <th>{t('admin.userColumn', { defaultValue: '用户' })}</th>
                 <th>{t('admin.identity', { defaultValue: '身份' })}</th>
                 <th>{t('admin.status', { defaultValue: '状态' })}</th>
+                <th>{t('admin.actions', { defaultValue: '操作' })}</th>
               </tr>
             </thead>
             <tbody>
-              {users.data?.map((user) => (
-                <tr key={user.id}>
-                  <td><strong>{user.name}</strong><small>{user.email}</small></td>
+              {page.map((user) => (
+                <tr key={user.id} data-testid={`user-row-${user.username}`}>
                   <td>
-                    <StatusBadge tone={user.is_admin ? 'success' : 'neutral'}>
-                      {user.is_admin ? t('admin.adminRole', { defaultValue: '管理员' }) : t('admin.memberRole', { defaultValue: '成员' })}
+                    <strong>{user.display_name || user.username}</strong>
+                    <small>{user.username}</small>
+                  </td>
+                  <td>
+                    <StatusBadge tone={user.role === 'owner' ? 'success' : 'neutral'}>
+                      {user.role === 'owner' ? t('admin.adminRole', { defaultValue: '管理员' }) : t('admin.memberRole', { defaultValue: '成员' })}
                     </StatusBadge>
                   </td>
                   <td>
-                    <StatusBadge tone={user.locked ? 'danger' : 'success'}>
-                      {user.locked ? t('admin.overQuota', { defaultValue: '超配额' }) : t('common.normal', { defaultValue: '正常' })}
+                    <StatusBadge tone={user.status === 'active' ? 'success' : 'danger'}>
+                      {user.status === 'active' ? t('admin.normal', { defaultValue: '正常' }) : t('admin.disabled', { defaultValue: '已停用' })}
                     </StatusBadge>
+                    {/* 停用挡不住环境变量令牌 —— 不说出来，「已停用」就是一个假的。 */}
+                    {user.has_env_token ? (
+                      <small data-testid={`user-env-token-${user.username}`}>
+                        {t('admin.stillHasEnvToken', {
+                          defaultValue: '仍持有 QUILL_TOKENS 令牌，停用挡不住他',
+                        })}
+                      </small>
+                    ) : null}
+                  </td>
+                  <td>
+                    <button
+                      className="secondary-button"
+                      data-testid={`user-toggle-${user.username}`}
+                      disabled={pending === user.id}
+                      onClick={() => {
+                        setPending(user.id)
+                        mutation.mutate(
+                          { id: user.id, status: user.status === 'active' ? 'disabled' : 'active' },
+                          { onSettled: () => setPending(null) },
+                        )
+                      }}
+                    >
+                      {user.status === 'active'
+                        ? t('admin.userDisable', { defaultValue: '停用' })
+                        : t('admin.userEnable', { defaultValue: '启用' })}
+                    </button>
                   </td>
                 </tr>
               ))}
+              {page.length === 0 && !users.isFetching ? (
+                <tr>
+                  <td colSpan={4}>{t('admin.noUsers', { defaultValue: '名册是空的。' })}</td>
+                </tr>
+              ) : null}
             </tbody>
           </table>
         </div>
         <div className="form-actions">
-          <button className="secondary-button" data-testid="users-previous-page" disabled={offset === 0 || users.isFetching} onClick={() => setOffset((value) => Math.max(0, value - USER_PAGE_SIZE))}>
+          <button className="secondary-button" data-testid="users-previous-page" disabled={offset === 0 || users.isFetching} onClick={() => setOffset(Math.max(0, offset - DEFAULT_PAGE_SIZE))}>
             {t('admin.previousPage', { defaultValue: '上一页' })}
           </button>
-          <span>{t('admin.pageNumber', { page: Math.floor(offset / USER_PAGE_SIZE) + 1, defaultValue: '第 {{page}} 页' })}</span>
-          <button className="secondary-button" data-testid="users-next-page" disabled={(users.data?.length ?? 0) < USER_PAGE_SIZE || users.isFetching} onClick={() => setOffset((value) => value + USER_PAGE_SIZE)}>
+          <span>{t('admin.pageNumber', { page: Math.floor(offset / DEFAULT_PAGE_SIZE) + 1, defaultValue: '第 {{page}} 页' })}</span>
+          <button className="secondary-button" data-testid="users-next-page" disabled={lastPage >= total || users.isFetching} onClick={() => setOffset(offset + DEFAULT_PAGE_SIZE)}>
             {t('admin.nextPage', { defaultValue: '下一页' })}
           </button>
         </div>
-        <p className="field-help full-row">
-          {t('admin.usersNotWired', {
-            defaultValue: '{{route}} 在 quill 里已登记但尚未实现，所以这里没有用户列表，也不会显示任何示例行。下一步：实现 {{route}} 后，本表自动就有数据；删除/改权限请在服务端的 QUILL_TOKENS 里操作。',
-            route: USERS_ROUTE,
+        <p className="field-help full-row" data-testid="users-not-allowed">
+          {t('admin.usersCannotCreate', {
+            defaultValue:
+              '这台实例刻意不提供建号与删号：账号只来自部署配置（QUILL_TOKENS / QUILL_PASSWORD_USERS），软删除也还没落地。停用会挡住口令登录并让已登录的会话失效，账号与它的数据都还在；要加账号请改环境变量后重启。',
           })}
         </p>
       </Card>

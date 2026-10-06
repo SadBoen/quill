@@ -2,6 +2,12 @@
 /target/
 **/*.rs.bk
 
+# node_modules。`ui/web/.gitignore` 里已经有一条，但那只挡得住那个子目录；
+# 根目录这条是**兜底**：在仓库根误跑一次 npm/npx 就会留下 `node_modules/.vite`，
+# 它不在任何规则覆盖范围内，会让 `git status --porcelain` 不再为空 ——
+# 而「工作区干净」正是 M0 的一条判据。
+node_modules/
+
 # vendor/ 与 .octop-ref/ 是**只读参考源码**，本地保留但不入库。
 #
 # 为什么不入库：

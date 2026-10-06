@@ -48,6 +48,12 @@ Rust 工具链在 WSL2，node/npm 只在 Windows 侧。
    `gates.sh` 因此在跑前端前先真的 `import('rolldown')` 探一次，
    加载不了就按当前平台补装（幂等，几秒）。两侧都验过能自愈。
 
+   **要记住的代价**：`node_modules` 只有一份，两侧共用，所以**一次只能服务一个平台**。
+   在 WSL 跑完门禁之后，Windows 侧再跑前端会看到
+   `Cannot find native binding` —— 那是 WSL 刚把 win32 的包剪掉了。
+   在 Windows 侧跑一次 `npm install` 就回来（反之亦然）。
+   这不是坏了，是这个结构的必然结果；`gates.sh` 自己会补，直接手跑就要自己补。
+
 ### B0-3 前端 lint 从来没跑起来 ⚠
 
 `ui/web` 下不存在任何 `eslint.config.*`，`npm run lint` 直接退出 2。
@@ -73,12 +79,29 @@ Rust 工具链在 WSL2，node/npm 只在 Windows 侧。
 
 | 界面入口 | 打到哪 | 后端有没有能力 |
 |---|---|---|
-| 实例 / 用户管理页 | `GET/POST /api/users`、`PATCH/DELETE /api/users/{id}` | **三层缺两层**：`quill-control` 只有 `pub(crate)` 的 `list_profiles` / `list_invites` / `insert_invite` / `revoke_user_sessions`，没有对外的 `list_users` / `invite`，也没有路由。旧文档写「只差路由」是错的 |
-| 设备页 + 管理页的 MCP 卡片 | `PATCH /api/extensions/mcp/{name}` | `routes.rs:140` 仍是桩；但 `GET/POST /api/extensions/mcp` **是真实现**（旧文档把它也算成桩，错了） |
+| 实例 / 用户管理页 | `GET/POST /api/users`、`PATCH/DELETE /api/users/{id}` | **已通一半**（2026-10-06）：`GET` 真读库并支持真分页，`PATCH` 真启停。`POST`/`DELETE` **有意保持 501** —— 账号只来自部署配置，软删除只做了一半。旧的「三层缺两层」说法已过期：`ControlPlane` 的 `list_users`/`set_user_status`/`create_user`/`create_invite` 一直都在，缺的是 HTTP 那层 |
+| 设备页 + 管理页的 MCP 卡片 | `PATCH /api/extensions/mcp/{name}` | `routes.rs` 里仍是桩；但 `GET/POST /api/extensions/mcp` **是真实现**（旧文档把它也算成桩，错了） |
 | 工作区页 | `POST /api/backup/export|verify`、三条 `/api/upgrade/*` | backup 能力齐（见 M4），upgrade 只有 120 行守卫 |
 
 **为什么排 M1**：这些是"真按钮、真失败"，不是假开关，但也不产生价值。
 建议顺序：备份接线（M4 的实现已在，最快见效）→ 用户管理三层补齐。
+
+### B1-1b 停用挡不住 `QUILL_TOKENS` ⚠ 需要用户拍板的产品决策
+
+`CompositeTokenResolver::resolve`（`auth.rs:307-317`）先查环境变量令牌表，
+命中直接放行，**完全不查库**。所以把某人状态改成 `disabled`：
+
+- 对**口令登录**有效（`ControlPlane::authenticate` 检查 `user_status`）；
+- 对**已登录会话**有效（同一个检查，下一个请求即拒）；
+- 对**手里还握着 `QUILL_TOKENS` 令牌的人无效** —— 他照样进得来。
+
+这一轮的处理：接口如实返回 `has_env_token` 与一句 `warning`，
+界面上给那个人单独标一行「仍持有 QUILL_TOKENS 令牌，停用挡不住他」。
+**没有**偷偷改鉴权热路径 —— 那条路径的注释写明了「环境变量令牌应当零查库命中」，
+改成查库等于给每个请求加一次 DB 查询，是一个架构取舍，不该由接线顺手做掉。
+
+要真正堵住只有两条路，都需要你定：① 鉴权时对环境变量令牌也查一次库；
+② 明确「部署者给的令牌不归运行时管，停用只管口令与会话」，写进文档即可。
 
 ### B1-2 未注册 ≠ 501，界面要分清这三种 🟡
 
