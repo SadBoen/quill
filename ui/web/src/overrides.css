@@ -1,0 +1,191 @@
+/*
+ * 本地覆盖层：必须在 index.css **之后**加载，改动与上游设计逐条对应说明。
+ *
+ * 为什么单独一个文件、而不是直接改 index.css：
+ *   ui/web/src/index.css 必须与 vendor/openoctopus-frontend/src/index.css
+ *   **逐字节一致**（`.library-check.mjs` 会逐字节核），所以本地修改一律不进
+ *   那个文件，全在这里。加载顺序因此是「先基准、后覆盖」，别调换。
+ *
+ * 名字从 layout_local.css 改成 overrides.css（2026-10-07）：这个文件承载的是
+ * 全站级的设计令牌（阴影、可读性下限）与两条全局规则（touch-action、
+ * reduced-motion），已经不只是「布局」了，而「local」听起来像临时草稿 ——
+ * 恰恰相反，这里每一条改动都必须写清它对应上游的哪个决定。
+ *
+ * .stage -- 上游 .stage { min-height: 100vh; padding: 20px } 不设 max-width，
+ *   视口拉到 1600+ 时整个 app 被拉满到边，对话页感觉"僵硬拉伸"。
+ *   封顶 1440 居中，超过留白；不影响 <820px 的折叠布局。
+ */
+
+.stage {
+  max-width: 1440px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/*
+ * .form-error-next -- 服务端错误信封里的 next_step（"下一步：…"）单独占一行。
+ *   index.css 的 .form-error 是单行 padding 盒，把两段文字塞进同一行会让
+ *   下一步（常带可复制命令）被读漏。段落默认 margin 要清掉，否则盒子被撑开。
+ */
+.form-error p {
+  margin: 0;
+}
+
+.form-error p + p {
+  margin-top: 6px;
+}
+
+.form-error-next {
+  opacity: 0.85;
+}
+
+/*
+ * .mcp-tool-* -- 设备页里「MCP 工具真的挂进对话工具表了」的清单。
+ *   挂载名与原名要并排显示：用户在自己的 MCP 配置里认的是原名，而模型调的是
+ *   挂载名。只显示其中一个，用户就没法把这一行对回自己写的那份配置。
+ *   不用 <table>：这两列是「同一件东西的两个名字」，不是可逐列比较的数据。
+ */
+.mcp-tool-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+}
+
+.mcp-tool-item {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  line-height: 1.55;
+  padding: 1px 0;
+}
+
+.mcp-tool-item code {
+  font-size: 9px;
+  word-break: break-all;
+}
+
+.mcp-tool-remote {
+  color: var(--faint);
+  font-size: 9px;
+  font-weight: 450;
+}
+
+/*
+ * .draft-badge / .draft-banner -- ISSUE-010。
+ *
+ * 草稿是前端本地状态，保存之前服务端里根本没有这一行。曾经它与已保存行
+ * 渲染得一模一样，用户以为存好了就关掉标签页，这条配置就永远丢了。
+ * 所以「未保存」这件事必须在**这一行自己身上**看得见，不能只写在页面顶部。
+ *
+ * 颜色只用 vendor 已有的 CSS 变量，不新增色值 —— index.css 是移植基准，
+ * 一字都不能动；本地覆盖全在这个文件里做。
+ */
+.draft-badge {
+  border: 1px solid var(--faint);
+  border-radius: 999px;
+  color: var(--faint);
+  font-size: 9px;
+  font-weight: 450;
+  margin-left: 6px;
+  padding: 0 6px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.draft-banner {
+  border-left: 2px solid var(--faint);
+  color: var(--faint);
+  margin: 0;
+  padding-left: 10px;
+}
+
+/*
+ * ── 从 index.css 撤下来的两条全局规则 ──────────────────────────────────────
+ *
+ * 这两条以前直接写进了 index.css，把 vendor 移植基准的 SHA256 门禁打红了
+ * （.wsl-css-check.sh 里 pin 的 FF5A2B18… 与实际值不符）。规则本身是对的，
+ * 位置是错的 —— 本文件的职责就是承接「index.css 不能动」的那部分改动。
+ * 放这里还有个好处：它们不再混在移植基准里，日后重新对齐 vendor 时
+ * 不会被顺手覆盖掉。
+ */
+
+/* 去掉移动端浏览器 ~300ms 的双击缩放等待。没给按钮加的话，在触屏上快速连点
+   会先等一会儿再触发 —— 体感就是「点不动」。 */
+button, a, input, textarea, select, summary, [role="button"] { touch-action: manipulation; }
+
+/* vendor 的 reduced-motion 块只压 transition-duration，结果两个无限循环动画
+   （experts.css 的 experts-spin、ChatPage.css 的 chat-work-pulse）照转不误 ——
+   对前庭敏感的人，一个永不停歇的转圈比一段过渡难受得多。animation 必须一起压。 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+/*
+ * ── 设计阶梯 ────────────────────────────────────────────────────────────
+ *
+ * index.css 里绝大多数字号和圆角是写死的数值，全项目一度出现 17 种
+ * font-size 与 16 种 border-radius，其中还有 6px / 7px 这种低于可读下限的。
+ * index.css 是 vendor 基准改不了，所以阶梯定义在这里，新代码一律引用
+ * 阶梯值；已存在的历史取值只做「明显不可读」和「孤例越级」两类的收敛，
+ * 不做全量替换 —— 全量替换会改变每一页的观感，那属于设计决定，不是清理。
+ */
+
+/* 字号阶梯。--text-2xs 是全局下限：低于它的取值只有一种用途，
+   即纯图形字符（.nav-icon 里的单字母），不承载要读的信息。 */
+:root {
+  --text-2xs: 9px;
+  --text-xs: 10px;
+  --text-sm: 11px;
+  --text-base: 12px;
+  --text-md: 13px;
+
+  /* 圆角阶梯。与 vendor 已有的 --radius-small(10px) / --radius(14px) 对齐，
+     补上两端缺的两级。 */
+  --radius-xs: 6px;
+  --radius-lg: var(--radius);
+
+  /* 阴影阶梯。原先项目里并存三种写法：index.css 的 rgba(33, 43, 69, …)、
+     chatShell.css 的 rgba(39, 51, 80, …)、hub.css 与 experts.css 的
+     rgb(0 0 0 / …)。同样的「卡片抬起来一点」在不同页上是三种灰度。
+     index.css 是基准动不了，它那份继续生效；本地这几个收敛到同一组。 */
+  --shadow-card: 0 4px 16px rgba(33, 43, 69, .08);
+  --shadow-pop: 0 6px 18px rgba(33, 43, 69, .12);
+  --shadow-dock: 0 12px 28px rgba(33, 43, 69, .08);
+}
+
+/* -- 可读性下限：这两处在 index.css 里是 7px / 8px，基准不能动就在这里托底。 */
+.session-source-badge { font-size: var(--text-2xs); }
+.compact-stats dt { font-size: var(--text-2xs); }
+
+/*
+ * .sidebar-health -- 侧栏页脚那行模型状态。
+ *
+ * 它以前直接借用对话页的 .chat-banner。那个类是为「对话区里横跨整幅的提示
+ * 条」设计的：accent-soft 底 + 1px 描边 + 10px/12px 内边距。塞进 .sidebar-footer
+ * 这个 flex 行之后，被挤成一枚和 profile 并排的小圆角片 —— 语义是横幅，
+ * 位置是状态位。状态位全站在用 .status-badge，这里是第二套写法。
+ */
+.sidebar-health {
+  align-items: center;
+  background: var(--accent-soft);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: var(--text-2xs);
+  gap: 5px;
+  margin: 0;
+  padding: 4px 9px;
+  white-space: nowrap;
+}
+
+.sidebar-health-error {
+  background: color-mix(in srgb, var(--danger), transparent 88%);
+  border-color: color-mix(in srgb, var(--danger), transparent 65%);
+  color: var(--danger);
+}

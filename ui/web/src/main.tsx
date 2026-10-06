@@ -6,7 +6,7 @@ import { BrowserRouter } from 'react-router-dom'
 import { AppRoutes } from './app/App'
 import './i18n'
 import './index.css'
-import './layout_local.css'
+import './overrides.css'
 
 const queryClient = new QueryClient({
   defaultOptions: {

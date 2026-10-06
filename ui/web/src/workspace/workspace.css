@@ -120,7 +120,7 @@
   display: inline-flex;
   flex: 0 0 auto;
   font-family: ui-monospace, monospace;
-  font-size: 8px;
+  font-size: var(--text-2xs);
   font-weight: 800;
   height: 28px;
   justify-content: center;
@@ -130,7 +130,7 @@
 .oo-workspace-locations strong,
 .oo-workspace-locations small { display: block; }
 .oo-workspace-locations strong { font-size: 11px; }
-.oo-workspace-locations small { color: var(--faint); font-size: 8px; margin-top: 3px; }
+.oo-workspace-locations small { color: var(--faint); font-size: var(--text-2xs); margin-top: 3px; }
 
 .oo-workspace-files { background: var(--panel); min-width: 0; }
 .oo-workspace-toolbar {
@@ -231,7 +231,7 @@
 .oo-workspace-file-list button:hover { background: var(--panel-soft); }
 .oo-workspace-file-list button.selected { background: var(--accent-soft); }
 .oo-workspace-file-list button:disabled { cursor: default; opacity: .7; }
-.oo-workspace-file-icon { border-radius: 6px; font-size: 6px; height: 25px; width: 25px; }
+.oo-workspace-file-icon { border-radius: var(--radius-xs); font-size: var(--text-2xs); height: 25px; width: 25px; }
 .oo-workspace-file-icon.directory {
   background: color-mix(in srgb, var(--warning), transparent 86%);
   color: var(--warning);
@@ -260,7 +260,7 @@
 }
 .oo-workspace-file-main { align-items: center; display: flex; gap: 8px; min-width: 0; }
 .oo-workspace-file-name { font-size: 11px; font-weight: 700; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.oo-workspace-file-tag { border-radius: 999px; color: var(--accent-strong); flex: 0 0 auto; font-size: 8px; padding: 3px 6px; }
+.oo-workspace-file-tag { border-radius: 999px; color: var(--accent-strong); flex: 0 0 auto; font-size: var(--text-2xs); padding: 3px 6px; }
 .oo-workspace-file-kind,
 .oo-workspace-file-size { color: var(--faint); font-size: 9px; text-align: right; }
 .oo-workspace-file-list li[data-special="attachments"] .oo-workspace-file-icon,

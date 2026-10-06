@@ -55,9 +55,6 @@ a { color: inherit; text-decoration: none; }
 button, input, textarea { color: inherit; font: inherit; }
 select { color: inherit; font: inherit; }
 button { cursor: pointer; }
-/* 去掉移动端浏览器 ~300ms 的双击缩放等待。没给按钮加的话，在触屏上快速连点
-   会先等一会儿再触发 —— 体感就是「点不动」。 */
-button, a, input, textarea, select, summary, [role="button"] { touch-action: manipulation; }
 button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, summary:focus-visible {
   outline: 3px solid var(--accent-strong);
   outline-offset: 2px;
@@ -417,13 +414,5 @@ td small { color: var(--muted); margin-top: 3px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  /* 原来只压 transition-duration，结果两个无限循环动画（experts.css 的
-     experts-spin、ChatPage.css 的 chat-work-pulse）照转不误 —— 对前庭敏感的
-     的人，一个永不停歇的转圈比一段过渡难受得多。animation 必须一起压。 */
-  *, *::before, *::after {
-    scroll-behavior: auto !important;
-    transition-duration: .01ms !important;
-    animation-duration: .01ms !important;
-    animation-iteration-count: 1 !important;
-  }
+  *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; }
 }

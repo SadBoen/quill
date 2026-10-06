@@ -201,7 +201,7 @@
 
 .hub-card:hover {
   border-color: var(--accent);
-  box-shadow: 0 4px 16px rgb(0 0 0 / 8%);
+  box-shadow: var(--shadow-card);
 }
 
 /* 已经装过的：左边一道色条。用户扫一眼就知道哪几张不用再点。 */
@@ -285,9 +285,9 @@
 /* 「需要 API Key」是橙色的提醒，「已安装」是中性的事实 ——
    两者语气不同，颜色就不能一样。 */
 .hub-card-flag {
-  background: #fdeceb;
+  background: color-mix(in srgb, var(--danger), transparent 88%);
   border-radius: 999px;
-  color: #b42318;
+  color: var(--danger);
   flex-shrink: 0;
   font-size: 11px;
   line-height: 18px;

@@ -84,7 +84,7 @@ export function AppShell(): ReactNode {
               </span>
             </Link>
             {health.data ? (
-              <p className={`chat-banner${health.data.storage.ready ? '' : ' chat-banner-error'}`}>
+              <p className={`sidebar-health${health.data.storage.ready ? '' : ' sidebar-health-error'}`}>
                 {health.data.llm.configured
                   ? t('nav.llmReady', { model: health.data.llm.model, defaultValue: '模型 {{model}} 就绪' })
                   : t('nav.llmMissing', { defaultValue: '模型未配置' })}

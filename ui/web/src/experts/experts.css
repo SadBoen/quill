@@ -65,7 +65,7 @@
 .experts-lib-avatar {
   align-items: center;
   border-radius: 999px;
-  color: #fff;
+  color: var(--on-accent);
   display: inline-flex;
   flex: 0 0 auto;
   font-size: 12px;
@@ -316,7 +316,7 @@
   background: var(--accent);
   border: 1px solid var(--accent);
   border-radius: 9px;
-  color: #fff;
+  color: var(--on-accent);
   cursor: pointer;
   display: inline-flex;
   font-size: 11px;
@@ -447,7 +447,7 @@
 .experts-switch.is-on { background: var(--accent); }
 .experts-switch:disabled { cursor: not-allowed; opacity: 0.5; }
 .experts-switch-knob {
-  background: #fff;
+  background: var(--on-accent);
   border-radius: 999px;
   display: block;
   height: 14px;
@@ -480,7 +480,7 @@
   border: 1px solid var(--line-strong);
   border-radius: 9px;
   bottom: calc(100% + 6px);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+  box-shadow: var(--shadow-pop);
   display: grid;
   gap: 6px;
   left: 0;
@@ -503,7 +503,7 @@
   min-height: 26px;
   padding: 0 10px;
 }
-.experts-popconfirm-ok { background: var(--accent); border-color: var(--accent); color: #fff; }
+.experts-popconfirm-ok { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .experts-popconfirm-ok.is-danger { background: var(--danger); border-color: var(--danger); }
 .experts-popconfirm-cancel:hover { color: var(--ink); }
 

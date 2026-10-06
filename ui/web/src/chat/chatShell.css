@@ -317,7 +317,7 @@
   background: var(--panel);
   border: 1px solid var(--line-strong);
   border-radius: 20px;
-  box-shadow: 0 12px 28px rgba(39, 51, 80, .08);
+  box-shadow: var(--shadow-dock);
   margin: 0 auto;
   max-width: 920px;
   padding: 9px 12px 9px 16px;
@@ -328,7 +328,7 @@
    只是画在整张输入卡片上，让「输入框所在的那一块」成为明确的焦点区。 */
 .chat-input-card:focus-within {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-strong), 0 12px 28px rgba(39, 51, 80, .08);
+  box-shadow: 0 0 0 3px var(--accent-strong), var(--shadow-dock);
 }
 
 /* 焦点落在卡片里时，焦点环画在整张卡片上（见下方 :focus-within），
