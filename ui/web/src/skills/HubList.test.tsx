@@ -4,6 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import i18n from '../i18n'
 import { HubList } from './HubList'
+// 直接读样式表原文。**不用 `node:fs`**：应用 tsconfig 的 `types` 里
+// 没有 node（`noUnusedLocals` 之外还有 `types` 白名单），引 fs 会让
+// `tsc -b` 直接失败。Vite 的 `?raw` 是现成的，且类型在 `vite/client` 里。
+import hubCss from './hub.css?raw'
 import type { HubSkill, HubSkillSet } from './hubApi'
 
 /**
@@ -295,6 +299,75 @@ describe('技能市场 · 单个技能', () => {
     expect(screen.getByTestId('hub-card-pdf-image-text-extractor').className).toContain(
       'is-installed',
     )
+  })
+
+  it('名字与标签分行摆，名字不会被标签挤没', async () => {
+    // 真机上就是这个：技能名、图标、两个标签挤在一行 flex 里，
+    // 「PDF和图片文字提取」被压成了「PDF…」。而那是卡片上唯一
+    // 能认出它是什么的字。
+    // jsdom 不做布局，**算不出截断**；所以只能钉住「结构上分开」：
+    // 标签必须在一个 `.hub-card-tags` 容器里，而不是与名字同级。
+    renderHub({
+      installed: [{ slug: 'pdf-image-text-extractor' }],
+      rank: {
+        ...OK_RANK,
+        items: [skill({ labels: { requires_api_key: 'true' } })],
+      },
+    })
+    await waitFor(() => expect(screen.getByText('需要 API Key')).toBeInTheDocument())
+    const name = screen.getByText('PDF和图片文字提取')
+    const tags = document.querySelector('.hub-card-tags')
+    expect(tags).not.toBeNull()
+    // 名字**不在**标签容器里 —— 两者的行数由 CSS 网格分开。
+    expect(tags?.contains(name)).toBe(false)
+    expect(name.parentElement).toBe(tags?.parentElement)
+  })
+
+  it('列数随宽度自动铺，不写死', async () => {
+    // 这条**不能靠渲染后的 DOM 断言**（jsdom 不做布局，算不出列数）。
+    // 所以直接读样式表：网格必须是 `auto-fill` + `minmax`，
+    // 任何写死列数的写法（`repeat(2, …)`、`grid-template-columns: 2`）
+    // 都会让宽屏白白浪费横向空间。
+    //
+    // `min(100%, 260px)` 里的 `min(100%, …)` 也不能少：
+    // 容器比下限还窄时，没有它卡片会**溢出**容器而不是换行。
+    const css = hubCss
+    expect(css).toMatch(/grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(/)
+    expect(css).toMatch(/minmax\(min\(100%,\s*\d+px\),\s*1fr\)/)
+    // 下限别大到只剩两列。实测这页 `.card-body` 可用宽约 780px
+    // （1527 截图 ÷ DPR 1.25 ≈ 1221 CSS px，减侧栏与内边距）：
+    // ```
+    // 列数 = floor(容器宽 / (下限 + 间距))
+    // 320（Octop 的值）→ 2 列     260 → 2 列     240 → 3 列
+    // ```
+    // 3 列需要 下限 ≤ (780 − 2×12) / 3 = 252px。
+    // 也不能无脑调小：240 − 24 内边距 = 216px 内容宽，
+    // 刚好装得下「↓ 378 次安装」与「重新安装」按钮而不换行。
+    const floor = Number(/minmax\(min\(100%,\s*(\d+)px\)/.exec(css)?.[1] ?? '9999')
+    expect(floor).toBeLessThanOrEqual(250)
+    expect(floor).toBeGreaterThanOrEqual(220)
+    // 也不许出现写死的列数。
+    expect(css).not.toMatch(/repeat\(\s*\d+\s*,/)
+  })
+
+  it('已装的技能排前面，省得在一堆卡片里找', async () => {
+    // Octop 的 `displaySkills` 就是这么排的（已装的在前）。
+    renderHub({
+      installed: [{ slug: 'b-skill' }],
+      rank: {
+        ...OK_RANK,
+        items: [
+          skill({ slug: 'a-skill', name: 'A' }),
+          skill({ slug: 'b-skill', name: 'B' }),
+          skill({ slug: 'c-skill', name: 'C' }),
+        ],
+      },
+    })
+    await waitFor(() => expect(screen.getByText('A')).toBeInTheDocument())
+    const slugs = Array.from(document.querySelectorAll('.hub-card')).map(
+      (el) => el.getAttribute('data-slug'),
+    )
+    expect(slugs[0]).toBe('b-skill')
   })
 
   it('没有图标时用占位图标，不留破图', async () => {

@@ -174,14 +174,23 @@ function SkillCard({
           </span>
         )}
         <strong className="hub-card-name">{skillLabel(item)}</strong>
-        {apiKey ? (
-          <span className="hub-card-flag">
-            {t('hub.needsApiKey', { defaultValue: '需要 API Key' })}
-          </span>
-        ) : null}
-        {installed ? (
-          <span className="hub-card-flag is-done">
-            {t('hub.alreadyInstalled', { defaultValue: '已安装' })}
+        {/*
+          标签**另起一行**，不跟名字抢同一行。
+          真机上就是抢出来的后果：「PDF和图片文字提取」被两个标签
+          挤成了「PDF…」—— 那是这张卡片上唯一能认出它是什么的字。
+        */}
+        {apiKey || installed ? (
+          <span className="hub-card-tags">
+            {apiKey ? (
+              <span className="hub-card-flag">
+                {t('hub.needsApiKey', { defaultValue: '需要 API Key' })}
+              </span>
+            ) : null}
+            {installed ? (
+              <span className="hub-card-flag is-done">
+                {t('hub.alreadyInstalled', { defaultValue: '已安装' })}
+              </span>
+            ) : null}
           </span>
         ) : null}
       </div>
@@ -236,9 +245,16 @@ function SkillCards({
   items: HubSkill[]
   installedSlugs: ReadonlySet<string>
 }): ReactNode {
+  // **已装的排前面。** 抄 Octop 的 `displaySkills`：
+  // 用户刚装完一个技能，刷新市场页第一眼就该看到它，而不是要在一堆
+  // 卡片里按名字找。**顺序只动位置，不动内容** ——
+  // 列表里仍然是上游给的那些条目，一条没多一条没少。
+  const ordered = [...items].sort(
+    (a, b) => Number(installedSlugs.has(b.slug)) - Number(installedSlugs.has(a.slug)),
+  )
   return (
     <ul className="hub-grid">
-      {items.map((item) => (
+      {ordered.map((item) => (
         <SkillCard
           key={`${item.slug}@${item.version}`}
           item={item}
