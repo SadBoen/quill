@@ -136,9 +136,23 @@ jobs:
   gates-upstream:
     name: 门禁（需要私有上游的那部分）
     # 没配 OCTOP_REPO 就整条跳过，并在界面上显示为 skipped —— 不是通过。
-    if: ${{ github.event_name != 'pull_request' && secrets.OCTOP_REPO != '' }}
+    #
+    # **这里只能用 `vars`，不能用 `secrets`**（这个坑让整个 CI 白挂了五天）：
+    # job 级的 `if:` 里 secrets 上下文不可用，写了它 GitHub 会**解析整个工作流失败**
+    # —— 2026-10-08 实测连着 5 次 push 全部 0 秒、0 个 job，连 gates-core 都跑不了。
+    # GitHub 当时的原话：
+    #   Invalid workflow file: .github/workflows/gates.yml#L1 (Line: 139, Col: 9):
+    #   Unrecognized named-value: 'secrets'.
+    #
+    # 而 OCTOP_REPO 只是个 clone 地址、不是凭据，本来就该配成仓库变量
+    # （Settings → Secrets and variables → Actions → Variables）而不是 secret。
+    if: ${{ github.event_name != 'pull_request' && vars.OCTOP_REPO != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # 变量优先、secret 兜底：两边配任意一边都能跑。
+    # 变量没配时是 null，比较时按空串处理，所以 `!= ''` 为假 —— 整条跳过，如实显示 skipped。
+    env:
+      OCTOP_REPO: ${{ secrets.OCTOP_REPO || vars.OCTOP_REPO }}
     steps:
       - uses: actions/checkout@v4
 
@@ -147,8 +161,6 @@ jobs:
           node-version: '24'
 
       - name: 取回上游参考源码
-        env:
-          OCTOP_REPO: ${{ secrets.OCTOP_REPO }}
         run: bash .scripts/fetch-vendor.sh
 
       - name: 专家库源 vs 产物
