@@ -6,7 +6,9 @@ use axum::Json;
 use serde_json::{json, Value};
 
 use sqlx::Row;
-use quill_provider::{Message, TokenUsage};
+use quill_provider::{
+    ChatRequest, ChatResponse, Message, SharedProvider, StreamDelta, TokenUsage, ToolCall, ToolSpec,
+};
 
 use crate::auth::AuthUser;
 use crate::body::JsonBody;
@@ -873,13 +875,8 @@ fn add_reported(acc: &mut Option<u32>, value: Option<u32>) {
     }
 }
 
-/// 发一句话：存用户消息 → 调模型 → 存助手消息 → 返回。
-pub async fn post_message(
-    State(state): State<AppState>,
-    user: AuthUser,
-    Path(id): Path<String>,
-    JsonBody(body): JsonBody,
-) -> Result<axum::response::Response, ApiError> {
+/// 校验并取出发送内容。两个入口共用，否则流式那条路很容易漏掉长度上限。
+pub(crate) fn take_content(body: &Value) -> Result<String, ApiError> {
     let content = body
         .get("content")
         .and_then(Value::as_str)
@@ -897,7 +894,60 @@ pub async fn post_message(
             content.chars().count()
         )));
     }
+    Ok(content)
+}
 
+/// 存用户消息 → 调模型 → 存助手消息 → 返回。
+///
+/// 这条路由**不改语义**：它仍然等模型把整段回完再一次性返回 JSON。
+/// 流式是另一条路由 `POST /api/sessions/{id}/messages/stream`，两者共用
+/// `prepare_turn` / `run_turn` / `finish_turn` 这三段，不复制第二份循环。
+pub async fn post_message(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+    JsonBody(body): JsonBody,
+) -> Result<axum::response::Response, ApiError> {
+    let content = take_content(&body)?;
+    let mut prep = prepare_turn(state, user, id, content).await?;
+
+    let mut sink = NullSink;
+    let outcome = run_turn(&mut prep, ReplyMode::Once, &mut sink).await?;
+
+    Ok(Json(finish_turn(&prep, outcome).await?).into_response())
+}
+
+/// 一次「发消息」里**与模型怎么答无关**的那部分准备结果。
+///
+/// 拆它的理由：一次性路由与 SSE 路由必须跑**同一份**工具循环。两份循环
+/// 迟早只改一边，而「一次性那条还能用、流式那条坏了」恰好是最难发现的错法
+/// —— 前端全切到流式之后，老路由根本没人碰了。
+pub(crate) struct TurnPrep {
+    pub(crate) provider: SharedProvider,
+    pub(crate) llm_config: crate::llm::LlmConfig,
+    pub(crate) registry: crate::tools::ToolRegistry,
+    pub(crate) tools: Vec<ToolSpec>,
+    msgs: Vec<Message>,
+    /// `state.db()` 交出来的是 `Arc`；这里保持 Arc，SSE 那条路要把
+    /// 整份准备结果 move 进后台任务。
+    pub(crate) db: Arc<crate::db::DbBridge>,
+    pub(crate) uid: quill_domain::UserId,
+    pub(crate) sid: [u8; 16],
+    pub(crate) session_id: String,
+    pub(crate) content: String,
+    pub(crate) user_id: [u8; 16],
+    pub(crate) seq_user: i64,
+    pub(crate) user_created_at: i64,
+    pub(crate) persona: SessionPersona,
+}
+
+/// 校验内容 → 装 provider → 取历史与人格 → 落用户消息 → 拼 messages → 装工具表。
+pub(crate) async fn prepare_turn(
+    state: AppState,
+    user: AuthUser,
+    id: String,
+    content: String,
+) -> Result<TurnPrep, ApiError> {
     let provider = state.llm()?;
     let llm_config = state
         .llm_config
@@ -914,12 +964,12 @@ pub async fn post_message(
     let persona = resolve_persona(&db, uid, sid).await?;
     let seq_user = next_seq(&db, uid, sid).await?;
 
-    let user_id16 = new_id()?;
+    let user_id = new_id()?;
     let user_created_at = append_message(
         &db,
         uid,
         sid,
-        &user_id16,
+        &user_id,
         seq_user,
         "user",
         "complete",
@@ -976,24 +1026,163 @@ pub async fn post_message(
         .with_mcp_tools(db.as_ref(), uid, &crate::tools::user_key(uid))
         .await
         .map_err(|e| ApiError::internal(format!("对话无法开始：{e}")))?;
-    let tools = registry.specs();
-    let request = crate::llm::build_request(&llm_config, msgs.clone());
-    let request = if tools.is_empty() {
+
+    Ok(TurnPrep {
+        tools: registry.specs(),
+        registry,
+        provider,
+        llm_config,
+        msgs,
+        db,
+        uid,
+        sid,
+        session_id: id,
+        content,
+        user_id,
+        seq_user,
+        user_created_at,
+        persona,
+    })
+}
+
+/// 循环跑完、还没落库也还没拼响应的东西。
+pub(crate) struct TurnOutcome {
+    reply: ChatResponse,
+    usage: TokenUsage,
+    tool_trace: Vec<Value>,
+    rounds: usize,
+    forced_final_answer: bool,
+    turn_ms: i64,
+}
+
+/// 一轮模型调用里「发生了什么」的出口。
+///
+/// 一次性那条路用 `NullSink`（什么都不做，行为与接入流式之前逐字节一致），
+/// SSE 那条路把它换成往外发事件的实现。**循环本身只有一份。**
+///
+/// `Send` 是 supertrait 而非可选：SSE 那条路要把整个 future 交给后台任务，
+/// 没有它编译不过。
+pub(crate) trait RoundSink: Send {
+    /// 新一轮模型调用开始，`round` 从 0 起。
+    fn round_start(&mut self, _round: usize) {}
+    /// 正文增量。
+    fn text(&mut self, _delta: &str) {}
+    /// 思考增量。它不是答案，展示时必须与正文分开。
+    fn reasoning(&mut self, _delta: &str) {}
+    /// 模型请求调用工具。
+    fn tool_call(&mut self, _call: &ToolCall) {}
+    /// 工具执行完毕。**只带成败，不带结果正文**：全文在 `done` 事件的
+    /// `tool_calls` 里，每个增量都抄一遍会把一帧撑到几千字符。
+    fn tool_result(&mut self, _call: &ToolCall, _ok: bool) {}
+    /// 这一轮的正文/思考会被后面的调用覆盖掉，现在丢弃。
+    fn discard(&mut self, _round: usize) {}
+}
+
+/// 一次性路由用的空出口。
+pub(crate) struct NullSink;
+impl RoundSink for NullSink {}
+
+/// 一轮模型调用怎么发出去。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ReplyMode {
+    /// 等模型把整段回包给完再返回（老路由，语义不变）。
+    Once,
+    /// 增量一到就往外发；一个字都没吐出来就失败时退回 `Once`。
+    Streamed,
+}
+
+fn build_request(prep: &TurnPrep, msgs: &[Message]) -> ChatRequest {
+    let request = crate::llm::build_request(&prep.llm_config, msgs.to_vec());
+    if prep.tools.is_empty() {
         request
     } else {
-        request.with_tools(tools.clone())
-    };
+        request.with_tools(prep.tools.clone())
+    }
+}
 
+async fn one_round(
+    prep: &TurnPrep,
+    request: &ChatRequest,
+    mode: ReplyMode,
+    sink: &mut dyn RoundSink,
+) -> Result<ChatResponse, ApiError> {
+    match mode {
+        ReplyMode::Once => prep.provider.chat(request).await.map_err(provider_failure),
+        ReplyMode::Streamed => streamed_round(prep, request, sink).await,
+    }
+}
+
+/// 一次流式调用。**吐不出任何增量时的失败一律退回一次性调用。**
+///
+/// 退路是必需的：不少 OpenAI 兼容端点对 `stream: true` 的支持并不完整
+/// （老版本 llama.cpp、部分网关直接回 400 或干脆回一整段 JSON）。
+/// 流式是锦上添花，不能让它把「聊天」本身变成不可用。
+async fn streamed_round(
+    prep: &TurnPrep,
+    request: &ChatRequest,
+    sink: &mut dyn RoundSink,
+) -> Result<ChatResponse, ApiError> {
+    let mut emitted = 0usize;
+    let result = match prep.provider.stream(request).await {
+        Ok(stream) => {
+            let mut forward = |delta: StreamDelta| {
+                emitted += 1;
+                match &delta {
+                    StreamDelta::Text(t) => sink.text(t),
+                    StreamDelta::Reasoning(r) => sink.reasoning(r),
+                    // 工具调用**不在这里让出去**：循环拿到整条回复之后自己发
+                    // 一次。在这儿也发一遍就会每个工具调用出现两帧。
+                    StreamDelta::ToolCall(_) => {}
+                    // `Done` 只是收尾摘要，没有新内容可显示。
+                    StreamDelta::Done(_) => {}
+                }
+            };
+            quill_provider::pump_stream(stream, &request.model, &mut forward).await
+        }
+        Err(e) => Err(e),
+    };
+    match result {
+        Ok(reply) => Ok(reply),
+        Err(e) if emitted == 0 => {
+            eprintln!("[chat] 流式一个字都没吐就失败（{e}），退回一次性调用");
+            prep.provider.chat(request).await.map_err(provider_failure)
+        }
+        // 已经吐过字了：再补一次一次性调用会让同一段话在界面上出现两遍，
+        // 那比报错更糟。老实报错。
+        Err(e) => Err(provider_failure(e)),
+    }
+}
+
+/// 这一轮的可见内容会被后面的调用覆盖掉 —— 现在就告诉上层丢弃。
+///
+/// 不发这个信号，用户会看着一段已经显示出来的文字中途消失，以为是界面坏了。
+fn discard_if_visible(reply: &ChatResponse, sink: &mut dyn RoundSink, round: usize) {
+    if !reply.answer().is_empty() || !reply.reasoning.trim().is_empty() {
+        sink.discard(round);
+    }
+}
+
+/// 工具往返循环。一次性与 SSE 两条路由跑的都是这一段。
+pub(crate) async fn run_turn(
+    prep: &mut TurnPrep,
+    mode: ReplyMode,
+    sink: &mut dyn RoundSink,
+) -> Result<TurnOutcome, ApiError> {
     let started = std::time::Instant::now();
     // 这一轮**所有**模型调用的 usage 都记在这里，而不是只留最后一轮 ——
     // 工具往返的每一轮都真花了入参，漏掉它们统计条就只会报最后那次。
     let mut turn_usage = TurnUsage::default();
-    let first = provider.chat(&request).await.map_err(provider_failure)?;
-    turn_usage.push(first.usage);
-    let mut reply = first;
+    // msgs 由本函数取走跑循环，之后没有别的读者。
+    let mut msgs = std::mem::take(&mut prep.msgs);
+
+    sink.round_start(0);
+    let request = build_request(prep, &msgs);
+    let mut reply = one_round(prep, &request, mode, sink).await?;
+    turn_usage.push(reply.usage);
 
     let mut tool_trace: Vec<Value> = Vec::new();
     let mut rounds = 0usize;
+    let mut round_no = 0usize;
     while !reply.tool_calls.is_empty() {
         if rounds >= crate::tools::MAX_TOOL_ROUNDS {
             eprintln!(
@@ -1004,11 +1193,13 @@ pub async fn post_message(
             break;
         }
         rounds += 1;
+        discard_if_visible(&reply, sink, round_no);
 
         let calls = reply.tool_calls.clone();
         msgs.push(Message::assistant_tool_calls(calls.clone()));
         for call in &calls {
-            let result = registry.call(call);
+            sink.tool_call(call);
+            let result = prep.registry.call(call);
             let ok = result.is_ok();
             match &result {
                 Ok(text) => eprintln!("[chat] 工具 {} 执行成功（{} 字符）", call.name, text.len()),
@@ -1016,7 +1207,7 @@ pub async fn post_message(
             }
             // 渲染一次、存两处：回灌给模型的文本与写进响应的轨迹必须是同一份，
             // 否则界面上显示的与模型实际看到的会不一致。
-            let rendered = registry.render_result(call, result);
+            let rendered = prep.registry.render_result(call, result);
             tool_trace.push(json!({
                 "id": call.id,
                 "name": call.name,
@@ -1025,15 +1216,13 @@ pub async fn post_message(
                 "result": rendered,
             }));
             msgs.push(Message::tool_result(&call.id, &call.name, rendered));
+            sink.tool_result(call, ok);
         }
 
-        let follow_up = crate::llm::build_request(&llm_config, msgs.clone());
-        let follow_up = if tools.is_empty() {
-            follow_up
-        } else {
-            follow_up.with_tools(tools.clone())
-        };
-        reply = provider.chat(&follow_up).await.map_err(provider_failure)?;
+        let follow_up = build_request(prep, &msgs);
+        round_no += 1;
+        sink.round_start(round_no);
+        reply = one_round(prep, &follow_up, mode, sink).await?;
         turn_usage.push(reply.usage);
     }
 
@@ -1046,14 +1235,15 @@ pub async fn post_message(
     // **一句有用的正文都没有**，而那些信息本来就在上下文里。
     let mut forced_final_answer = false;
     if !reply.tool_calls.is_empty() && reply.answer().trim().is_empty() {
-        eprintln!(
-            "[chat] 工具往返用尽仍无正文，去掉工具再问一次，强制它作答"
-        );
+        eprintln!("[chat] 工具往返用尽仍无正文，去掉工具再问一次，强制它作答");
+        discard_if_visible(&reply, sink, round_no);
         msgs.push(Message::assistant_tool_calls(reply.tool_calls.clone()));
         msgs.push(Message::user(crate::tools::FINAL_ANSWER_PROMPT.to_string()));
         // **不带 tools**：模型此刻已经证明会一直要工具，再给一次只是再要一轮。
-        let final_request = crate::llm::build_request(&llm_config, msgs.clone());
-        match provider.chat(&final_request).await {
+        let final_request = crate::llm::build_request(&prep.llm_config, msgs.clone());
+        round_no += 1;
+        sink.round_start(round_no);
+        match one_round(prep, &final_request, mode, sink).await {
             Ok(last) => {
                 // 收尾这一次也真花了 token：不管它最后有没有被采纳，都记上。
                 turn_usage.push(last.usage);
@@ -1067,9 +1257,13 @@ pub async fn post_message(
                 if !last.answer().trim().is_empty() {
                     reply = last;
                     forced_final_answer = true;
+                } else {
+                    discard_if_visible(&last, sink, round_no);
                 }
             }
             Err(e) => {
+                // 失败不改变结论：下面照旧报 `tool_loop_exhausted`。流式那边
+                // 由调用方把这个 Err 变成 `error` 事件，不会无声断连接。
                 eprintln!("[chat] 收尾调用失败，保留原来的 tool_loop_exhausted 结论：{e}");
             }
         }
@@ -1077,6 +1271,45 @@ pub async fn post_message(
     let turn_ms = started.elapsed().as_millis() as i64;
     // 存档、汇总列、响应 JSON 三处用**同一份**总量。
     let usage = turn_usage.finish();
+
+    Ok(TurnOutcome {
+        reply,
+        usage,
+        tool_trace,
+        rounds,
+        forced_final_answer,
+        turn_ms,
+    })
+}
+
+/// 用户消息那一段。SSE 的 `user_message` 事件与 `done` 里的 `user_message`
+/// 都调它 —— 前端在流式那条路上先拿它把气泡画出来，最后又拿 `done` 里的
+/// 覆盖一次，两份要是各拼各的，字段早晚会对不上。
+pub(crate) fn user_message_json(prep: &TurnPrep) -> Value {
+    json!({
+        "id": hex(&prep.user_id),
+        "seq": prep.seq_user,
+        "content": prep.content,
+        "created_at": prep.user_created_at,
+    })
+}
+
+/// 校验结果 → 落助手消息 → 更新会话 → 拼响应体。
+///
+/// 一次性路由把它包成 JSON，SSE 路由**原样**放进 `done` 事件 —— 两处看到的
+/// 内容必然是同一份，不会出现「流式那条少几个字段」。
+pub(crate) async fn finish_turn(
+    prep: &TurnPrep,
+    outcome: TurnOutcome,
+) -> Result<Value, ApiError> {
+    let TurnOutcome {
+        reply,
+        usage,
+        tool_trace,
+        rounds,
+        forced_final_answer,
+        turn_ms,
+    } = outcome;
 
     // 工具往返用尽后仍只有 tool_calls、没有正文：这是**没有回答**，
     // 不能当成功返回。`has_answer()` 在这种情况下会返回 true（它只判断
@@ -1111,18 +1344,18 @@ pub async fn post_message(
         return Err(ApiError::service_unavailable(format!(
             "模型只输出了思考过程，没有正文 —— token 预算被思考吃光了。\
              下一步：调大 QUILL_LLM_MAX_TOKENS（当前 {}）后重启服务，或换一个非推理模型。",
-            llm_config.max_tokens
+            prep.llm_config.max_tokens
         )));
     } else {
         (String::new(), reply.reasoning.clone())
     };
 
-    let seq_assistant = seq_user + 1;
+    let seq_assistant = prep.seq_user + 1;
     let assistant_id = new_id()?;
     let assistant_created_at = append_message(
-        &db,
-        uid,
-        sid,
+        &prep.db,
+        prep.uid,
+        prep.sid,
         &assistant_id,
         seq_assistant,
         "assistant",
@@ -1134,16 +1367,19 @@ pub async fn post_message(
     )
     .await?;
 
-    touch_session(&db, uid, sid, seq_assistant + 1, usage.input, usage.output).await?;
+    touch_session(
+        &prep.db,
+        prep.uid,
+        prep.sid,
+        seq_assistant + 1,
+        usage.input,
+        usage.output,
+    )
+    .await?;
 
-    Ok(Json(json!({
-        "session_id": id,
-        "user_message": {
-            "id": hex(&user_id16),
-            "seq": seq_user,
-            "content": content,
-            "created_at": user_created_at,
-        },
+    Ok(json!({
+        "session_id": prep.session_id,
+        "user_message": user_message_json(prep),
         "reply": text,
         "reasoning": reasoning,
         "message": {
@@ -1163,8 +1399,8 @@ pub async fn post_message(
             "cache_write": usage.cache_write,
         },
         "turn_ms": turn_ms,
-        "persona_applied": persona.instructions.is_some(),
-        "expert_notice": persona.notice,
+        "persona_applied": prep.persona.instructions.is_some(),
+        "expert_notice": prep.persona.notice,
         // 工具执行轨迹。没有工具时是空数组 —— 前端按「长度 0」判定不显示，
         // 不需要另设一个布尔开关（两个字段可能不同步的那种设计最难维护）。
         "tool_calls": tool_trace,
@@ -1174,9 +1410,7 @@ pub async fn post_message(
         // 用户看到的必须是一条警告，而不是一段看起来和平时一样可信的回答。
         "final_answer_forced": forced_final_answer,
     }))
-    .into_response())
 }
-
 type HistoryRow = (String, String);
 
 /// 一条会话解析出来的「人格」结果。

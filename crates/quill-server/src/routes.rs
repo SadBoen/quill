@@ -5,6 +5,7 @@ use axum::Router;
 
 use crate::api_admin;
 use crate::api_chat;
+use crate::api_chat_stream;
 use crate::api_auth;
 use crate::api_backup;
 use crate::api_dispatch;
@@ -114,6 +115,12 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/sessions/{id}/messages",
             get(api_chat::list_messages).post(api_chat::post_message),
+        )
+        // 流式那条路：同一个「发一句话」，但增量边生成边返回。
+        // 老路由一个字没改，两条路由共用 `api_chat::run_turn` 那一份循环。
+        .route(
+            "/api/sessions/{id}/messages/stream",
+            post(api_chat_stream::stream_message),
         )
         .route("/api/sessions/{id}/metrics", get(api_chat::metrics))
         .route("/api/sessions/{id}/context", get(api_chat::context))
@@ -477,6 +484,9 @@ pub const CONTRACT_ROUTES: &[(&str, &str)] = &[
 pub const EXTRA_ROUTES: &[(&str, &str)] = &[
     ("GET", "/healthz"),
     ("GET", "/api/ws"),
+    // 流式发消息。**不是 octop 的契约路由**（上游那条还是一次性返回），
+    // 是我们为了让长回复能边写边看自己加的，所以登记在 EXTRA 而不是 CONTRACT。
+    ("POST", "/api/sessions/{id}/messages/stream"),
     ("GET", "/api/teams/{id}/dispatch"),
     ("POST", "/api/teams/{id}/dispatch"),
     ("GET", "/api/dispatch/inflight"),

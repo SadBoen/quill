@@ -3,6 +3,7 @@ pub mod api_auth;
 /// 备份：导出 / 校验 / 还原的 HTTP 接线。
 pub mod api_backup;
 pub mod api_chat;
+pub mod api_chat_stream;
 pub mod api_dispatch;
 /// 专家市场：从 SkillHub 技能集装成「我的专家」。
 pub mod api_expert_market;
@@ -32,6 +33,8 @@ pub mod ratelimit;
 pub mod routes;
 pub mod server;
 pub mod session_metrics;
+/// SSE 传输层：事件编码与「还没结束的响应体」。
+pub mod sse;
 /// 技能市场的上游客户端（SkillHub）。
 pub mod skillhub;
 /// SkillHub 技能包的解包与安全上限。

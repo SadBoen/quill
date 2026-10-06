@@ -165,9 +165,12 @@ else
   grep -E '^error' /tmp/quill-gate-build.log | head -10 | sed 's/^/    /'
 fi
 
-run_cargo_tests "Rust 单测"      cargo test -p quill-server --lib
-run_cargo_tests "扩展集成测试"  cargo test -p quill-server --test extensions_http
-run_cargo_tests "会话指标集成"  cargo test -p quill-server --test session_metrics_http
+# 一条命令跑**全部** Rust 测试。
+#
+# 原来这里只点名三个目标（server --lib / extensions_http / session_metrics_http）。
+# 代价是 `http_contract` 那 33 条从没被执行过 —— 于是「专家市场接好了却忘了把
+# 它加进已实现清单」这种错能一路绿灯。点名式清单必然会漏，而且漏得悄无声息。
+run_cargo_tests "Rust 全工作区测试" cargo test --workspace
 
 step "前端"
 if [ "$HAVE_NODE" = "0" ] || [ ! -d ui/web ]; then

@@ -7,6 +7,7 @@ mod error;
 mod local;
 mod openai;
 mod provider;
+mod pump;
 mod sse;
 mod types;
 mod wire;
@@ -20,6 +21,7 @@ pub use openai::{
     DEFAULT_TIMEOUT,
 };
 pub use provider::{BoxFuture, Provider, ProviderStream, SharedProvider};
+pub use pump::pump_stream;
 pub use sse::{SseDecoder, SseEvent, DONE_SENTINEL};
 pub use types::{
     ChatRequest, ChatResponse, FinishReason, Message, MessageContent, ModelInfo, Role, StreamDelta,

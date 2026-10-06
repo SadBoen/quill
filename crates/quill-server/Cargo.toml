@@ -49,6 +49,10 @@ sqlx = { version = "0.8", default-features = false, features = [
 ] }
 
 tower = { version = "0.5", features = ["util"] }
+# SSE 的响应体得是「还没结束的数据流」，而 Axum 只认 `Stream` 这条 trait，
+# 所以要自己实现它。两个都**不是新依赖**：`futures-core` 早由 quill-provider
+# 拉进来并编译，tokio 本来就在清单里，改的只是打开哪个 feature。
+futures-core = "0.3"
 # `process` 与 `io-util` 是 mcp_client 自己在用的（拉起 stdio 子进程、读它的 stderr），
 # 不靠 rmcp 顺带打开：靠 feature 合并「顺带能用」的话，rmcp 一改 feature 这里就编不过。
 tokio = { version = "1", features = [
@@ -58,6 +62,7 @@ tokio = { version = "1", features = [
     "net",
     "process",
     "io-util",
+    "sync",
 ] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
