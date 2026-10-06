@@ -6,7 +6,10 @@
  * 约束：
  *   - 不改 index.css（必须与 vendor/openoctopus-frontend 逐字节一致）。
  *   - 全部用现有那套 CSS 变量，深色主题自动跟随。
- *   - 左导航栏宽度 264px（Octop 约 275px），第二侧栏 304px（Octop 约 310px）。
+ *   - 左导航栏 264px、第二侧栏 304px。这两个数是我们自己定的 ——
+ *     旧注释写「Octop 约 275px / 约 310px」，但在那两份参考源码里
+ *     （.octop-ref/octop 与 vendor/openoctopus-frontend）都搜不到这两个数字，
+ *     无从核对，所以不再假装对齐。
  */
 
 /* .workspace 是 57px + 1fr 两行网格；对话页自己管标题栏，整页占满。 */

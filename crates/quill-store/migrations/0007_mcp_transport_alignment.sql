@@ -1,4 +1,9 @@
--- 0007：把 mcp_servers 的契约对齐前端（抄 octop 的 transport 枚举）。
+-- 0007：把 mcp_servers 的契约对齐前端。
+--
+-- 写法上借了 Octop 的枚举命名（.octop-ref/octop/dashboard/src/api/modules/connectors.ts:128
+-- 是 'stdio' | 'streamable_http'），但**不是照抄**：Octop 只有这两个值，
+-- 我们多了 'sse' 与 'builtin'。所以这是「参考命名、我们自己的选择」，
+-- 别把它当成逐字对齐。
 --
 -- 0001 建的 transport 只有 ('stdio','http','builtin')，而前端
 -- ui/web/src/devices/api.ts 发的是 'stdio' | 'streamable_http' | 'sse'。

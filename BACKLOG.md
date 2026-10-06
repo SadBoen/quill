@@ -214,9 +214,11 @@ octop 的稀疏检出里也没有 `pages/Control` 与 `src/octop/infra/skills`�
 **已在 main 上，不要退回 octop 的做法。**
 
 **目录必须写全**：octop 有两个同名 `skillhub_market.py`。上面这些行号只在
-`infra/agents/experts/` 那份里成立（1349 行）；`infra/skills/` 那份不在我们的 sparse
-检出集合内，行数不同、没有这些缺陷。只写裸文件名会让读者落到另一份上，
-从而误判「上游缺陷」是假的 —— 这是 2026-10-06 修掉的一处真实引用腐烂。
+`infra/agents/experts/` 那份里成立（**1354 行内容**，逐行核过：610 = `zf.namelist()`、
+616 = `skillset_files[0]`、652 = `_manifest_skill_slugs`、655 = 扁平列表直接透传）；
+`infra/skills/` 那份不在我们的 sparse 检出集合内，行数不同、没有这些缺陷。
+只写裸文件名会让读者落到另一份上，从而误判「上游缺陷」是假的 ——
+这是 2026-10-06 修掉的一处真实引用腐烂。
 
 ---
 
