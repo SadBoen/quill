@@ -8,8 +8,12 @@
 // 这与 `.upstream-check.mjs` 的自测、`gate-selftest.sh` 是同一个道理
 // （见 `MILESTONES.md` 的 M0：判定逻辑写错成恒真，不会自己暴露）。
 //
-// **不碰真实索引**：所有输入都在这里现写。行数也现造（ctx.lineCount 返回
-// 写死的数），所以这个自测不依赖 sparse 检出在不在手边。
+// **不碰真实索引，也不依赖仓库外的文件**：所有输入都在这里现写。行数也现造
+// （ctx.lineCount 返回写死的数），端到端那几个场景另有一个临时根、被引用的
+// 上游文件在那个根里现造。所以这个自测在「本机跑没跑过 fetch-vendor.sh」
+// 「sparse 检出在不在手边」两种情况下都该是同一个结果 ——
+// 2026-10-08 第一次真跑 CI 就红在这儿：它原来引的是 gitignore 的
+// `vendor/goose/...`，本机有、CI 没有，于是本机一直绿、CI 一直红。
 //
 // 跑法：node .scripts/provenance-selftest.mjs
 import {
@@ -23,9 +27,9 @@ import {
   extractRefs,
 } from '../.provenance-check.mjs';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 let fail = 0;
@@ -195,15 +199,33 @@ console.log('\n场景10：端到端 —— 拿真脚本跑合成索引，证明�
 {
   const dir = mkdtempSync(join(tmpdir(), 'quill-prov-selftest-'));
   const head = ['| 机制 | 我们的落点 | 上游出处 | 状态 | 差别 |', '|---|---|---|---|---|'];
+
+  // **在一个临时根里自己造出被引用的那些文件**，而不是用仓库里的真文件。
+  //
+  // 原因：这个场景的价值在于「真脚本读到真文件时判 ok」。可它原来引用的
+  // `vendor/goose/...` 是 gitignore 的、只有跑过 fetch-vendor.sh 才存在 ——
+  // 于是本机一直绿、CI 一直红（2026-10-08 第一次真跑 CI 就红在这儿）。
+  // 一个自测依赖仓库外的文件，它测的其实是「那台机器跑没跑过取码脚本」。
+  const root = join(dir, 'root');
+  const seed = (rel, lines) => {
+    const abs = join(root, rel);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, Array.from({ length: lines }, (_, i) => `第 ${i + 1} 行`).join('\n'), 'utf8');
+  };
+  seed('crates/quill-server/src/api_chat.rs', 1649);
+  seed('ui/web/src/experts/library.ts', 40);
+  seed('vendor/goose/crates/goose/src/agents/subagent_handler.rs', 900);
+  seed('.octop-ref/octop/dashboard/src/pages/Experts/index.tsx', 917);
+
   const run = (name, rows) => {
     const p = join(dir, name);
     writeFileSync(p, [...head, ...rows].join('\n'), 'utf8');
     try {
-      const out = execFileSync(process.execPath, ['.provenance-check.mjs', '--index', p], {
-        cwd: REPO,
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
+      const out = execFileSync(
+        process.execPath,
+        ['.provenance-check.mjs', '--root', root, '--index', p],
+        { cwd: REPO, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+      );
       return { code: 0, out: String(out) };
     } catch (e) {
       return { code: e.status ?? -1, out: `${e.stdout ?? ''}${e.stderr ?? ''}` };
@@ -246,7 +268,7 @@ console.log('\n场景10：端到端 —— 拿真脚本跑合成索引，证明�
   let noHeaderCode = 0;
   let noHeaderOut = '';
   try {
-    execFileSync(process.execPath, ['.provenance-check.mjs', '--index', noHeader], { cwd: REPO, encoding: 'utf8' });
+    execFileSync(process.execPath, ['.provenance-check.mjs', '--root', root, '--index', noHeader], { cwd: REPO, encoding: 'utf8' });
   } catch (e) {
     noHeaderCode = e.status ?? -1;
     noHeaderOut = `${e.stdout ?? ''}${e.stderr ?? ''}`;

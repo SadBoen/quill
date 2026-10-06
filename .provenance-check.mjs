@@ -5,9 +5,12 @@
 //
 // 用法：node .provenance-check.mjs
 //      node .provenance-check.mjs --index <别的索引文件>
+//      node .provenance-check.mjs --root <另一个根> --index <索引文件>
 //
 // --index 只给自测用：判定逻辑要能对着一份**合成索引**跑，否则自测只能测纯函数，
 // 测不到「解析 markdown → 逐条判定 → 定退出码」这条真实路径。
+// --root 同理：让自测能在临时目录里造出被引用的上游文件，而不是指望本机
+// 恰好跑过 fetch-vendor.sh。
 //
 // 判定分四类，绝不混为一谈：
 //   ok                     文件在、行号在范围内
@@ -207,7 +210,14 @@ function isSeparator(line) {
 // ————————————————————————————————————————————————————————————————
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
-const OCTOP_DIR = join(HERE, '.octop-ref', 'octop');
+// 引用路径按「仓库根」解析，根默认就是脚本所在目录。
+//
+// **`--root` 是给自测用的**（理由见 main() 里的注释）：自测必须在**临时目录**里
+// 造出被引用的上游文件，才能证明「真脚本读到真文件时判 ok」——
+// 而不能靠本机恰好跑过 fetch-vendor.sh、仓库里恰好有 vendor/goose。
+// 那个依赖曾经让 CI 红过一次，而本地一直是绿的。
+let ROOT = HERE;
+let OCTOP_DIR = join(ROOT, '.octop-ref', 'octop');
 
 // 与 UPSTREAM.md 记录的 sparse 集合一致。git 读不到时用它兜底，并在输出里说明用了兜底 ——
 // 静默用一个可能过期的集合会把「文件不在」判成「不在集合内」，那正好是本脚本要防的那类假通过。
@@ -239,7 +249,7 @@ function readSparseDirs() {
 
 /** 引用路径 → 本机绝对路径。octop/goose 相对路径分别挂在各自的上游根下。 */
 function resolve(p) {
-  const candidates = [join(HERE, p), join(OCTOP_DIR, p), join(HERE, 'vendor', 'goose', p)];
+  const candidates = [join(ROOT, p), join(OCTOP_DIR, p), join(ROOT, 'vendor', 'goose', p)];
   for (const c of candidates) {
     if (existsSync(c)) return c;
   }
@@ -265,13 +275,22 @@ function lineCountOf(p) {
 /** 裸文件名能不能被钉死：仓库根上就有一个同名文件就算。 */
 function rootHit(p) {
   if (p.includes('/')) return false;
-  return existsSync(join(HERE, p));
+  return existsSync(join(ROOT, p));
 }
 
 async function main() {
+  // `--root` 只给自测用（见 ROOT 的注释）。不接受也没关系：默认就是脚本所在目录，
+  // 本地跑 `node .provenance-check.mjs` 的行为一个字都没变。
+  const rootAt = process.argv.indexOf('--root');
+  const rootArg = rootAt >= 0 ? process.argv[rootAt + 1] : null;
+  if (rootArg) {
+    ROOT = isAbsolute(rootArg) ? rootArg : join(HERE, rootArg);
+    OCTOP_DIR = join(ROOT, '.octop-ref', 'octop');
+  }
+
   const flagAt = process.argv.indexOf('--index');
   const arg = flagAt >= 0 ? process.argv[flagAt + 1] : null;
-  const indexPath = arg ? (isAbsolute(arg) ? arg : join(HERE, arg)) : join(HERE, 'UPSTREAM-USAGE.md');
+  const indexPath = arg ? (isAbsolute(arg) ? arg : join(ROOT, arg)) : join(ROOT, 'UPSTREAM-USAGE.md');
   const indexLabel = arg ?? 'UPSTREAM-USAGE.md';
   if (!existsSync(indexPath)) {
     console.error(`读不到索引：${indexLabel} —— 没有索引可核。先写索引，再谈它会不会烂。`);

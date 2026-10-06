@@ -291,15 +291,23 @@ async function main() {
     problems.push(`goose 版本对不上：UPSTREAM.md 写 ${gooseDocVersion}，Cargo.toml 是 ${gooseRealVersion}`);
   }
 
-  // ---------- goose：确认它确实不是 git 检出（限制条件要在文件里写对） ----------
-  // 注意：不能用 `git -C vendor/goose rev-parse`，git 会一路向上找到 quill 仓库根，
-  // 那样永远「成功」，判断就废了。只能看目录里有没有 .git。
-  const gooseHasGit = existsSync(root + 'vendor/goose/.git');
-  if (gooseHasGit && doc.includes('**纯文件拷贝，没有 `.git`**')) {
-    problems.push('vendor/goose 现在是 git 检出了，UPSTREAM.md 里「做不到 diff」那段要改');
+  // ---------- goose：`vendor/goose` 是纯拷贝还是 git 检出，文档不许猜 ----------
+  //
+  // 这两条原本是反着的（2026-10-08 在 CI 上第一次真跑就撞上了）：
+  //   有 .git  → 报错，要文档删掉「纯文件拷贝，没有 .git」
+  //   没 .git  → 报错，要文档写上「纯文件拷贝，没有 .git」
+  // 同一份静态文档不可能两头都对。而实际上这两种状态**都不是**文档该描述的东西：
+  // `vendor/` 是 gitignore 的，fresh clone 里这个目录压根不存在；
+  // 跑过 fetch-vendor.sh 它又变成一个正经 git 检出。
+  // 「本机当时有没有跑过取码脚本」不是一条该写进文档的事实。
+  //
+  // 所以现在只查两件与本机状态无关的事：那两句已经过期的话不许再出现，
+  // 以及文档得告诉一个刚 clone 的人怎么把 goose 取回来。
+  if (doc.includes('**纯文件拷贝，没有 `.git`**') || doc.includes('做不到：对本地快照做文件级 diff')) {
+    problems.push('UPSTREAM.md 还在说 goose 是纯拷贝、不能 diff —— 取回来之后它就是 git 检出，能 diff。那段要改');
   }
-  if (!gooseHasGit && !doc.includes('**纯文件拷贝，没有 `.git`**')) {
-    problems.push('vendor/goose 确实不是 git 检出，但 UPSTREAM.md 没写这条限制');
+  if (!doc.includes('fetch-vendor.sh')) {
+    problems.push('UPSTREAM.md 没写怎么取回 vendor/goose —— fresh clone 里那个目录不存在');
   }
 
   // ---------- goose：.upstream-pin 是机器可读的记录，必须与前两处一致 ----------
