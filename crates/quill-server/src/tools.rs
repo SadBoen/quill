@@ -200,7 +200,7 @@ impl ToolRegistry {
                     "properties": {
                         "name": {
                             "type": "string",
-                            "description": "专家名称，取自 list_experts 的返回值。"
+                            "description": "专家名称。list_experts 的返回值是「显示名（id）」，原样传回来即可；只传显示名或只传 id 也认。"
                         }
                     },
                     "required": ["name"]
@@ -218,8 +218,14 @@ impl ToolRegistry {
                     let list = crate::api_experts::list_for_tools(&app2, uid)?;
                     let found = list
                         .into_iter()
-                        .find(|e| e.display_name().eq_ignore_ascii_case(&name))
-                        .ok_or(format!("没有名为「{name}」的专家。"))?;
+                        .find(|e| {
+                            matches_expert_query(e.id().as_str(), e.display_name(), &name)
+                        })
+                        .ok_or(format!(
+                            "没有名为「{name}」的专家。\
+                             下一步：list_experts 的返回值是「显示名（id）」这种形状，\
+                             原样传回来就能命中；也接受只传显示名或只传 id。"
+                        ))?;
                     Ok(format!(
                         "{}：{}",
                         found.display_name(),
@@ -628,6 +634,34 @@ fn veto(
 ///
 /// 正文真的超了 `MAX_RESULT_CHARS` 时**明说被截断了**，不能悄悄给半份：
 /// 模型会以为方法只写了一半，然后照着残缺的方法去做事。
+/// `get_expert_detail` 的名字匹配。
+///
+/// **两个内置工具曾经对不上**：`list_experts` 的返回值是「显示名（id）」这种形状，
+/// 而 `get_expert_detail` 的参数说明偏偏写着「取自 `list_experts` 的返回值」——
+/// 模型于是把整串「成本分析师（cost-analyst）」传回来，而匹配只认纯 `display_name`，
+/// 于是**必然失败**。实测就是模型在 `list_experts` 与 `get_expert_detail` 之间
+/// 空转到 4 轮上限（实跑第 5、7 条任务），报成 `tool_loop_exhausted`，
+/// 看起来像模型弱，其实是自己两个工具的契约错位。见 ISSUE-040。
+///
+/// 抽成独立纯函数是为了能单测：真起 AppState 要数据库与配置。
+pub fn matches_expert_query(id: &str, display_name: &str, query: &str) -> bool {
+    let q = query.trim();
+    if q.is_empty() {
+        return false;
+    }
+    if q.eq_ignore_ascii_case(id) || q.eq_ignore_ascii_case(display_name) {
+        return true;
+    }
+    // 「显示名（id）」原样传回来的情形
+    if let Some((name, _inner_id)) = q.rsplit_once('（') {
+        let name = name.trim().trim_end_matches('）').trim();
+        if !name.is_empty() && name.eq_ignore_ascii_case(display_name) {
+            return true;
+        }
+    }
+    false
+}
+
 fn skill_handler(name: &str, body: &str) -> ToolHandler {
     let name = name.to_string();
     let body = body.to_string();
@@ -807,6 +841,32 @@ mod tests {
             "同名工具重复注册会让模型在两个定义间无所适从"
         );
         assert_eq!(r.call(&call("echo")).expect("应走新实现"), "新");
+    }
+
+    #[test]
+    fn an_expert_lookup_accepts_exactly_what_list_experts_hands_back() {
+        // ISSUE-040：list_experts 返回「显示名（id）」，参数说明也让模型原样传回，
+        // 所以这三种形状**必须**都能命中，否则模型会在两个工具之间空转到轮次上限。
+        for q in [
+            "成本分析师（cost-analyst）", // 原样返回值
+            "成本分析师",                 // 只传显示名
+            "cost-analyst",              // 只传 id
+            "  成本分析师（cost-analyst）  ", // 带空白
+        ] {
+            assert!(
+                matches_expert_query("cost-analyst", "成本分析师", q),
+                "「{q}」应当命中"
+            );
+        }
+    }
+
+    #[test]
+    fn an_expert_lookup_still_refuses_a_name_that_is_not_there() {
+        // 不能为了上面那条把匹配放得过宽：认不出来就得说认不出来。
+        assert!(!matches_expert_query("cost-analyst", "成本分析师", ""));
+        assert!(!matches_expert_query("cost-analyst", "成本分析师", "   "));
+        assert!(!matches_expert_query("cost-analyst", "成本分析师", "收入分析师"));
+        assert!(!matches_expert_query("cost-analyst", "成本分析师", "（cost-analyst）"));
     }
 
     #[test]
