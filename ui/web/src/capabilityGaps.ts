@@ -30,12 +30,14 @@ export const CAPABILITY_GAPS = [
     fallback: '技能包',
     route: 'GET /api/extensions/skills',
     status: 'partial',
-    // SKILL 本身已经通了（挂进工具表 + 每条带 model_can_see）。partial 成立
-    // 的理由换成了**同族的另外几条路由**：`PATCH /api/extensions/skills/{name}`
-    // 与 `bundle/import`、`bundle/export` 在 routes.rs 里都还没登记。
-    // **点名是哪几条**，而不是甩一个状态码：这一行自己挂的 GET/POST/DELETE
+    // SKILL 本身已经通了（挂进工具表 + 每条带 model_can_see）。
+    // **点名是哪几条**，而不是甩一个状态码：这一行自己挂的 GET/POST/PATCH/DELETE
     // 都是 200，写「501」会让人以为技能包这条路整体没通。
-    detail: '已挂进对话工具表（每条带 model_can_see）；但 PATCH /api/extensions/skills/{name} 与 bundle 导入导出这三条还没登记',
+    // 注意区分两种「没做」：PATCH 已登记且是真实现；bundle 两条是**已登记但处理函数
+    // 返回未实现**的桩，别写成「未登记」—— 那与事实相反，而且会让去修它的人
+    // 找不到地方改。文案里也不写「501」：这一行自己的路由是 200，出现 501 会让
+    // 用户以为技能包这条路整体没通（capabilityGaps.test.ts 盯着这一点）。
+    detail: '已挂进对话工具表（每条带 model_can_see），PATCH 也已登记；但 bundle 导入导出这两条虽已登记路由，处理函数还没实现',
   },
   {
     labelKey: 'chat.tools.plugins',
