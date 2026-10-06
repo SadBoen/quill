@@ -43,8 +43,16 @@ if ! command -v node >/dev/null 2>&1; then
 fi
 
 FAILED=0
+SKIPPED=0
+# 哪些文本门禁需要它，由那几道门禁自己判断；这里只给出位置。
+UPSTREAM_REF_DIR=".octop-ref/octop"
 step() { printf '\n=== %s ===\n' "$1"; }
 fail() { echo "  ✗ $1"; FAILED=1; }
+
+# 某一步因为**环境不具备**而没跑成。它不算「通过」，但也不该被算成
+# 「门禁没过」—— 那两件事都会误导：前者会让人以为验过了，后者会让人
+# 去修根本没坏的代码。真正的处理是：记下来，最后以「不算全绿」退出。
+skip() { echo "  - 未跑：$1"; SKIPPED=1; }
 
 # ——— 工具链预检 ———
 # **为什么单独做这一步**：缺工具时报「门禁未过」，会让人去修门禁代码，
@@ -115,30 +123,59 @@ run_text_gate() {
   fi
 }
 
+# 某道文本门禁依赖**私有上游参考源码**（.octop-ref/octop）。它不入库，
+# fresh clone 上必然没有（见 .scripts/fetch-vendor.sh 与 UPSTREAM.md）。
+#
+# 这里必须区分两种情况，不能笼统地判失败：
+#   · 没有上游 → 这一步**没跑**，如实记 SKIPPED，最后退出码非 0 并说明
+#     「这不是全绿」。CI 与别人的 fresh clone 上就是这样。
+#   · 有上游却判不过 → 真的腐烂了，判失败。
+# 混为一谈的话，要么让所有 CI 永久红，要么让人以为出处核过了。
+run_upstream_gate() {
+  step "文本门禁 · $1"
+  if [ ! -d "$UPSTREAM_REF_DIR" ]; then
+    skip "$1 需要上游参考源码（.octop-ref/octop），本机没有。取回：bash .scripts/fetch-vendor.sh"
+    return 0
+  fi
+  if node "$1" >/tmp/quill-gate-node.log 2>&1; then
+    tail -2 /tmp/quill-gate-node.log | sed 's/^/  ✓ /'
+  else
+    fail "$1 未过"
+    tail -6 /tmp/quill-gate-node.log | sed 's/^/    /'
+  fi
+}
+
 if [ "$need_text_gate" = "1" ]; then
   run_text_gate .mojibake-check.mjs
   run_text_gate .i18n-check.mjs
-  run_text_gate .library-check.mjs
-  run_text_gate .upstream-check.mjs
+  run_upstream_gate .library-check.mjs
+  # 上游基线核对：比对 UPSTREAM.md 记的 pin 与本机实际检出。
+  # 它核的是「本地检出对不对」，所以同样要真有那份检出才核得了。
+  run_upstream_gate .upstream-check.mjs
   # 上游判定的自测：合成输入，不联网。跟 gate-selftest.sh 同一个道理 ——
   # 「落后上游」那道判定以前永远判通过，只有钉住才抓得住。
   run_text_gate .scripts/upstream-check-selftest.mjs
   # 出处校验：把 UPSTREAM-USAGE.md 里每条上游引用真的打开核一遍。
   # 它抓的那类腐烂已经真实发生过一次 —— 只写「文件名 + 行号」，octop 有两个
   # 同名文件，读者核不到会以为记录是假的。
-  run_text_gate .provenance-check.mjs
+  run_upstream_gate .provenance-check.mjs
   run_text_gate .scripts/provenance-selftest.mjs
 fi
 
 if [ "$TEXT_ONLY" = "1" ]; then
   step "结果"
-  if [ "$FAILED" = "0" ]; then
-    [ "$need_text_gate" = "1" ] && echo "  文本门禁全过（已跳过编译与测试，--text-only）" \
-                               || echo "  本机没有 node，文本门禁未跑（--text-only）"
-  else
+  if [ "$FAILED" != "0" ]; then
     echo "  有门禁没过"
+  elif [ "$SKIPPED" = "1" ]; then
+    echo "  跑到的部分全过；但缺上游参考源码，那几步**没有跑**（不算全绿）"
+  elif [ "$need_text_gate" = "1" ]; then
+    echo "  文本门禁全过（已跳过编译与测试，--text-only）"
+  else
+    echo "  本机没有 node，文本门禁未跑（--text-only）"
   fi
-  exit "$FAILED"
+  if [ "$FAILED" != "0" ]; then exit 1; fi
+  [ "$SKIPPED" = "1" ] && exit 1
+  exit 0
 fi
 
 # Rust 侧缺 cargo 时同样要说清是环境问题，不是门禁不通过。
@@ -211,6 +248,22 @@ else
   else
     fail "tsc 未过"; tail -6 /tmp/quill-gate-tsc.log | sed 's/^/    /'
   fi
+  # lint 也在门禁里。
+  #
+  # 原先这一段只有 typecheck / vitest / build，lint 从没被跑过 —— 于是
+  # 「门禁退出 0」与「eslint 报 2 个 error」可以同时成立，而且不会有人
+  # 发现。这正是本文件开头记的那类事故（「检查从来没真正生效过」）的
+  # 另一个变种：不是检查写错了，是检查压根没接线。
+  #
+  # 判 error 不判 warning：`eslint .` 默认 warning 不影响退出码，而
+  # react-hooks 这类规则默认就是 error，接不接线差别很大。
+  if npx eslint . >/tmp/quill-gate-lint.log 2>&1; then
+    # 把 warning 数也打出来：它不进退出码，但「从 11 降到 0」是看得见的。
+    warn_n=$(grep -oE '[0-9]+ warnings?' /tmp/quill-gate-lint.log | head -1 | grep -oE '[0-9]+' || echo 0)
+    echo "  ✓ lint（warning ${warn_n} 条，不计入退出码）"
+  else
+    fail "eslint 未过"; grep -E 'error|problems' /tmp/quill-gate-lint.log | head -10 | sed 's/^/    /'
+  fi
   if npx vitest run >/tmp/quill-gate-vitest.log 2>&1; then
     grep -E 'Test Files|Tests ' /tmp/quill-gate-vitest.log | sed 's/^/  ✓ /'
   else
@@ -226,11 +279,13 @@ else
 fi
 
 step "结果"
-SKIPPED=0
 [ "$HAVE_NODE" = "0" ] && SKIPPED=1
 if [ "$FAILED" = "0" ]; then
   if [ "$SKIPPED" = "1" ]; then
-    echo "  跑到的部分全过；但本机缺 node，文本门禁与前端那几步**没有跑**（不算全绿）"
+    # 逐条说清缺什么，不要只说「缺 node」—— 少跑的原因可能不止一个。
+    echo "  跑到的部分全过，但有步骤**没有跑**，所以不算全绿："
+    [ "$HAVE_NODE" = "0" ] && echo "    · 本机缺 node：文本门禁与前端那几步未跑"
+    [ -d "$UPSTREAM_REF_DIR" ] || echo "    · 缺上游参考源码（.octop-ref/octop）：专家库、上游基线、出处核验那三道未跑"
     exit 1
   fi
   echo "  门禁全过"

@@ -74,9 +74,59 @@ echo "场景4：连 test result 都没打出来就炸了"
 printf 'error: could not compile\n' >"$T/d.log"
 expect_fail "$T/d.log" 101
 
+# —— 前端 lint 那一道（2026-10-07 接入）——
+#
+# 为什么要给 lint 也写自测：它是用 `if npx eslint .` 的**退出码**判成败的，
+# 而 eslint 的退出码在「只有 warning」时是 0、在「有 error」时才是 1。
+# 也就是说，如果哪天 eslint 配置被改坏（比如 rule 全被关掉），这条门禁
+# 会变成一个恒真的检查 —— 与本文件开头记的那个 `failed` 恒等于 0 的事故
+# 同一类。所以这里拿合成的 eslint 输出，把三种情况都钉住：
+# 只有 warning → 通过；有 error → 失败；连 problems 行都没打 → 失败。
+
+# 与 gates.sh 里那段判定同源：退出码说话，输出只用来报给人看。
+decide_lint() {
+  LOG="$1"; ESLINT_RC="$2"
+  echo "  eslint_rc=$ESLINT_RC"
+  if [ "$ESLINT_RC" -ne 0 ]; then
+    echo "  结论：失败"; return 1
+  fi
+  echo "  结论：通过"; return 0
+}
+
+count_errors() {
+  grep -oE '[0-9]+ errors?' "$1" | head -1 | grep -oE '[0-9]+' || echo 0
+}
+
+echo "场景5：lint 只有 warning —— 必须判通过（warning 不计入退出码）"
+cat >"$T/lint-warn.log" <<'EOF'
+/mnt/d/quill/ui/web/src/models/ModelsPage.tsx
+  42:14  warning  Fast refresh only works when a file only exports components  react-refresh/only-export-components
+
+✖ 11 problems (0 errors, 11 warnings)
+EOF
+expect_pass_decide() { decide_lint "$1" "$2" || { echo "  !! 这里应当判通过，却判了失败"; fail=1; }; }
+expect_fail_decide() { decide_lint "$1" "$2" && { echo "  !! 这里应当判失败，却判了通过"; fail=1; }; return 0; }
+expect_pass_decide "$T/lint-warn.log" 0
+# 顺带钉住「warning 数读得出来」：读不出来的话那句「warning N 条」就是死的。
+N5="$(count_errors "$T/lint-warn.log")"
+[ "$N5" = "0" ] || { echo "  !! eslint 输出里 0 errors 应读出 0，实际读出 $N5"; fail=1; }
+
+echo "场景6：lint 有 error —— 必须判失败，且 0 error 那条不能被当成通过"
+cat >"$T/lint-err.log" <<'EOF'
+/mnt/d/quill/ui/web/src/chat/ChatPage.tsx
+  123:7   error    Calling setState synchronously within an effect  react-hooks/set-state-in-effect
+
+✖ 13 problems (2 errors, 11 warnings)
+EOF
+expect_fail_decide "$T/lint-err.log" 1
+
+echo "场景7：eslint 自己炸了（配置坏了 / 插件加载失败）—— 不能当成通过"
+printf 'Oops! Something went wrong!\n' >"$T/lint-broken.log"
+expect_fail_decide "$T/lint-broken.log" 2
+
 echo
 if [ "$fail" -eq 0 ]; then
-  echo "门禁自测：四个场景全对"
+  echo "门禁自测：七个场景全对"
   exit 0
 fi
 echo "门禁自测：有场景判错了 —— 门禁本身不可信，先修它再谈别的"
