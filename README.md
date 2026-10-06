@@ -26,8 +26,9 @@
 bash .scripts/gates.sh
 ```
 
-一条命令跑完：构建、Rust 全部测试、前端 typecheck / 单测 / 构建、四道文本门禁
-（乱码 / i18n / 库资产 / 上游基线）。退出 0 才算活。
+一条命令跑完：构建、Rust 全部测试、前端 typecheck / lint / 单测 / 构建、四道文本门禁
+（乱码 / i18n / 库资产 / 上游基线），以及三道「门禁自己的自测」。
+退出 0 才算活。
 
 只想跑文本门禁（快，Windows 原生 shell 也能跑）：
 
@@ -38,6 +39,20 @@ node .library-check.mjs     # vendor 进来的库逐字一致
 node .upstream-check.mjs    # 记录的基线与实际一致（--online 会判上游是否已前进）
 node .provenance-check.mjs  # UPSTREAM-USAGE.md 里每条上游引用逐行核过
 ```
+
+## 想知道「现在到底什么状态」
+
+```bash
+node scripts/status.mjs          # 全量：每条待办的判据当场跑一遍
+node scripts/status.mjs --quick  # 秒级：只跑便宜的判据
+node scripts/status.mjs --json   # 机器可读
+```
+
+**不要从文档里读状态。** 文档里没有状态 —— 那是手写的，而手写的事实必然腐烂。
+要状态就跑上面这条命令：它只跑一下看结果，不读任何手工维护的标记。
+
+输出里「需人工」的那些判据**没有被机器检查过**，它们既不是通过也不是失败，
+是一个公开的缺口。详见 [`docs/adr/0004`](docs/adr/0004)。
 
 **已知的环境性失败**：`mcp_client::tests::a_process_that_never_answers_the_handshake_times_out_with_a_runnable_hint`
 在 Windows 上失败，因为它要拉起 `cat`，而 Windows 没有这个命令。这不是回归。

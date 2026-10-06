@@ -162,6 +162,32 @@ if [ "$need_text_gate" = "1" ]; then
   run_text_gate .scripts/provenance-selftest.mjs
 fi
 
+# ——— 项目状态的计算器：它自己也必须先被验证 ———
+#
+# `scripts/status.mjs` 取代了文档里手工维护的状态标记（见 docs/adr/0004）。
+# 一个从不出错的判定逻辑是**最危险**的 —— 它会输出一张看起来很权威的表，
+# 而那张表与现实无关。所以它带着自己的自测，且自测必须进门禁：
+# 判定逻辑哪天写坏了，这里当场红。
+if [ "$need_text_gate" = "1" ]; then
+  step "项目状态判定逻辑的自测"
+  if node scripts/status-selftest.mjs >/tmp/quill-gate-status-self.log 2>&1; then
+    tail -1 /tmp/quill-gate-status-self.log | sed 's/^/  ✓ /'
+  else
+    fail "status 判定逻辑不可信 —— 它要取代手工标记，自测不过就不能用"
+    grep -E '✗|项判错' /tmp/quill-gate-status-self.log | head -8 | sed 's/^/    /'
+  fi
+
+  # 判据声明本身也要核：待办里绑的测试名如果对不上（比如测试被改名了），
+  # 那条判据永远不可能通过 —— 比「没通过」更坏，因为它的真实状态是未知的。
+  step "判据声明自检"
+  if node scripts/status.mjs --self-check >/tmp/quill-gate-status-decl.log 2>&1; then
+    tail -1 /tmp/quill-gate-status-decl.log | sed 's/^/  ✓ /'
+  else
+    fail "有判据声明坏了（绑的测试名对不上等）—— 那些待办的真实状态是未知的"
+    grep '✗' /tmp/quill-gate-status-decl.log | head -8 | sed 's/^/    /'
+  fi
+fi
+
 if [ "$TEXT_ONLY" = "1" ]; then
   step "结果"
   if [ "$FAILED" != "0" ]; then

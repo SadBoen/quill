@@ -10,51 +10,48 @@
 
 ---
 
-## 状态图例
+## 状态：跑命令看，不要读这里
 
-每条标题末尾的标记只有一个含义，不要另创：
+**这份文件不再维护状态。** 以前每条标题后面挂着一个 emoji 标记，
+2026-10-07 复核发现它们已经和代码对不上（详见 `docs/adr/0004`）。
 
-| 标记 | 含义 | 该不该出现在排期里 |
-|---|---|---|
-| 🔴 | **阻塞** —— 挡着本里程碑的某条判据达成 | 是，优先做 |
-| 🟡 | **未完成但不阻塞** —— 判据本身不靠它 | 是，看余量 |
-| 🟢 | **已达成**（有实测记录） | 否，留作证据 |
-| ✅ | **已关闭**（做完了且复核过） | 否 |
-| ⚠ | **有风险/有争议**，结论本身还没定 | 先把结论定下来 |
+```bash
+node scripts/status.mjs          # 全量：每条待办的判据当场跑一遍
+node scripts/status.mjs --quick  # 秒级：只跑便宜的判据
+node scripts/status.mjs --json   # 机器可读
+```
 
-半关用组合写法（如 `🟡 半关`）：**推进了一部分，但另一半没动** ——
-别把它读成「已完成」。B2-1 就是这一类。
+判据声明在 [`project/items.mjs`](project/items.mjs)，那是**唯一**的来源。
+本文件只负责讲**为什么**（背景、踩过的坑、被否决的方案）——
+「为什么」稳定，适合写散文；「是什么状态」易变，必须算，不能写。
 
-**里程碑阶梯**（详见 `MILESTONES.md`）：M0 地基 → M1 单人闭环（= MVP）→
-M2 专家与专家团真执行 → M3 上下文与成本 → M4 数据安全 → M5 多用户与多端 →
-M6 上游对齐。**上一条的判据全绿，才开下一条。**
+输出里三种结果，含义不许混：
 
-### 索引（2026-10-07 核对）
+| 结果 | 含义 |
+|---|---|
+| **已验证** | 判据跑过了 |
+| **未通过** | 判据跑了但没过 |
+| **需人工** | **没有被机器检查过。** 这既不是通过也不是失败，是一个公开的缺口 |
+| **判据本身坏了** | 绑的测试名对不上 —— 那条待办的真实状态是**未知的**，比「未通过」更严重 |
 
-**M0 地基** — B0-1 ✅ · B0-2 ✅ · B0-3 ✅ · B0-4 ✅ · B0-5 ✅ 　*（5 条全关）*
+### 判据的四种形态
 
-**M1 单人闭环** — B1-1 🔴 · B1-1b ✅ · B1-1c ✅ · B1-1d 🟡 · B1-2 🟡 · B1-3 🟡 ·
-B1-4 🟡 · B1-5 ✅ · B1-6 ✅ · B1-7 ✅ 　*（剩 1 条阻塞：B1-1）*
+- `test` —— 某条具名测试必须存在且通过
+- `cmd` —— 一条命令必须退出 0
+- `absent` —— 某个路径必须**不存在**（用于「我们删掉了它」）
+- `manual` —— 只能人工验证。**必须显眼**，不许混进「已通过」
 
-**M2 专家与专家团真执行** — B2-1 🟡 · B2-2 🔴 · B2-3 🟡 · B2-4 🟡 　*（整格未开始）*
+### 关于里程碑阶梯
 
-**M3 上下文与成本** — B3-1 🟡 · B3-2 ⚠ · B3-3 🟡 　*（整格未开始）*
-
-**M4 数据安全** — B4-1 ✅ · B4-2 🔴 　*（备份已完成，在线升级未动）*
-
-**M5 多用户与多端** — B5-1 🔴 · B5-2 · B5-3 　*（整格未开始）*
-
-**M6 上游对齐** — B6-1 ⚠ · B6-2 🔴 · B6-3 ✅ 　*（判据已达成，但有未收口的自查项）*
-
-**当前唯一挡着 MVP 的阻塞**：B1-1（界面上仍有「点了必失败」的入口）。
-M1 剩下的最后一步是**重跑一次浏览器实点验收** —— 备份已收紧为只允许 admin，
-非 admin 点备份页现在应当是 403，界面有没有把这句话说明白必须实际点一遍（见 B1-4）。
+以前这里写着一句「上一条的判据全绿，才开下一条」。**它不是规则，是愿望** ——
+它既无法检查，也不区分「已规划」和「在做」。真实约束是待办之间的依赖，
+记在 `project/items.mjs` 的 `blocks` 字段里。里程碑只是分组的标签。
 
 ---
 
 ## M0 · 可重复的地基
 
-### B0-1 门禁解析曾经恒为「通过」 ✅ 已修，但要防复发
+### B0-1 门禁解析曾经恒为「通过」  已修，但要防复发
 
 `.scripts/gate-selftest.sh` 的文件头记着这件事：旧门禁用 `awk -F'[ ;]'` 数失败，
 而 `-F'[ ;]'` 把 `"; "` 当两个分隔符、多出一个空字段，失败数其实在 `$7`。
@@ -64,7 +61,7 @@ M1 剩下的最后一步是**重跑一次浏览器实点验收** —— 备份�
 **残留**：~~`gates.sh` 本身还没在 WSL 侧实跑过~~ —— **2026-10-06 已在 WSL 侧实跑通过，
 退出 0**。见 B0-2。
 
-### B0-2 `gates.sh` 需要一个能跑的落点 ✅ 已通
+### B0-2 `gates.sh` 需要一个能跑的落点  已通
 
 M0 的判据就是 `bash .scripts/gates.sh` 退出 0。原先两侧各缺一半：
 Rust 工具链在 WSL2，node/npm 只在 Windows 侧。
@@ -96,14 +93,15 @@ Rust 工具链在 WSL2，node/npm 只在 Windows 侧。
    在 Windows 侧跑一次 `npm install` 就回来（反之亦然）。
    这不是坏了，是这个结构的必然结果；`gates.sh` 自己会补，直接手跑就要自己补。
 
-### B0-3 前端 lint 从来没跑起来 ✅ 已通（2026-10-07）
+### B0-3 前端 lint 从来没跑起来  已通（2026-10-07）
 
 `ui/web` 下不存在任何 `eslint.config.*`，`npm run lint` 直接退出 2 ——
 既有问题，非某一轮引入。后果是 `react-hooks/exhaustive-deps` 这条规则
 **从未生效过**，而 `EChart.tsx` 的 `useEffect` 依赖正好是它该管的。
 
 **已解决**：`eslint.config.js` 已入库（依赖本来就在，缺的只是那份配置，
-不需要改依赖政策）。`npx eslint .` 现在 **0 error、11 warning**。
+不需要改依赖政策）。lint 已进门禁，当前 error / warning 条数以
+`bash .scripts/gates.sh` 输出为准。
 
 首次真跑就抓出 2 条 error，两条都是真的派生状态问题，已修：
 
@@ -125,13 +123,13 @@ Rust 工具链在 WSL2，node/npm 只在 Windows 侧。
 
 > `gates.sh` **不含 lint**。别把「门禁退出 0」当成「lint 也过」的证据。
 
-### B0-4 清理本地噪音 ✅
+### B0-4 清理本地噪音
 
 旧 `.gitignore` 只忽略 `/.wsl-*.sh`，同批产出的 `.wsl-*.py`、`.wsl-commitmsg*.txt`
 与各类 `.out`/`.log` 全在 `git status` 里裸奔。已放宽为 `/.wsl-*` 等五条规则，
 `git status --porcelain` 从 20+ 条噪音降到 0。
 
-### B0-5 三个空壳 crate：建了但没人用 ⚠ → ✅ 已删（2026-10-07）
+### B0-5 三个空壳 crate：建了但没人用  已删（2026-10-07）
 
 `quill-bridge`（9 行）、`quill-ext-hub`（7 行）、`quill-xtask`（13 行）各只有一个
 `assert_eq!(2 + 2, 4)` 的「能编译」测试，全仓库**没有任何 crate 依赖它们**，
@@ -154,7 +152,7 @@ Rust 工具链在 WSL2，node/npm 只在 Windows 侧。
 
 ## M1 · 单人闭环
 
-### B1-1 20 条 501 桩，其中这些界面有真按钮 🔴
+### B1-1 20 条 501 桩，其中这些界面有真按钮
 
 `routes.rs` 里 `not_implemented(` 的桩共 **20 条**（旧文档写 28，实际不是）。
 界面上点了必失败的：
@@ -168,7 +166,7 @@ Rust 工具链在 WSL2，node/npm 只在 Windows 侧。
 **为什么排 M1**：这些是"真按钮、真失败"，不是假开关，但也不产生价值。
 建议顺序：备份接线（M4 的实现已在，最快见效）→ 用户管理三层补齐。
 
-### B1-1b 停用曾经挡不住 `QUILL_TOKENS` 🟢 已修
+### B1-1b 停用曾经挡不住 `QUILL_TOKENS`  已修
 
 **这一条做完了。** 早先 `CompositeTokenResolver::resolve` 先查环境变量令牌表、
 命中直接放行、**完全不查库**，于是把某人状态改成 `disabled` 之后他照样进得来——
@@ -205,7 +203,7 @@ Rust 工具链在 WSL2，node/npm 只在 Windows 侧。
 > 用它把 `ui/web` 的 105 个文件审了一遍，79 条发现里**实修了 35 处**，
 > 其余 44 条分类记在 B1-1d，理由逐条写了 —— **审计报告不是施工单**。
 
-### B1-1d 前端审计发现：35 处已修，其余 44 条为什么不修 🟡
+### B1-1d 前端审计发现：35 处已修，其余 44 条为什么不修
 
 用 `web-design-guidelines` 审了 `ui/web` 全部 105 个文件（19 个目录，3 个只读 agent
 分片 + 全局文件我自己审）。79 条发现里**真问题且低风险的修了 35 处**，其余分三类：
@@ -253,7 +251,7 @@ Rust 工具链在 WSL2，node/npm 只在 Windows 侧。
    发现直接换 `Intl` 会挂测试，于是改用 `formatToParts` 保住 `10-06 09:05` 的格式
    （轴标签要定宽）。**幸好它没听我的。**
 
-### B1-1c lint 配好了，还剩两条真问题没修 ✅ 已关（2026-10-07）
+### B1-1c lint 配好了，还剩两条真问题没修  已关（2026-10-07）
 
 `ui/web` 一直没有 `eslint.config.*`，于是 `npm run lint` 直接退 2 —— 而
 `eslint` / `@eslint/js` / `typescript-eslint` / `eslint-plugin-react-hooks` /
@@ -283,12 +281,13 @@ Rust 工具链在 WSL2，node/npm 只在 Windows 侧。
 `.scripts/gate-selftest.sh` 补了三个场景（只有 warning / 有 error / eslint 自己炸了），
 并已用注入一条真 error 的方式验证过门禁确实会红。
 
-还剩 **11 个 warning**，不进退出码：`react-refresh/only-export-components`
-（一个文件同时导出组件和常量，影响 HMR 粒度，不是 bug）与两条 `exhaustive-deps`。
+还剩一批 warning，不进退出码：`react-refresh/only-export-components`
+（一个文件同时导出组件和常量，影响 HMR 粒度，不是 bug）与 `exhaustive-deps`。
+确切条数以 `npx eslint .` 当场输出为准。
 
-### B1-2 未注册 ≠ 501，界面要分清这三种 🟡
+### B1-2 未注册 ≠ 501，界面要分清这三种
 
-`ui/web/src/capabilityGaps.ts` 现在只有 **4 条**（2 条 `partial` / 2 条 `not-implemented`），
+审计当时 `ui/web/src/capabilityGaps.ts` 里只有 4 条（2 条 `partial` / 2 条 `not-implemented`），
 旧文档写的「13 处未接通提示、7 个页面是骨架页」复算不出来，且「骨架页」没有判据。
 真正需要区分的是三种状态：
 
@@ -299,13 +298,13 @@ Rust 工具链在 WSL2，node/npm 只在 Windows 侧。
 
 `capabilityGaps.ts:33-38` 现在还写着「`PATCH /api/extensions/skills/{name}` 未登记」—— 已经错了，要改。
 
-### B1-3 会话改名返 405，界面如实提示 🟡
+### B1-3 会话改名返 405，界面如实提示
 
 `PATCH /api/sessions/{id}` **没注册**，返 405（`routes.rs:99-102` 只挂 get + delete；
 `error.rs:244` MethodNotAllowed→405）。旧文档写「routes.rs:93-96」行号已漂移。
 界面目前不发这个请求、按实情提示 —— 保持，不要为了"补齐"去加一个没想清楚的语义。
 
-### B1-4 首轮浏览器实点验收跑完，剩下四条没验 🟡（其中第 3 条本轮已审完）
+### B1-4 首轮浏览器实点验收跑完，剩下四条没验  （其中第 3 条本轮已审完）
 
 2026-10-06 在全新一次性实例（`/tmp/quill-m1-accept`，不设 `QUILL_TOKENS` 以便首管引导出现）
 上点了一遍。**通过的**：首管引导建号 → 登录 → 刷新后会话仍在（真读库）；
@@ -342,7 +341,7 @@ Rust 工具链在 WSL2，node/npm 只在 Windows 侧。
 **要验成功路径需要第二个账号**：部署时用 `QUILL_PASSWORD_USERS` 多给一个，
 或另起一个实例专门测。别为了测它去关掉那个保护。
 
-### B1-5 M1 判据里的「派工」该划归 M2 🟡
+### B1-5 M1 判据里的「派工」该划归 M2
 
 `MILESTONES.md` 的 M1 判据写着「建专家团、**派工**」，但派工在 `quill-backup` 之外的
 `api_dispatch.rs` 里只写台账没有消费者（B2-1），本来就排在 M2「专家与专家团真执行」。
@@ -350,7 +349,7 @@ Rust 工具链在 WSL2，node/npm 只在 Windows 侧。
 建议把 M1 判据改成「建专家团并编队（主持人 + 2~8 成员，刷新后还在）」，
 把「派工」留给 M2 —— 否则 M1 永远达不成，而这不是实现偷懒，是判据串了里程碑。
 
-### B1-6 专家市场（第一版：列表 + 安装）🟢
+### B1-6 专家市场（第一版：列表 + 安装）
 
 **已接通并实点验收**。两条路由：`GET /api/experts/market`、`POST /api/experts/market/{slug}/install`
 （`routes.rs`，已登记进 `CONTRACT_ROUTES`），界面是「专家」页的「市场」页签
@@ -400,7 +399,7 @@ octop 的专家市场与它的技能市场是**同一个上游**，所以没有�
   都还没接；MCP **没有同款市场**，只有内置连接器目录（`GET /connectors/catalog`），
   quill 已有真 MCP、缺的是那层目录。
 
-### B1-7 流式输出（SSE）🟢
+### B1-7 流式输出（SSE）
 
 **已接通并实机验收**。新路由 `POST /api/sessions/{id}/messages/stream`
 （`api_chat_stream.rs`，登记在 `EXTRA_ROUTES` —— **不是 octop 的契约路由**，
@@ -472,7 +471,7 @@ SSE 那条把它换成往外发事件的实现。两份循环迟早只改一边�
 
 ## M2 · 专家与专家团真执行
 
-### B2-1 派工只记账，`{id}` 被丢弃 🟡 两端都不再丢弃了（2026-10-07）
+### B2-1 派工只记账，`{id}` 被丢弃  两端都不再丢弃了（2026-10-07）
 
 `api_dispatch.rs` 的 GET 那条曾是 `Path(_team): Path<String>`，下划线前缀，
 team id **直接丢弃**。路由只按 `room_id` + `round` 过滤，于是
@@ -499,7 +498,7 @@ team id **直接丢弃**。路由只按 `room_id` + `round` 过滤，于是
 属于产品契约变更（`WORKING.md` 里「必须问你」那一列），所以这次只做到
 「不谎报存在性」为止，没有擅自改键。
 
-### B2-2 成员执行器不存在 🔴
+### B2-2 成员执行器不存在
 
 `MemberExecutor` 只有 `quill-testkit/src/mock_member.rs:163` 与测试内的实现；
 `quill-agent/src/dispatch.rs:739` 只有泛型 `SharedExecutor<E>`。
@@ -508,13 +507,13 @@ team id **直接丢弃**。路由只按 `room_id` + `round` 过滤，于是
 参照 `vendor/goose/crates/goose/src/agents/subagent_handler.rs:46` 的 `run_subagent_task`
 （每个子 agent 独立 config + 独立 session）来做，注明哪些是我们自研。
 
-### B2-3 建团队静默多出一个会话 🟡
+### B2-3 建团队静默多出一个会话
 
 `teams.leader_session_id` NOT NULL + 外键指向 `sessions`，所以 `POST /api/teams`
 会在事务里先插一条 `team_leader` 会话，它**真的出现在左侧会话列表**。
 要不要在侧栏隐藏 `kind='team_leader'` 是产品决定；现在如实显示。
 
-### B2-4 teams 的几列建了没人用 🟡
+### B2-4 teams 的几列建了没人用
 
 `teams.guidelines` / `max_dispatch` / `max_replan` / `max_ask_depth` 在生产 Rust 里**零引用**
 （只出现在 `quill-store/tests/schema_constraints.rs`）。团队 CRUD 一个都不碰。
@@ -538,7 +537,7 @@ team id **直接丢弃**。路由只按 `room_id` + `round` 过滤，于是
 
 ## M3 · 上下文与成本可信
 
-### B3-1 对外报了一个不存在的开关 🟡 谎言已去掉，压缩本体仍未做（M3）
+### B3-1 对外报了一个不存在的开关  谎言已去掉，压缩本体仍未做（M3）
 
 `/healthz` 与 `GET /api/admin/config` 都在上报 `compaction_threshold_tokens`，
 但 `compaction_threshold_tokens` 在 `crates/**` 里只出现在配置层
@@ -579,7 +578,7 @@ team id **直接丢弃**。路由只按 `room_id` + `round` 过滤，于是
 压缩本体参照 `vendor/goose/crates/goose-context-management`（别自己发明），
 连同那 8 个零读写的 session 列一并归在这一条里。
 
-### B3-2 token 口径已验证正确，暂不动 ✅ / ⚠
+### B3-2 token 口径已验证正确，暂不动  /
 
 已按 `vendor/goose` 核实：goose 的 `input_tokens` 定义为**已含 cache**，
 缓存是子集，总量按减法算（`.../token_usage.rs:88` 与 `canonical/model.rs:79`）。
@@ -590,7 +589,7 @@ team id **直接丢弃**。路由只按 `room_id` + `round` 过滤，于是
 我们若要改成「在解析层归一」而不是「事后夹取」，**先确定直连的是哪种上游**。
 在没定之前改，是把自洽的防御换成基于猜测的破坏。
 
-### B3-3 上下文图加载态什么都不渲染 🟡
+### B3-3 上下文图加载态什么都不渲染
 
 `ContextWindowChart.tsx:85-87`：加载中直接 `return null`，没有骨架、没有 `aria-busy`。
 读屏用户听到的是「这块不存在」。本轮测试钉住了现状（三态区分是本轮做的，优于 octop 的静默 null）。
@@ -600,7 +599,7 @@ team id **直接丢弃**。路由只按 `room_id` + `round` 过滤，于是
 
 ## M4 · 数据安全
 
-### B4-1 备份：导出、校验、真还原全部演练过 🟢
+### B4-1 备份：导出、校验、真还原全部演练过
 
 `quill-backup/src/` 实测 **1576 行**（backup.rs 441 / manifest.rs 620 / error.rs 384 /
 digest.rs 102 / lib.rs 29），有 `create_backup` / `restore_backup`、清单 render/parse、
@@ -657,7 +656,7 @@ sha256 校验，错误类型还带 `fix_command()`。CLI 已经接了（`quill-c
 另立一条再议（本条不作数的地方：没测「校验失败时一个字节都没写」这条路径，
 只有 CLI 报错文案保证它）。
 
-### B4-2 在线升级：别按"只差路由"估工时 🔴
+### B4-2 在线升级：别按"只差路由"估工时
 
 `quill-upgrade/src/` 只有 **120 行**，内容是 `PreUpgradeGuard` + `take_pre_upgrade_backup`。
 全仓库 `quill_upgrade` 只出现在它自己的测试里 —— **零生产引用、无服务端路由、无 CLI 子命令**，
@@ -670,7 +669,7 @@ sha256 校验，错误类型还带 `fix_command()`。CLI 已经接了（`quill-c
 
 ## M5 · 多用户与多端同步
 
-### B5-1 用户管理三层缺两层 🔴 见 B1-1 表格
+### B5-1 用户管理三层缺两层  见 B1-1 表格
 
 ### B5-2 `/api/cron` 连路由都没注册 → 404
 
@@ -708,14 +707,14 @@ sha256 校验，错误类型还带 `fix_command()`。CLI 已经接了（`quill-c
 
 ## M6 · 与两个上游对齐
 
-### B6-1 `.upstream-pin` 与 `UPSTREAM.md` 自相矛盾 ⚠
+### B6-1 `.upstream-pin` 与 `UPSTREAM.md` 自相矛盾
 
 `.upstream-pin` 内容是 `v1.53.0 76da81cb964b21cd096db739302329b40c2998b8`，**带 commit hash**；
 而 `UPSTREAM.md:29-30` 写「我们记不下 commit hash」，`.upstream-check.mjs` 又通篇不读
 `.upstream-pin`（只读 `vendor/goose/Cargo.toml` 与 `.octop-ref/octop` 的 git）。
 二者必有一处过期。**本轮已改**：把 `.upstream-pin` 定为记录、让门禁去读它。
 
-### B6-2 我们自创、octop 没有对应做法的机制，要标出来 🔴
+### B6-2 我们自创、octop 没有对应做法的机制，要标出来
 
 本轮核实：**octop 的界面根本不用 ECharts**（`dashboard/package.json:48` 只有 recharts，
 ECharts 是 `@aiden0z/pptx-renderer` 的传递依赖），它的上下文图是手写 SVG + `useMemo`。
@@ -723,7 +722,7 @@ ECharts 是 `@aiden0z/pptx-renderer` 的传递依赖），它的上下文图是�
 octop 的稀疏检出里也没有 `pages/Control` 与 `src/octop/infra/skills`，
 涉及这两处的对比结论都缺一半证据。
 
-### B6-3 我们比 octop 做得好的地方，别在重构里弄丢 🟢
+### B6-3 我们比 octop 做得好的地方，别在重构里弄丢
 
 装包重名：octop 直接取 zip 列表里第一个 `.md`（不排序，
 `.octop-ref/octop/src/octop/infra/agents/experts/skillhub_market.py:610-616` 的
