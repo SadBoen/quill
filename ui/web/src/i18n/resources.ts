@@ -211,6 +211,9 @@ export const en = {
       thinking: 'Thinking',
       generating: 'Generating…',
       waitingForModel: 'Waiting for the model…',
+      toolRunning: 'Calling {{name}}…',
+      toolOk: '{{name}} returned',
+      toolFailed: '{{name}} failed',
       sendFailed: 'The message could not be sent. Try again.',
       historyLoadFailed: 'The conversation history could not be loaded.',
       forcedFinalAnswer:
@@ -1659,6 +1662,9 @@ export const zhCN = {
       thinking: '思考过程',
       generating: '生成中…',
       waitingForModel: '等待模型返回…',
+      toolRunning: '正在调用工具 {{name}}…',
+      toolOk: '工具 {{name}} 已返回',
+      toolFailed: '工具 {{name}} 失败',
       sendFailed: '消息发送失败，请重试。',
       historyLoadFailed: '会话历史加载失败。',
       forcedFinalAnswer:

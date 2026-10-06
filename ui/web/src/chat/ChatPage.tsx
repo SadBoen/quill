@@ -7,14 +7,15 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { ApiError, apiJson, setToken, getToken } from '../api/client'
 import { EXPERTS_KEY, listExperts } from '../experts/api'
 import { Popconfirm } from '../experts/ExpertsUi'
-import { loadSessions, createSession, loadHealth, loadMessageHistory, sendChatMessage, loadSessionMetrics, chatErrorMessage } from './chatApi'
+import { loadSessions, createSession, loadHealth, loadMessageHistory, loadSessionMetrics, chatErrorMessage } from './chatApi'
 import { upsertMessage, type ChatMessage } from './model'
 import SessionMetricsBar from './SessionMetricsBar'
 import { ContextWindowChart } from '../usage/ContextWindowChart'
 import { ChatSidebar } from './ChatSidebar'
 import { ChatWelcome } from './ChatWelcome'
 import { useChatWelcome } from './welcomeContent'
-import { Transcript } from './Transcript'
+import { Transcript, LiveReply, type LiveToolStep } from './Transcript'
+import { streamChatMessage } from './chatStream'
 import { CAPABILITY_GAPS, capabilityStatusLabel } from '../capabilityGaps'
 import './ChatPage.css'
 import './chatShell.css'
@@ -39,6 +40,18 @@ function formatTokens(value: number): string {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`
   if (value >= 1000) return `${(value / 1000).toFixed(1)}K`
   return String(Math.round(value))
+}
+
+/**
+ * 从尾巴上抹掉服务端点名要丢弃的那一段。
+ *
+ * 服务端给的是**原文**而不是长度：只给个数字，前端就得靠「删 N 个字符」猜，
+ * 而中文一个字一个码位、代理对又是两个 —— 猜错了就是界面留下半句话。
+ * 尾巴对不上时宁可全清：宁可少显示，也不能留着该丢的那段。
+ */
+export function dropTail(buffer: string, dropped: string): string {
+  if (!dropped) return buffer
+  return buffer.endsWith(dropped) ? buffer.slice(0, buffer.length - dropped.length) : ''
 }
 
 export function ChatPage(_props: ChatPageProps): ReactNode {
@@ -82,6 +95,14 @@ export function ChatPage(_props: ChatPageProps): ReactNode {
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const deleting = deletingId !== null
   const [lastUsage, setLastUsage] = useState<{ input: number; output: number } | null>(null)
+  /**
+   * 正在流式生成的那条回复。
+   *
+   * 它**不进 history**：那一行还没有 id 与 seq，塞进去就得编一个假的。
+   * `started` 用来区分「一个字都还没有」与「有内容了」——前者显示原来那句
+   * 「等待模型返回…」，后者把已经收到的字渲染出来。
+   */
+  const [live, setLive] = useState<{ started: boolean; text: string; reasoning: string; tools: LiveToolStep[] } | null>(null)
   const [toolsOpen, setToolsOpen] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const chatScroll = useRef<HTMLDivElement>(null)
@@ -107,6 +128,14 @@ export function ChatPage(_props: ChatPageProps): ReactNode {
       setHistoryError(null)
       return
     }
+    // 正在发送时**不要**重新拉历史。
+    //
+    // 从 /chat 直接发第一条消息时，navigate 换掉 sessionId 会触发这个 effect，
+    // 而它的 GET 与 POST 是并发发出的 —— GET 先落地（那时用户消息还没写库，
+    // 返回空列表），POST 随后把 `user_message` 帧插进 history，于是这条刚画
+    // 出来的气泡被迟到的 GET 冲掉，用户看着自己的话凭空消失。
+    // 发送中界面上的内容由这一轮自己负责维护，不交给历史拉取。
+    if (sending) return
     let disposed = false
     generation.current += 1
     const current = generation.current
@@ -124,7 +153,7 @@ export function ChatPage(_props: ChatPageProps): ReactNode {
     return () => {
       disposed = true
     }
-  }, [sessionId, t])
+  }, [sessionId, sending, t])
 
   useLayoutEffect(() => {
     const root = chatScroll.current
@@ -199,7 +228,73 @@ export function ChatPage(_props: ChatPageProps): ReactNode {
       targetIdForNotice = targetId
       if (!sessionId) navigate(`/chat/${targetId}`, { replace: true })
       setHistory((current) => current ?? [])
-      const result = await sendChatMessage(targetId, sentText)
+      setLive({ started: false, text: '', reasoning: '', tools: [] })
+      const result = await streamChatMessage(targetId, sentText, {
+        onEvent: (event) => {
+          if (event.kind === 'user_message') {
+            // 用户那条已经落库了，先把它画出来 —— 不然「等模型返回…」会一直
+            // 顶在用户自己那句话上面，看着像没发出去。
+            setHistory((current) => upsertMessage(current ?? [], {
+              id: event.data.id,
+              seq: event.data.seq,
+              role: 'user',
+              status: 'complete',
+              content: event.data.content,
+              reasoning: '',
+              input_tokens: 0,
+              output_tokens: 0,
+              turn_ms: 0,
+              error_code: '',
+              created_at: event.data.created_at,
+            }))
+            return
+          }
+          if (event.kind === 'delta') {
+            setLive((current) => {
+              if (!current) return current
+              return event.data.deltaKind === 'reasoning'
+                ? { ...current, started: true, reasoning: current.reasoning + event.data.text }
+                : { ...current, started: true, text: current.text + event.data.text }
+            })
+            return
+          }
+          if (event.kind === 'tool_call') {
+            setLive((current) => current && {
+              ...current,
+              started: true,
+              tools: [...current.tools, { name: event.data.name, ok: null }],
+            })
+            return
+          }
+          if (event.kind === 'tool_result') {
+            setLive((current) => {
+              if (!current) return current
+              const steps = [...current.tools]
+              for (let i = steps.length - 1; i >= 0; i -= 1) {
+                if (steps[i].ok === null && steps[i].name === event.data.name) {
+                  steps[i] = { ...steps[i], ok: event.data.ok }
+                  break
+                }
+              }
+              return { ...current, tools: steps }
+            })
+            return
+          }
+          if (event.kind === 'discard') {
+            // 这一轮的正文会被工具往返覆盖掉。**必须真的抹掉**：留着的话用户
+            // 会看着一段中途变调的答案，而存档里只有最终那段。
+            setLive((current) => {
+              if (!current) return current
+              return {
+                ...current,
+                text: dropTail(current.text, event.data.text),
+                reasoning: dropTail(current.reasoning, event.data.reasoning),
+              }
+            })
+          }
+        },
+      })
+      setLive(null)
       setLastUsage({ input: result.usage.input, output: result.usage.output })
       setForcedAnswer(Boolean(result.final_answer_forced))
       // 刚这一轮的 token 已落库，会话级统计要跟着更新。
@@ -416,10 +511,14 @@ export function ChatPage(_props: ChatPageProps): ReactNode {
             ) : null}
             {history ? <Transcript messages={history} running={sending} /> : null}
             {sending && history ? (
-              <article className="chat-message chat-message-assistant chat-message-live">
-                <header><strong>Quill</strong><span>{t('chat.generating', { defaultValue: '思考中…' })}</span></header>
-                <p className="chat-muted">{t('chat.waitingForModel', { defaultValue: '等待模型返回…' })}</p>
-              </article>
+              live?.started ? (
+                <LiveReply text={live.text} reasoning={live.reasoning} tools={live.tools} />
+              ) : (
+                <article className="chat-message chat-message-assistant chat-message-live">
+                  <header><strong>Quill</strong><span>{t('chat.generating', { defaultValue: '思考中…' })}</span></header>
+                  <p className="chat-muted">{t('chat.waitingForModel', { defaultValue: '等待模型返回…' })}</p>
+                </article>
+              )
             ) : null}
           </div>
         </div>

@@ -133,16 +133,8 @@ Rust 工具链在 WSL2，node/npm 只在 Windows 侧。
 
 **没验 / 没做完的**，逐条写明原因，不含糊过去：
 
-1. **流式增量输出：确认了「根本没接」，不是「没看见」**（2026-10-06 摸底）。
-   链路的两头都是现成的：`quill-provider` 里 `Provider::stream` / `SseDecoder` /
-   工具调用的分片重组都已写好并有单测（`openai.rs:165`、`sse.rs`、`wire.rs:381`），
-   但**服务端一处都没调它** —— `api_chat.rs:991/1036/1056` 全是 `provider.chat()`
-   （一次性拿完整回包），路由只有 `POST /api/sessions/{id}/messages`，
-   前端 `ui/web/src/chat/` 里**没有一处 EventSource / getReader**。
-   所以现在看到「生成中…」占位后整段出现，是当前实现的必然结果，
-   不是模型答得太快。这也解释了为什么「换个慢模型再看一次」这条修法没用。
-   **接法**：新开一条 SSE 路由（不改老路由的语义），服务端把现有的
-   工具往返循环改成逐步吐字，前端读流增量渲染。
+1. ~~**流式增量输出：确认了「根本没接」，不是「没看见」**~~ —— **2026-10-06 已接通并实机验收**。
+   见 B1-7。
 2. ~~**一轮里用工具时界面不炸**~~ —— **2026-10-06 真机点通了**。
    流程：在技能包页把 `afrexai-qa-test-plan` 挂进工具表（默认停用，需手动开），
    然后在对话里问「请调用 afrexai-qa-test-plan 这个技能，给我一份登录功能的测试计划」。
@@ -224,6 +216,74 @@ octop 的专家市场与它的技能市场是**同一个上游**，所以没有�
 - octop 还有 `/experts/published`（自家发布通道）与 `/plugins/market`（插件市场），
   都还没接；MCP **没有同款市场**，只有内置连接器目录（`GET /connectors/catalog`），
   quill 已有真 MCP、缺的是那层目录。
+
+### B1-7 流式输出（SSE）🟢
+
+**已接通并实机验收**。新路由 `POST /api/sessions/{id}/messages/stream`
+（`api_chat_stream.rs`，登记在 `EXTRA_ROUTES` —— **不是 octop 的契约路由**，
+上游那条还是一次性返回，所以不登记进 `CONTRACT_ROUTES` 冒充对齐）。
+老路由 `POST /api/sessions/{id}/messages` **一个字没改**：仍然等模型答完再一次性返回 JSON。
+
+**共用同一份循环，不复制第二份**。`api_chat.rs` 拆成三段：
+`prepare_turn`（落用户消息、拼 messages、装工具表）→ `run_turn`（工具往返循环）→
+`finish_turn`（校验、落助手消息、拼响应体）。两个入口跑的是同一段，差别只在
+「一轮模型调用怎么发出去」：`ReplyMode::Once`（老路由）与 `ReplyMode::Streamed`，
+以及一个 `RoundSink` 出口 —— 老路由用 `NullSink`（什么都不做，行为与接入前逐字节一致），
+SSE 那条把它换成往外发事件的实现。两份循环迟早只改一边，而「一次性那条还能用、
+流式那条坏了」恰好是最难发现的错法：前端全切到流式之后，老路由根本没人碰了。
+
+**事件协议**：`user_message` / `delta`（`kind` 为 `text` 或 `reasoning`）/ `tool_call` /
+`tool_result`（只带成败） / `discard` / `done` / `error`。`done` 的负载与老路由
+**逐字段同形**（同一个 `finish_turn` 拼的），少一个字段前端就会在流式那条路上取不到。
+
+三个设计决定，理由都在代码注释里：
+
+- **`discard` 必须有**。工具往返那一轮的正文会被下一轮覆盖掉（老行为里它直接被
+  `reply` 覆盖掉、不落库）。流式若不通知前端，用户会看着一段已经显示出来的文字中途消失，
+  以为界面坏了。所以发一帧点名**要抹掉的原文**（不是长度：中文与代理对会让「删 N 个字符」算错）。
+- **上游不支持流式时退回一次性**。不少 OpenAI 兼容端点对 `stream: true` 支持不完整
+  （老版本 llama.cpp、部分网关直接回 400）。只要**一个字都没吐出来**就失败，就退回
+  `provider.chat()` 拿完整回包；已经吐过字的再补一次会让同一段话显示两遍，那比报错更糟，
+  老实报 `error`。流式是锦上添花，不能让它把「聊天」变成不可用。
+- **用无界通道**（与 Axum 自己的 `Sse` 内部同一种做法）。增量必须立刻让出去，
+  有界通道在客户端读得慢时会卡住模型那一侧。
+
+**真机验收（`/tmp/quill-m1-accept`，本地 4B）**，逐帧带到达时刻：
+
+| 场景 | 观察到的帧 |
+|---|---|
+| 一句话（`1+1 等于几`） | `user_message` 20ms → `delta` 1782ms → `done` 1841ms；usage 入 175 / 出 2、缓存读 151（说明 `stream_options.include_usage` 真被上游认了） |
+| 带工具的一轮 | `user_message` 21ms → `tool_call` + `tool_result(ok=true)` 4665ms → `delta` 一帧一个 token 从 7172ms 起每 ~60ms 一帧 → `done` 16322ms，`tool_rounds=1`、入 1853 / 出 204 |
+| 界面 | 用户气泡立刻出现；助手气泡逐字渲染（markdown 边到边成形，表格/加粗都在半截时就位）；底部指标 `1 轮次 · 1 回复 · 模型耗时 1m23s · 16.6 tok/s · 缓存命中 56% · 入参 1.9k · 出参 1.4k` |
+
+**查库核对**（界面上显示的数不是回显）：上面那轮浏览器实测，库里 `messages` 只有 2 行 ——
+`seq=2 assistant len=2454 in/out=1893/1377 turn_ms=83020`，与界面的 1m23s、1.9k/1.4k、
+56% 逐项吻合；工具轮的中间文本**没有**落库。
+
+**新写的测试（都做过变异验证，证明它们会失败）**：
+`quill-provider/src/pump.rs` 5 条（砍掉 `on_delta` 只红 1 条，砍掉累积只红 3 条）；
+`quill-server/src/sse.rs` 4 条；`api_chat_stream.rs` 2 条；
+`tests/chat_stream_http.rs` 6 条端到端（去掉 `discard`、或让工具调用发两帧，都只红
+`the_stream_carries_every_frame_and_drops_the_tool_rounds_text`）；
+前端 `chatStream.test.ts` 9 条 + `ChatPage.test.tsx` 5 条流式。
+
+**顺带修掉的两个真缺陷**（都是真机才暴露的）：
+
+1. **切会话后的历史加载会把刚流式插入的用户气泡冲掉**。`navigate` 换掉 sessionId 会触发
+   历史 effect，它的 GET 与 POST 是并发发出的 —— GET 先落地（那时用户消息还没写库，返回空
+   列表），POST 随后把 `user_message` 帧插进 history，于是那条刚画出来的气泡被迟到的 GET
+   冲掉。已改成「发送中不重新拉历史」（`ChatPage.tsx` 的 effect），这条护栏做过变异验证。
+2. **我自己写的 `discard` 测试曾经是永远为真的空话**：`waitFor(() => expect(queryByText(...))
+   .not.toBeInTheDocument())` 在第一帧还没渲染时就成立。已改成先断言它**出现**、
+   再断言它**消失**；改回原写法，测试立刻变红。
+
+**依赖**：为了 SSE 的响应体，`quill-server` 多了一行 `futures-core = "0.3"`（`Stream`
+这条 trait 只有它有）与 tokio 打开 `sync`。**两者都不是新依赖**：`futures-core` 早由
+`quill-provider` 拉进来并编译，Cargo.lock 不新增任何包，tokio 本来就在清单里。
+
+**没做的**：断线重连（`Last-Event-ID`）、多路会话并发、断点续传。
+现在连接一断前端就报「连接在回复写完之前就断了」并把半句话收起来 —— 宁可说清楚，
+也不把半句当答案。
 
 ---
 

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
@@ -119,7 +119,7 @@ it('新建会话时发消息失败，必须把服务端写的「下一步」显�
     const url = String(input)
     if (url.includes('/api/experts')) return jsonResponse(EXPERTS)
     // 顺序有讲究：发消息的路径是 /api/sessions/{id}/messages，建会话是 /api/sessions。
-    if (url.includes('/messages')) {
+    if (url.includes('/messages/stream')) {
       return jsonResponse(
         {
           error: {
@@ -149,7 +149,7 @@ it('新建会话时发消息失败，必须把服务端写的「下一步」显�
 
   // 过去这里一直是失败的：catch 把 notice 记到「还没有 sessionId」上，
   // 而可见性是按 navigate 之后的**新**会话 id 过滤的，对不上就永远不渲染。
-  await waitFor(() => expect(fetchMock.mock.calls.map((c) => String(c[0])).some((u) => u.includes('/messages'))).toBe(true))
+  await waitFor(() => expect(fetchMock.mock.calls.map((c) => String(c[0])).some((u) => u.includes('/messages/stream'))).toBe(true))
   await waitFor(() => expect(screen.getAllByRole('alert').length).toBeGreaterThan(0))
   // 这个 mock 对 GET/POST 一视同仁（fetch 拿不到 init 里的 method），
   // 所以拉历史也会拿到 503、可能多出一条横幅。这里断言的是
@@ -171,7 +171,7 @@ it('发送失败后仍能看到自己发出去的那条消息（ISSUE-039）', a
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input)
     if (url.includes('/api/experts')) return jsonResponse(EXPERTS)
-    if (url.includes('/messages') && url.endsWith('/messages')) {
+    if (url.endsWith('/messages/stream')) {
       sent += 1
       // 第一次是发送（失败），之后拉历史都应该拿到那条已落库的消息
       return jsonResponse(
@@ -188,7 +188,19 @@ it('发送失败后仍能看到自己发出去的那条消息（ISSUE-039）', a
     if (url.includes('/messages')) {
       return jsonResponse({
         messages: [
-          { id: 'm1', seq: 1, role: 'user', status: 'complete', content: '帮我算一下 1+1', created_at: '2026-10-06T08:00:00Z' },
+          {
+            id: 'm1',
+            seq: 1,
+            role: 'user',
+            status: 'complete',
+            content: '帮我算一下 1+1',
+            reasoning: '',
+            input_tokens: 0,
+            output_tokens: 0,
+            turn_ms: 0,
+            error_code: '',
+            created_at: '2026-10-06T08:00:00Z',
+          },
         ],
       })
     }
@@ -214,7 +226,153 @@ it('发送失败后仍能看到自己发出去的那条消息（ISSUE-039）', a
   // 实测：Linux 上同一份代码第一轮全绿、第二轮红，单独跑又永远绿。
   // 它断言的是「发送确实发生过」，那就等它发生，而不是假设它已经发生。
   await waitFor(() => expect(sent).toBeGreaterThan(0))
-  // 关键：欢迎屏不能再留着把消息挡住 / 抹掉
-  await waitFor(() => expect(screen.getByText('帮我算一下 1+1')).toBeInTheDocument())
+  // 关键：欢迎屏不能再留着把消息挡住 / 抹掉。
+  // 在**对话区里**找：失败时输入框会被塞回同样那句文本，按全文找会命中两处。
+  await waitFor(() =>
+    expect(within(screen.getByTestId('chat-transcript')).getByText('帮我算一下 1+1')).toBeInTheDocument(),
+  )
   expect(screen.queryByText('开始一段对话')).not.toBeInTheDocument()
+})
+// ——— 流式输出（2026-10-06，M1-1）———
+
+/** 一个由测试自己往里塞帧的响应体：一块一块塞，界面才会一块一块更新。 */
+function controllableStream() {
+  const encoder = new TextEncoder()
+  let controller!: ReadableStreamDefaultController<Uint8Array>
+  const stream = new ReadableStream<Uint8Array>({
+    start(c) {
+      controller = c
+    },
+  })
+  return {
+    response: () =>
+      new Response(stream, { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+    send: (text: string) => controller.enqueue(encoder.encode(text)),
+    close: () => controller.close(),
+  }
+}
+
+function frame(event: string, data: unknown): string {
+  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
+}
+
+/**
+ * 起一个对话页，并把那条流握在手里。
+ * 返回 `emit` 让测试一条一条地把帧推给界面。
+ */
+async function startStreamingChat() {
+  const s = controllableStream()
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.includes('/api/experts')) return jsonResponse(EXPERTS)
+    if (url.includes('/messages/stream')) return s.response()
+    if (url.includes('/messages')) return jsonResponse({ messages: [] })
+    if (url.endsWith('/api/sessions')) return jsonResponse({ id: 'NEWSESSION01', title: '新对话', expert_id: 'general' })
+    if (url.includes('/api/sessions?')) return jsonResponse({ sessions: [] })
+    if (url.includes('/healthz')) return jsonResponse({ llm: { max_context_tokens: 8192 } })
+    return jsonResponse({})
+  })
+  renderPage('/chat', fetchMock)
+  await waitFor(() => expect(screen.getByRole('combobox')).toBeInTheDocument())
+  const box = await screen.findByRole('textbox', { name: '消息' })
+  fireEvent.change(box, { target: { value: '帮我看看' } })
+  fireEvent.submit(box.closest('form') as HTMLFormElement)
+  await waitFor(() => expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('/messages/stream'))).toBe(true))
+  return { emit: s.send, close: s.close }
+}
+
+const DONE = {
+  session_id: 'NEWSESSION01',
+  user_message: { id: 'U1', seq: 1, content: '帮我看看', created_at: 1 },
+  reply: '最终答案。',
+  reasoning: '',
+  message: { id: 'A1', seq: 2, content: '最终答案。', created_at: 2 },
+  finish_reason: 'Stop',
+  usage: { input: 30, output: 8 },
+  turn_ms: 1,
+  tool_calls: [],
+  tool_rounds: 0,
+}
+
+it('模型还在写的时候，界面就已经把那半句显示出来了', async () => {
+  const { emit, close } = await startStreamingChat()
+
+  emit(frame('user_message', DONE.user_message))
+  emit(frame('delta', { kind: 'text', text: '我先' }))
+  emit(frame('delta', { kind: 'text', text: '查一下。' }))
+
+  // 关键是**在 done 之前**就能看见 —— 等 done 才出现的话，那就是一次性返回。
+  await waitFor(() => expect(screen.getByText('我先查一下。')).toBeInTheDocument())
+  expect(screen.queryByText('等待模型返回…')).not.toBeInTheDocument()
+
+  emit(frame('done', DONE))
+  close()
+  await waitFor(() => expect(screen.queryByText('生成中…')).not.toBeInTheDocument())
+})
+
+it('工具往返那一轮的正文会被抹掉，不会和最终答案连成两段', async () => {
+  const { emit, close } = await startStreamingChat()
+
+  emit(frame('user_message', DONE.user_message))
+  emit(frame('delta', { kind: 'text', text: '我先查一下。' }))
+  // **先等它真的显示出来**再谈抹掉。少了这一步，`not.toBeInTheDocument()`
+  // 会在第一帧还没渲染时就成立 —— 那条断言就成了永远为真的空话。
+  await waitFor(() => expect(screen.getByText('我先查一下。')).toBeInTheDocument())
+
+  emit(frame('discard', { round: 0, text: '我先查一下。', reasoning: '' }))
+  // 服务端只把**最终那一轮**的正文放进 done，所以中途那句绝不能留下来。
+  await waitFor(() => expect(screen.queryByText('我先查一下。')).not.toBeInTheDocument())
+
+  emit(frame('delta', { kind: 'text', text: '最终答案。' }))
+  emit(frame('done', DONE))
+  close()
+  await waitFor(() => expect(screen.getByText('最终答案。')).toBeInTheDocument())
+})
+
+it('工具失败要显示成失败，不能一律显示成「已调用」', async () => {
+  const { emit, close } = await startStreamingChat()
+
+  emit(frame('user_message', DONE.user_message))
+  emit(frame('tool_call', { name: 'no_such_tool', arguments: {} }))
+  await waitFor(() => expect(screen.getByTestId('chat-live-tools')).toBeInTheDocument())
+  expect(screen.getByText('正在调用工具 no_such_tool…')).toBeInTheDocument()
+
+  emit(frame('tool_result', { name: 'no_such_tool', ok: false }))
+  await waitFor(() => expect(screen.getByText('工具 no_such_tool 失败')).toBeInTheDocument())
+  expect(screen.queryByText('工具 no_such_tool 已返回')).not.toBeInTheDocument()
+
+  emit(frame('done', DONE))
+  close()
+})
+
+it('流中途报错要把服务端的「下一步」显示出来', async () => {
+  const { emit, close } = await startStreamingChat()
+
+  emit(frame('user_message', DONE.user_message))
+  emit(
+    frame('error', {
+      code: 'provider_unavailable',
+      detail: '连不上模型服务',
+      next_step: '先确认端点活着',
+    }),
+  )
+  close()
+
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent ?? '').toContain('连不上模型服务')
+  expect(alert.textContent ?? '').toContain('先确认端点活着')
+  // 半句话不能留在界面上冒充答案。
+  expect(screen.queryByText('生成中…')).not.toBeInTheDocument()
+})
+
+it('思考增量与正文分开，不会被当成答案渲染', async () => {
+  const { emit, close } = await startStreamingChat()
+  emit(frame('user_message', DONE.user_message))
+  emit(frame('delta', { kind: 'reasoning', text: '先确认口径' }))
+  emit(frame('delta', { kind: 'text', text: '结论如下' }))
+  await waitFor(() => expect(screen.getByText('结论如下')).toBeInTheDocument())
+  // 思考在折叠区里，界面上默认只露出 summary。
+  expect(screen.getByText('思考过程')).toBeInTheDocument()
+  emit(frame('done', DONE))
+  close()
 })

@@ -39,12 +39,70 @@ export function Transcript({
 }): ReactNode {
   const { t } = useTranslation()
   if (!messages.length) {
-    return running ? <p className="chat-muted">{t('chat.waitingForModel', { defaultValue: '等待模型返回…' })}</p> : null
+    // `data-testid` 挂在**这一段**上而不是外层容器：失败重发时输入框里也有
+    // 同样那句文本，按文本找会一次命中两个地方。
+    return running ? (
+      <p className="chat-muted" data-testid="chat-transcript">
+        {t('chat.waitingForModel', { defaultValue: '等待模型返回…' })}
+      </p>
+    ) : null
   }
   return (
-    <div className={running ? 'chat-transcript chat-transcript-running' : 'chat-transcript'}>
+    <div
+      data-testid="chat-transcript"
+      className={running ? 'chat-transcript chat-transcript-running' : 'chat-transcript'}
+    >
       {messages.map((message) => <MessageRow key={message.id} message={message} />)}
     </div>
+  )
+}
+
+export interface LiveToolStep {
+  name: string
+  /** `null` = 还在跑；`false` = 失败。失败的必须说出来，不能一律显示成「已调用」。 */
+  ok: boolean | null
+}
+
+/**
+ * 正在生成的那条回复。
+ *
+ * 单独一个组件而不是把占位消息塞进 `history`：那一行还没有 id 与 seq，
+ * 塞进去就得编一个假的，而假 id 早晚会和真 id 撞上（`upsertMessage` 按 id 去重）。
+ */
+export function LiveReply({
+  text,
+  reasoning,
+  tools,
+}: {
+  text: string
+  reasoning: string
+  tools: LiveToolStep[]
+}): ReactNode {
+  const { t } = useTranslation()
+  const blocks: ContentBlock[] = []
+  if (reasoning.trim()) blocks.push({ type: 'thinking', thinking: reasoning })
+  if (text.trim()) blocks.push({ type: 'text', text })
+  return (
+    <article className="chat-message chat-message-assistant chat-message-live">
+      <header>
+        <strong>Quill</strong>
+        <span>{t('chat.generating', { defaultValue: '生成中…' })}</span>
+      </header>
+      <ContentBlocks blocks={blocks} />
+      {tools.length ? (
+        <ul className="chat-tool-steps" data-testid="chat-live-tools">
+          {tools.map((step, index) => (
+            <li key={`${step.name}-${index}`} data-ok={step.ok === null ? 'running' : step.ok ? 'ok' : 'failed'}>
+              {step.ok === null
+                ? t('chat.toolRunning', { name: step.name, defaultValue: '正在调用工具 {{name}}…' })
+                : step.ok
+                  ? t('chat.toolOk', { name: step.name, defaultValue: '工具 {{name}} 已返回' })
+                  : t('chat.toolFailed', { name: step.name, defaultValue: '工具 {{name}} 失败' })}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </article>
   )
 }
 

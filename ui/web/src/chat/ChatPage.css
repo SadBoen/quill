@@ -85,6 +85,11 @@
 .chat-thinking, .chat-tool-block { color: var(--muted); font-size: 11px; margin: 8px 0; }
 .chat-thinking summary, .chat-tool-block summary { cursor: pointer; font-weight: 700; }
 .chat-tool-progress, .chat-history-note, .chat-muted { color: var(--faint); font-size: 10px; }
+/* 流式那条回复里的工具执行痕迹。三种状态用左边框区分：跑着、成功、失败。 */
+.chat-tool-steps { color: var(--muted); font-size: 10px; list-style: none; margin: 8px 0 0; padding: 0; }
+.chat-tool-steps li { border-left: 2px solid var(--line); margin-top: 4px; padding-left: 8px; }
+.chat-tool-steps li[data-ok='ok'] { border-left-color: var(--accent); }
+.chat-tool-steps li[data-ok='failed'] { border-left-color: var(--danger, #c0392b); color: var(--danger, #c0392b); }
 .chat-latest-marker { display: block; height: 1px; width: 100%; }
 .chat-deliveries, .chat-attachments, .chat-attachment-refs { list-style: none; margin: 8px 0 0; padding: 0; }
 .chat-deliveries li { color: var(--accent-strong); font-size: 10px; }

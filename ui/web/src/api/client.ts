@@ -90,6 +90,28 @@ function isErrorEnvelope(value: unknown): value is ServerErrorBody {
   return typeof inner.code === 'string' && typeof inner.detail === 'string'
 }
 
+/**
+ * 把服务端的错误信封翻成 `ApiError`。
+ *
+ * 抽出来是因为 SSE 那条路要用：响应头已经发出去了之后，出错只能靠一帧
+ * `error` 事件而不是状态码，而那帧里的字段与这里的信封是同一套。两处各写
+ * 一遍的话，迟早只改一边。
+ */
+export function readErrorEnvelope(response: Response, body: unknown): ApiError {
+  if (isErrorEnvelope(body)) {
+    const inner = body.error
+    const nextStep = typeof inner.next_step === 'string' ? inner.next_step : null
+    return new ApiError(response.status, inner.code, inner.detail, nextStep, readRetryAfterSeconds(response))
+  }
+  return new ApiError(
+    response.status,
+    'request_failed',
+    `Request failed (${response.status})`,
+    null,
+    readRetryAfterSeconds(response),
+  )
+}
+
 export async function apiJson<T = undefined>(
   input: string,
   init: RequestInit = {},
@@ -113,19 +135,6 @@ export async function apiJson<T = undefined>(
 
   const isJson = response.headers.get('content-type')?.includes('application/json') ?? false
   const body: unknown = isJson ? await response.json() : undefined
-  if (!response.ok) {
-    if (isErrorEnvelope(body)) {
-      const inner = body.error
-      const nextStep = typeof inner.next_step === 'string' ? inner.next_step : null
-      throw new ApiError(response.status, inner.code, inner.detail, nextStep, readRetryAfterSeconds(response))
-    }
-    throw new ApiError(
-      response.status,
-      'request_failed',
-      `Request failed (${response.status})`,
-      null,
-      readRetryAfterSeconds(response),
-    )
-  }
+  if (!response.ok) throw readErrorEnvelope(response, body)
   return body as T
 }

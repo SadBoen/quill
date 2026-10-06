@@ -48,11 +48,16 @@
 | frontmatter 的 name / description / model 三个字段 | `crates/quill-store/migrations/0004_expert_persona.sql:9-13` | `vendor/goose/documentation/docs/guides/context-engineering/custom-agents.md:35-37` | 已接入 | 字段名与「model 可空 = 跟随默认模型」的语义照抄 |
 | frontmatter 只有 name 必填 | `crates/quill-store/migrations/0004_expert_persona.sql:5` | `vendor/goose/documentation/docs/guides/context-engineering/custom-agents.md:51` | 已接入 | 我们把「不写 model」直接表达成 SQL 的 NULL，不引入哨兵值 |
 | 子 agent 独立 config + 独立 session | `crates/quill-server/src/api_dispatch.rs:133-136` | `vendor/goose/crates/goose/src/agents/subagent_handler.rs:46` | 我们的选择 | **未接入**：只对齐了接口形状，派工仍只记账不执行（响应里 `executed:false`）。执行器是 M2 的活，见 `BACKLOG.md` 的 B2 |
+| 流式是**唯一的**模型调用形态，没有「一次性」那一支 | `crates/quill-server/src/api_chat.rs`（`ReplyMode::Streamed` / `streamed_round`） | `vendor/goose/crates/goose/src/agents/reply_parts.rs:342` | 已接入 | goose 只有 `stream_response_from_provider` 一个入口，返回**流**而不是完整响应。我们**保留**了老的一次性路由（`ReplyMode::Once`）且语义一个字没改 —— 那是 octop 的契约路由，不能为了对齐上游改语义 |
+| 流式请求在可观测字段上打标记（`gen_ai.request.stream = true`） | `crates/quill-server/src/api_chat.rs`（`streamed_round` 的 `eprintln!("[chat] 流式一个字都没吐就失败…")`） | `vendor/goose/crates/goose/src/agents/reply_parts.rs:328` | 我们的选择 | 我们**没有** OTel spans，只有 `[chat]` 行日志。这是与上游真实存在的可观测性差距，不是等价实现；接 traces 记在 B3 |
 
 ## goose 刻意没抄
 
 | 上游做法（出处） | 我们怎么做的 | 为什么这么定 |
 |---|---|---|
+| `vendor/goose/crates/goose/src/agents/reply_parts.rs:342` | goose 那条是**进程内**的 `MessageStream`（`vendor/goose/crates/goose/src/agents/reply_parts.rs:21` 从 `providers::base` 引入），内核自己消费，没有对外的 HTTP 端点 | quill 的前端是浏览器，只能通过 HTTP 拿流。我们新开的 `POST /api/sessions/{id}/messages/stream`（`crates/quill-server/src/api_chat_stream.rs`）**整份事件协议是我们自己定的** —— 不是抄来的。也正因为是自己加的，它登记在 `EXTRA_ROUTES` 而不是 `CONTRACT_ROUTES` |
+| 同上 | 我们发一帧 `discard`，点名**要抹掉的原文**（不是长度） | 工具往返那一轮的正文会被下一轮覆盖掉（老行为里直接被 `reply` 覆盖、不落库）。浏览器没有终端那种「把这一段重画一遍」的能力，只能显式告诉前端抹哪一段。给长度不行的：中文与代理对会让「删 N 个字符」算错 |
+| 同上 | 上游不支持 `stream: true` 时**一个字都没吐出来**就退回一次性调用 | 不少 OpenAI 兼容端点对流式的支持不完整（老版本 llama.cpp、部分网关直接回 400）。流式是锦上添花，不能让它把「聊天」变成不可用。已经吐过字的**不**退回 —— 补一次会让同一段话显示两遍，那比报错更糟 |
 | `vendor/goose/crates/goose-provider-types/src/conversation/token_usage.rs:88-91` 里「provider 单独报 cache 时要把它折进 input_tokens」这条假设 | 两条口径都收（折进去的与分开报的都能解析），但事后**夹取**到 `input` 之内 | 这条假设对 Anthropic 与官方文档相反，而 goose 源码里判不了对错。我们不替上游改口径，也不把一个可能错的假设当契约 —— 记在 `BACKLOG.md` 的 B3-2 |
 
 ---
