@@ -225,18 +225,22 @@ pub async fn delete(
     let total = llm_providers::count(&state)?;
 
     if total <= 1 {
-        return Err(ApiError::conflict(format!(
-            "不能删掉唯一的一个模型供应商「{}」（当前 {total} 条）：删了实例就没有任何模型端点了。\
-             下一步：先 POST /api/admin/providers 加一个新端点，再回来删这条。",
-            p.name
-        )));
+        return Err(ApiError::conflict(
+            format!(
+                "不能删掉唯一的一个模型供应商「{}」（当前 {total} 条）：删了实例就没有任何模型端点了。",
+                p.name
+            ),
+            "先 POST /api/admin/providers 加一个新端点，再回来删这条。",
+        ));
     }
     if p.is_default {
-        return Err(ApiError::conflict(format!(
-            "不能删掉当前默认供应商「{}」：删掉之后实例不知道该用哪个模型。\
-             下一步：先 PUT /api/admin/providers/{}/default 切到另一条，再删这条。",
-            p.name, p.id
-        )));
+        return Err(ApiError::conflict(
+            format!(
+                "不能删掉当前默认供应商「{}」（id={}）：删掉之后实例不知道该用哪个模型。",
+                p.name, p.id
+            ),
+            "先把这个供应商的 id（见 detail）套进 `PUT /api/admin/providers/<id>/default` 切到另一条，再删这条。",
+        ));
     }
     llm_providers::delete(&state, &p.id)?;
     state.reload_providers()?;

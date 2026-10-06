@@ -328,9 +328,11 @@ pub fn agent_error_to_api(op: &str, e: AgentError) -> ApiError {
         AgentError::ExpertNotFound { id } | AgentError::ExpertDeleted { id } => {
             ApiError::entity_not_found(format!("专家 {id} 不存在，或对你不可见。"))
         }
-        AgentError::ExpertExists { id } => {
-            ApiError::conflict(format!("专家 {id} 已存在。软删除后同名可再次创建。"))
-        }
+        AgentError::ExpertExists { id } => ApiError::conflict(
+            format!("专家 {id} 已存在。"),
+            "先 `GET` 该专家确认它是否已存在；\
+             若要替换请先 `DELETE` 再创建（专家名删除后可复用）。",
+        ),
         AgentError::ExpertBuiltinProtected { id } => ApiError::forbidden(format!(
             "专家 {id} 是内置系统专家：内置专家随版本发布，不可修改、不可删除。"
         )),

@@ -71,10 +71,10 @@ pub async fn create(
         "查团队标识占用",
         teams_repo::slug_taken(db, user.0.user_id, team_id.as_str()).await,
     )? {
-        return Err(ApiError::conflict(format!(
-            "团队标识 {} 已被占用。软删除后同名可再次创建。",
-            team_id.as_str()
-        )));
+        return Err(ApiError::conflict(
+            format!("团队标识 {} 已被占用。", team_id.as_str()),
+            "软删除后同名可再次创建；改个新标识也一样可以。",
+        ));
     }
 
     let slug = team_id.as_str().to_string();

@@ -49,6 +49,19 @@ pub enum ApiError {
 
     Conflict {
         detail: String,
+        /// 「下一步」由调用方传，因为它随**是哪个资源**而变：专家名删除后
+        /// 可以复用同名，备份目录则是**非空就拒写** —— 套用同一句会让用户
+        /// 去 `DELETE` 一个备份目录，而那正是最不该被建议的动作。
+        advice: &'static str,
+    },
+
+    /// 请求本身读得懂，内容却不成立 —— 例如备份的清单解析不了、摘要对不上。
+    ///
+    /// 单独一个 422 是为了和 `Conflict` 分开：界面按状态码给不同的「下一步」，
+    /// 两件事混在一个 409 里，用户就会被告知一个与真实原因无关的做法。
+    Unprocessable {
+        detail: String,
+        advice: &'static str,
     },
 
     MethodNotAllowed {
@@ -143,9 +156,21 @@ impl ApiError {
         }
     }
 
-    pub fn conflict(detail: impl Into<String>) -> Self {
+    /// 「资源已存在」。「下一步」由调用方按**是哪个资源**传进来 ——
+    /// 不同资源的替换方式不一样（专家名删了能复用，备份目录不能删），
+    /// 在这里给一句通用的话就是把用户引到错误的分支上。
+    pub fn conflict(detail: impl Into<String>, advice: &'static str) -> Self {
         Self::Conflict {
             detail: detail.into(),
+            advice,
+        }
+    }
+
+    /// 「请求读得懂，内容不成立」（422）。同样由调用方给「下一步」。
+    pub fn unprocessable(detail: impl Into<String>, advice: &'static str) -> Self {
+        Self::Unprocessable {
+            detail: detail.into(),
+            advice,
         }
     }
 
@@ -244,6 +269,7 @@ impl ApiError {
             Self::MethodNotAllowed { .. } => StatusCode::METHOD_NOT_ALLOWED,
             Self::BadRequest { .. } => StatusCode::BAD_REQUEST,
             Self::Conflict { .. } => StatusCode::CONFLICT,
+            Self::Unprocessable { .. } => StatusCode::UNPROCESSABLE_ENTITY,
             Self::NotImplemented { .. } => StatusCode::NOT_IMPLEMENTED,
             Self::StorageUnavailable { .. } | Self::ProviderUnavailable { .. }
             | Self::UpstreamUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
@@ -268,6 +294,7 @@ impl ApiError {
             Self::MethodNotAllowed { .. } => "method_not_allowed",
             Self::BadRequest { .. } => "bad_request",
             Self::Conflict { .. } => "conflict",
+            Self::Unprocessable { .. } => "unprocessable",
             Self::NotImplemented { .. } => "not_implemented",
             Self::StorageUnavailable { .. } => "storage_unavailable",
             Self::ProviderUnavailable { .. } => "provider_unavailable",
@@ -291,7 +318,8 @@ impl ApiError {
                 format!("路由 {path} 不支持 {method} 方法")
             }
             Self::BadRequest { detail } => detail.clone(),
-            Self::Conflict { detail } => detail.clone(),
+            Self::Conflict { detail, .. } => detail.clone(),
+            Self::Unprocessable { detail, .. } => detail.clone(),
             Self::NotImplemented { method, path } => {
                 format!("路由 {method} {path} 已登记，但能力尚未实现")
             }
@@ -330,10 +358,8 @@ impl ApiError {
                 "按响应里的字段名修正请求体后重试（标识类字段只接受小写 kebab-case）；\
                  若确认字段与文档一致却仍报同样的错，执行 `GET /healthz` 核对服务版本。"
             }
-            Self::Conflict { .. } => {
-                "先 `GET` 该资源确认它是否已存在；\
-                 若要替换请先 `DELETE` 再创建（专家名删除后可复用）。"
-            }
+            Self::Conflict { advice, .. } => advice,
+            Self::Unprocessable { advice, .. } => advice,
             Self::MethodNotAllowed { .. } => {
                 "确认该路径允许的方法；\
                  路径存在但方法不对不会被当成 404。"
@@ -553,7 +579,8 @@ mod tests {
             ApiError::not_found("/api/nope"),
             ApiError::entity_not_found("专家不存在"),
             ApiError::bad_request("缺 display_name"),
-            ApiError::conflict("专家已存在"),
+            ApiError::conflict("专家已存在", "换个名字，或者先删掉原来那个。"),
+            ApiError::unprocessable("备份清单解析不了", "这份备份不可用于还原。"),
             ApiError::method_not_allowed("POST", "/healthz"),
             ApiError::not_implemented_for_test(),
             ApiError::storage_unavailable("数据库打不开"),

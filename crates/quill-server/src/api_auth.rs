@@ -111,10 +111,9 @@ fn control_err(op: &str, e: ControlError) -> ApiError {
             ))
         }
         ControlError::FirstOwnerExists => ApiError::conflict(
-            "本实例已经创建过初始管理员，注册通道已永久关闭。\
-             下一步：用已有账号登录（POST /api/auth/login），\
-             或由部署者通过 QUILL_PASSWORD_USERS 另行配置账号后重启。"
-                .to_string(),
+            "本实例已经创建过初始管理员，注册通道已永久关闭。".to_string(),
+            "用已有账号登录（POST /api/auth/login），\
+             或由部署者通过 QUILL_PASSWORD_USERS 另行配置账号后重启。",
         ),
         ControlError::UsernameInvalid { raw, reason }
         | ControlError::DisplayNameInvalid { raw, reason } => ApiError::bad_request(format!(
@@ -551,7 +550,14 @@ mod tests {
         let e = control_err("创建初始管理员", ControlError::FirstOwnerExists);
         assert_eq!(e.status(), axum::http::StatusCode::CONFLICT);
         assert!(e.detail().contains("注册通道已永久关闭"));
-        assert!(e.detail().contains("QUILL_PASSWORD_USERS"));
+        // 「下一步」现在走 advice 字段，不再塞进 detail ——
+        // 两条一起断言，免得以后有人把建议又塞回 detail 里（那样只剩一份）。
+        assert!(e.next_step().contains("QUILL_PASSWORD_USERS"));
+        assert!(
+            !e.detail().contains("QUILL_PASSWORD_USERS"),
+            "建议不该重复出现在 detail 里：{}",
+            e.detail()
+        );
     }
 
     #[test]

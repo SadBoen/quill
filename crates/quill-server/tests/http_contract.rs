@@ -1261,7 +1261,18 @@ async fn deleting_the_only_or_the_default_provider_is_refused() {
     let (status, t) = prov_delete(&s, &only).await;
     assert_eq!(status, StatusCode::CONFLICT, "删唯一 provider 必须 409：{t}");
     assert!(t.contains("conflict"), "{t}");
-    assert!(t.contains("下一步"), "409 也必须自诊断：{t}");
+    // 「下一步」是独立的 next_step 字段，不在 detail 里（Conflict 的 advice
+    // 由调用方给：删 provider 的正确做法和删专家的不一样）。
+    let ns = serde_json::from_str::<serde_json::Value>(&t).expect("响应必须是 JSON")["error"]
+        ["next_step"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(!ns.is_empty(), "409 必须自带下一步：{t}");
+    assert!(
+        ns.contains("/api/admin/providers"),
+        "「下一步」要指一条真实可走的路由：{t}"
+    );
 
     let second = provider_id(
         &create_provider(&s, base_provider_body("第二个", "http://127.0.0.1:18081/v1")).await,
