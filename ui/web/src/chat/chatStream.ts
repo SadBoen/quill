@@ -108,7 +108,19 @@ export async function streamChatMessage(
       newline = buffer.indexOf('\n')
     }
   }
-  buffer += decoder.decode()
+  // 收尾：把 decoder 里可能还扣着的半个 UTF-8 字符取出来，当成最后一段文本处理。
+  //
+  // 这一段过去是直接丢掉的（赋值之后再没被读过）。多数时候无所谓——服务端总以
+  // 空行收尾，帧已经在循环里处理完了——但流被截断在帧中间时，最后那半条
+  // `data:` 就这么没了，而下面恰好要靠「有没有拿到 done」判断是不是断流。
+  // 宁可让它进 handleLine 走一遍，也别让残帧悄悄消失。
+  const tail = buffer + decoder.decode()
+  if (tail.length > 0) {
+    for (const raw of tail.split('\n')) {
+      const line = raw.replace(/\r$/, '')
+      if (line !== '' && !handleLine(line)) flushFrame()
+    }
+  }
   // 最后一帧后面没有空行也算数（服务端总以空行收尾，这里只是兜底）。
   flushFrame()
 

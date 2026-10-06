@@ -20,10 +20,6 @@ import { CAPABILITY_GAPS, capabilityStatusLabel } from '../capabilityGaps'
 import './ChatPage.css'
 import './chatShell.css'
 
-export interface ChatPageProps {
-  pollIntervalMs?: number
-}
-
 interface NoticeState {
   sessionId: string | null
   message: string
@@ -54,7 +50,7 @@ export function dropTail(buffer: string, dropped: string): string {
   return buffer.endsWith(dropped) ? buffer.slice(0, buffer.length - dropped.length) : ''
 }
 
-export function ChatPage(_props: ChatPageProps): ReactNode {
+export function ChatPage(): ReactNode {
   const { t } = useTranslation()
   const { sessionId } = useParams<{ sessionId: string }>()
   const navigate = useNavigate()

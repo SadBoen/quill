@@ -92,6 +92,20 @@ describe('帧解析', () => {
     await expect(pending).resolves.toMatchObject({ reply: '最终答案。' })
   })
 
+  it('最后一帧后面连换行都没有时，那一帧仍然算数', async () => {
+    // 收尾处原来只 flushFrame（flush 的是已经攒好的 data），`buffer` 里剩下的
+    // 半行从来没被处理过就丢了。流正好断在帧中间时，最后那句 `data:` 就这么没了
+    // —— 下面「没拿到 done 就当断流」于是报出一个其实已经收到的答案。
+    const s = controllableStream()
+    stubFetch(() => s.response())
+    const pending = streamChatMessage('S1', '你好', {})
+
+    s.send(`event: done\ndata: ${JSON.stringify(DONE_BODY)}`) // 故意不给结尾换行
+    s.close()
+
+    await expect(pending).resolves.toMatchObject({ reply: '最终答案。' })
+  })
+
   it('一个汉字被 TCP 切成两片时不会变成乱码', async () => {
     const s = controllableStream()
     stubFetch(() => s.response())

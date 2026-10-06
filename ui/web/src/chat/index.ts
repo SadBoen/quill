@@ -1,1 +1,1 @@
-export { ChatPage, type ChatPageProps } from './ChatPage'
+export { ChatPage } from './ChatPage'

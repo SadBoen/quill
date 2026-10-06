@@ -117,6 +117,38 @@ Rust 工具链在 WSL2，node/npm 只在 Windows 侧。
 整条重写为 `disabling_also_blocks_an_env_token_and_says_so`：断言方向整个翻过来了。
 
 
+### B1-1c lint 配好了，还剩两条真问题没修 🟡
+
+`ui/web` 一直没有 `eslint.config.*`，于是 `npm run lint` 直接退 2 —— 而
+`eslint` / `@eslint/js` / `typescript-eslint` / `eslint-plugin-react-hooks` /
+`eslint-plugin-react-refresh` / `globals` **本来就都在 devDependencies 里**
+（`ui/web/package.json:26-42`）。所以这不是「要不要新增依赖」的问题，
+是配置文件压根没写。补上之后 eslint 第一次真跑起来，扫出 4 个 error。
+
+**这一轮已修**：
+- `chatStream.ts`：流收尾时 `buffer += decoder.decode()` 的赋值之后再没被读过，
+  流被截断在帧中间时最后半条 `data:` 就这么丢了。改成把尾巴当最后一段文本走一遍
+  `handleLine`。
+- `ChatPage.tsx` 的 `ChatPageProps.pollIntervalMs`：一个**没人读的假旋钮**，
+  连同 `chat/index.ts` 的类型再导出一起删掉。
+
+**还剩 2 个 error，没修**（`react-hooks/set-state-in-effect`）：
+- `src/chat/ChatPage.tsx:127` 与 `src/memory/MemoryPage.tsx:33` 都在 effect 里
+  同步 `setState`。
+
+这两个不是删一行注释能解决的：正解是把那段状态改成**渲染期派生**（拿
+`list.data` 直接算 `paths`，而不是先 setState 再读）。但 `ChatPage` 那段 effect
+里压着一条已经用变异验证过的竞态防护（发送中不重拉历史，见该文件 131-137 行的
+注释），动它必须连带把那条防护重新验一遍 —— 不能顺手改。所以留在这里当一条
+独立的活。
+
+**因此 lint 还没有进 `.scripts/gates.sh`**：门禁现在跑的是 typecheck / vitest /
+build。加一条会红的检查进去不如不加。等这两条修完再接。
+
+另外 11 个 warning 里绝大多数是 `react-refresh/only-export-components`
+（一个文件同时导出组件和常量，影响的是 HMR 粒度，不是 bug），
+两条 `exhaustive-deps` 记在 B3 一类的可观测性/稳健性条目里再说。
+
 ### B1-2 未注册 ≠ 501，界面要分清这三种 🟡
 
 `ui/web/src/capabilityGaps.ts` 现在只有 **4 条**（2 条 `partial` / 2 条 `not-implemented`），
