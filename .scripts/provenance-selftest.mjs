@@ -65,6 +65,8 @@ const ctx = {
   lineCount: (p) => (p in LINE_COUNTS ? LINE_COUNTS[p] : null),
   inSparse: (p) => inSparseSet(p, SPARSE),
   rootHit: (p) => ROOT_FILES.has(p),
+  // 默认「vendor 树都在位」，所以下面场景6 那条「树在、文件没了 → broken」保持成立。
+  treePresent: () => true,
 };
 
 const st = (raw) => classifyRef(raw, ctx).status;
@@ -144,6 +146,26 @@ console.log('\n场景6：文件读不到 —— sparse 内外要分清');
   expect('本仓库文件读不到 → ours-missing', ours.status === 'ours-missing', JSON.stringify(ours));
   const goose = classifyRef('vendor/goose/crates/goose/src/gone.rs:1', ctx);
   expect('goose 侧读不到 → broken（vendor/goose 是全量拷贝，没有 sparse 这回事）', goose.status === 'broken', JSON.stringify(goose));
+}
+
+console.log('\n场景6b：vendor 整棵树没取回来 —— 是「没核」，不是「引用坏了」');
+{
+  // 2026-10-08：CI 里 `vendor/openoctopus-frontend` 整个不存在（取码脚本压根不取它），
+  // 而判定把它报成「坏掉的引用 —— 文件读不到」。那是把「没跑」说成「测了而且坏了」。
+  const noTree = { ...ctx, treePresent: () => false };
+  const r = classifyRef('vendor/openoctopus-frontend/src/index.css:70', noTree);
+  expect('整棵树没取回来 → offline-unverifiable', r.status === 'offline-unverifiable', JSON.stringify(r));
+  expect('理由说清了怎么取', /fetch-vendor\.sh/.test(r.reason), r.reason);
+  // 反面：树在、就这个文件没了 → 仍然是 broken，不能被这条规则放过
+  const stillBroken = classifyRef('vendor/goose/crates/goose/src/gone.rs:1', ctx);
+  expect('树在位时仍然是 broken（没被放宽）', stillBroken.status === 'broken', JSON.stringify(stillBroken));
+  // 没有 treePresent 的旧调用方也不能因此崩掉或乱判
+  const noFn = classifyRef('vendor/goose/crates/goose/src/gone.rs:1', {
+    lineCount: ctx.lineCount,
+    inSparse: ctx.inSparse,
+    rootHit: ctx.rootHit,
+  });
+  expect('老调用方（没有 treePresent）仍然判 broken', noFn.status === 'broken', JSON.stringify(noFn));
 }
 
 console.log('\n场景7：格式错必须判失败（2026-10-06 那次引用腐烂的形状）');

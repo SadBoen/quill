@@ -103,6 +103,16 @@ jobs:
       - name: 文本门禁 · i18n
         run: node .i18n-check.mjs
 
+      # 移植基准：index.css 必须与 vendor/openoctopus-frontend 逐字节一致。
+      # 钉的是移植那一刻的哈希，所以**不需要 vendor 在手边** —— 这正是它能进
+      # gates-core（不需要任何 secret 的那个 job）的原因。以前这道检查只躺在
+      # 一次性脚本里，谁都没跑。
+      - name: 文本门禁 · 移植基准
+        run: node .vendor-baseline-check.mjs
+
+      - name: 移植基准判定的自测
+        run: node .vendor-baseline-check.mjs --self-test
+
       - name: 文本门禁 · 上游判定的自测
         run: node .scripts/upstream-check-selftest.mjs
 

@@ -71,7 +71,7 @@ if command -v node  >/dev/null 2>&1; then HAVE_NODE=1;  echo "  ✓ node $(node 
 need_text_gate=1
 if [ "$HAVE_NODE" = "0" ]; then
   echo "  → 文本门禁跳过：没有 node。这一段请在有 node 的一侧单独跑："
-  echo "     node .mojibake-check.mjs / .i18n-check.mjs / .library-check.mjs / .upstream-check.mjs"
+  echo "     node .mojibake-check.mjs / .i18n-check.mjs / .vendor-baseline-check.mjs / .library-check.mjs / .upstream-check.mjs"
   echo "     node .provenance-check.mjs / .scripts/upstream-check-selftest.mjs / .scripts/provenance-selftest.mjs"
   echo "     node .scripts/upstream-check-selftest.mjs"
   need_text_gate=0
@@ -148,6 +148,20 @@ run_upstream_gate() {
 if [ "$need_text_gate" = "1" ]; then
   run_text_gate .mojibake-check.mjs
   run_text_gate .i18n-check.mjs
+  # 移植基准：index.css 必须与 vendor/openoctopus-frontend 逐字节一致。
+  # 用文本门禁而不是 upstream 门禁，因为它**不需要 vendor 在手边** ——
+  # 钉的是移植那一刻的哈希，所以 fresh clone 与 CI 都核得了。
+  # （以前这道检查只躺在 .wsl-css-check.sh 等一次性脚本里，gates.sh 与 CI 都没跑。）
+  run_text_gate .vendor-baseline-check.mjs
+  # 它的自测单独调 —— run_text_gate 只接一个参数，传第二个会被当成没看见，
+  # 于是「跑两遍检查」看起来像「跑了检查 + 跑了自测」。
+  step "文本门禁 · .vendor-baseline-check.mjs（自测）"
+  if node .vendor-baseline-check.mjs --self-test >/tmp/quill-gate-vendor-self.log 2>&1; then
+    tail -1 /tmp/quill-gate-vendor-self.log | sed 's/^/  ✓ /'
+  else
+    fail "移植基准的判定逻辑不可信 —— 它得能证明自己会红"
+    grep -E '✗' /tmp/quill-gate-vendor-self.log | head -6 | sed 's/^/    /'
+  fi
   run_upstream_gate .library-check.mjs
   # 上游基线核对：比对 UPSTREAM.md 记的 pin 与本机实际检出。
   # 它核的是「本地检出对不对」，所以同样要真有那份检出才核得了。

@@ -3,8 +3,14 @@
  *
  * 为什么单独一个文件、而不是直接改 index.css：
  *   ui/web/src/index.css 必须与 vendor/openoctopus-frontend/src/index.css
- *   **逐字节一致**（`.library-check.mjs` 会逐字节核），所以本地修改一律不进
- *   那个文件，全在这里。加载顺序因此是「先基准、后覆盖」，别调换。
+ *   **逐字节一致**，所以本地修改一律不进那个文件，全在这里。
+ *   加载顺序因此是「先基准、后覆盖」，别调换。
+ *   核这条约束的是 `node .vendor-baseline-check.mjs`（已接进 gates.sh 与 CI）。
+ *   2026-10-07 更正：这里原来写的是「`.library-check.mjs` 会逐字节核」——
+ *   那是假的，那道检查只比人格 markdown，不碰 CSS。真正的 CSS 检查当时只躺在
+ *   几个一次性脚本（`.wsl-css-check.sh`）里，gates.sh 与 CI 都没跑过。
+ *   它钉的是**哈希**而不是比对两个文件，所以 vendor 不在手边也能核 ——
+ *   这一点正是它能进 CI 的原因。
  *
  * 名字从 layout_local.css 改成 overrides.css（2026-10-07）：这个文件承载的是
  * 全站级的设计令牌（阴影、可读性下限）与两条全局规则（touch-action、

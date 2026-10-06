@@ -143,6 +143,15 @@ export function classifyRef(raw, ctx) {
         reason: '落在 octop 的 sparse 集合之外，离线核不到（不是引用腐烂）',
       };
     }
+    // vendor 整棵树都没取回来 → 说不上引用烂不烂，如实报「核不到」。
+    // 这不是放宽标准：取回来了还找不到仍然是 broken（下面那行）。
+    if (upstream && typeof ctx.treePresent === 'function' && !ctx.treePresent(r.path)) {
+      return {
+        ...base,
+        status: 'offline-unverifiable',
+        reason: `${treeRootOf(r.path)} 还没取回来，离线核不到（不是引用腐烂）。取回：bash .scripts/fetch-vendor.sh`,
+      };
+    }
     return { ...base, status: upstream ? 'broken' : 'ours-missing', reason: '文件读不到' };
   }
   if (r.from === null) {
@@ -278,6 +287,23 @@ function rootHit(p) {
   return existsSync(join(ROOT, p));
 }
 
+/** 一条 vendor 引用的「哪棵树」：`vendor/goose/…` → `vendor/goose`。 */
+function treeRootOf(p) {
+  return p.split('/').slice(0, 2).join('/');
+}
+
+/**
+ * 那棵树取回来了吗。
+ *
+ * 「树整个都不在」与「树在、就这个文件没了」是两件事：
+ * 前者是我们没跑 fetch-vendor.sh，说不上引用是不是腐烂；
+ * 后者才是引用真的烂了。把前者报成 broken，等于把「没跑」说成「测了，而且坏了」。
+ */
+function treePresent(p) {
+  if (!p.startsWith('vendor/')) return true;
+  return existsSync(join(ROOT, treeRootOf(p)));
+}
+
 async function main() {
   // `--root` 只给自测用（见 ROOT 的注释）。不接受也没关系：默认就是脚本所在目录，
   // 本地跑 `node .provenance-check.mjs` 的行为一个字都没变。
@@ -311,7 +337,12 @@ async function main() {
   }
 
   const sparse = readSparseDirs();
-  const ctx = { lineCount: lineCountOf, inSparse: (p) => inSparseSet(p, sparse.dirs), rootHit };
+  const ctx = {
+    lineCount: lineCountOf,
+    inSparse: (p) => inSparseSet(p, sparse.dirs),
+    rootHit,
+    treePresent,
+  };
 
   const rawRefs = extractRefs(text);
   if (!rawRefs.length) {
