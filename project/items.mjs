@@ -30,7 +30,11 @@ export const ITEMS = [
     id: 'B0-1',
     milestone: 'M0',
     title: '门禁判定逻辑本身要被测试（防止恒为真的门禁）',
-    verify: { kind: 'cmd', cmd: 'bash .scripts/gate-selftest.sh', cwd: 'wsl' },
+    // 标 slow：gate-selftest.sh 要拿 7 个场景各跑一遍真正的 gates.sh
+    // （注入 lint error、看它红；缺上游、看它报「未跑」…），
+    // 所以它是分钟级命令。不标 slow 时 `node scripts/status.mjs --quick`
+    // 实际要跑六七分钟 —— 一个叫「quick」的命令不该这样。
+    verify: { kind: 'cmd', cmd: 'bash .scripts/gate-selftest.sh', cwd: 'wsl', slow: true },
     blocks: ['M0'],
   },
   {
@@ -50,7 +54,10 @@ export const ITEMS = [
     id: 'B0-3',
     milestone: 'M0',
     title: '前端 lint 能跑，且已接进门禁',
-    verify: { kind: 'cmd', cmd: 'bash .scripts/gates.sh --fast', cwd: 'wsl' },
+    // 同 B0-2 标 slow：`--fast` 只跳过前端 build，**不跳过** Rust 全部测试与
+    // vitest，所以它同样是分钟级命令。没标 slow 时 `node scripts/status.mjs --quick`
+    // 会被它拖到五分钟以上 —— 「秒级出结果」就成了一句谎话。
+    verify: { kind: 'cmd', cmd: 'bash .scripts/gates.sh --fast', cwd: 'wsl', slow: true },
     blocks: ['M0'],
   },
   {
@@ -99,7 +106,8 @@ export const ITEMS = [
     id: 'B1-1c',
     milestone: 'M1',
     title: 'lint 接进门禁，不再是「只跑得起来但没人跑」',
-    verify: { kind: 'cmd', cmd: 'bash .scripts/gate-selftest.sh', cwd: 'wsl' },
+    // 同 B0-1：命令一模一样，也就同样得标 slow。
+    verify: { kind: 'cmd', cmd: 'bash .scripts/gate-selftest.sh', cwd: 'wsl', slow: true },
     blocks: [],
   },
   {

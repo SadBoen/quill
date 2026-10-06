@@ -114,6 +114,30 @@ function runWsl(bashCmd) {
   return run(`"${WSL}" -e bash -lc ${JSON.stringify(bashCmd)}`, { cwd: ROOT, timeout: 30 * 60 * 1000 });
 }
 
+/**
+ * 跑一条**判据命令**：base64 写进临时脚本，再 `bash` 它。
+ *
+ * **为什么不能直接把判据塞进 `bash -lc "…"`**（这个坑踩过）：
+ * 判据字符串会被 `JSON.stringify` 包一层双引号，而判据自己往往还含
+ * `$(...)`、`%(...)` 和引号 —— 套了好几层 shell，每一层都要重新解释一次引号。
+ *
+ * 实测 B0-6（`test $(git branch --format="%(refname:short)" | grep -cvx main) -eq 0`）
+ * 在终端里手工跑退出 0（通过），经这条路跑却退出 2，被如实报成「未通过」。
+ * 那是环境问题伪装成结论 —— 正是这套机制最不该出的错。
+ *
+ * base64 里只有 `A-Za-z0-9+/=`，任何一层 shell 都不会改它。
+ * 顺带在脚本里显式 `cd` 到仓库根：否则判据跑在「谁敲的 node 命令」的目录上，
+ * 而判据本来是跟目录无关的。
+ */
+function runWslScript(body) {
+  const repo = hostCwd() || '/mnt/d/96_CoderWorld/quill';
+  const wrapped = `cd ${JSON.stringify(repo)} || exit 1\n${body}\n`;
+  const b64 = Buffer.from(wrapped, 'utf8').toString('base64');
+  return runWsl(
+    `echo ${b64} | base64 -d > /tmp/quill-status-cmd.sh && bash /tmp/quill-status-cmd.sh`,
+  );
+}
+
 /* ————————————————————————————————————————————————————————————————
  * 一、收集证据（每样只收集一次，绝不为每条判据各跑一遍）
  * ———————————————————————————————————————————————————————————————— */
@@ -348,7 +372,14 @@ function main() {
   const cmdResults = {};
   for (const cmd of cmdSpecs) {
     const spec = ITEMS.find((i) => i.verify.kind === 'cmd' && i.verify.cmd === cmd).verify;
-    const r = spec.cwd === 'wsl' ? runWsl(cmd) : run(cmd, { cwd: hostCwd() });
+    // **quick 模式下真的不执行**，而不是执行完再报「跳过」。
+    //
+    // 这里曾经只让 `decide()` 把 slow 判据显示成「跳过（该命令较慢）」，
+    // 可命令照样跑了一遍 —— 于是一句「跳过」是句谎话，
+    // `node scripts/status.mjs --quick` 实测要跑 7 分半。
+    // 报告说自己跳过了、实际没跳过，比如实说「很慢」坏得多。
+    if (QUICK && spec.slow) continue;
+    const r = spec.cwd === 'wsl' ? runWslScript(cmd) : run(cmd, { cwd: hostCwd() });
     cmdResults[cmd] = r.ok
       ? { verdict: VERDICT.PASS, detail: `命令退出 0：${cmd}` }
       : { verdict: VERDICT.FAIL, detail: `命令失败（退出码 ${r.code}）：${cmd}` };
