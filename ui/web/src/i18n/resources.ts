@@ -160,6 +160,8 @@ export const en = {
       waitingForModel: 'Waiting for the model…',
       sendFailed: 'The message could not be sent. Try again.',
       historyLoadFailed: 'The conversation history could not be loaded.',
+      forcedFinalAnswer:
+        'The reply below was produced after the tool budget ran out, with no tools available to the model. Nothing in it has been verified by a tool.',
       deleteFailed: 'The conversation could not be deleted.',
       renameFailed: 'The conversation could not be renamed.',
       renameUnsupported: 'Renaming is not available yet: the server has no PATCH /api/sessions/{id}.',
@@ -1217,6 +1219,8 @@ export const zhCN = {
       waitingForModel: '等待模型返回…',
       sendFailed: '消息发送失败，请重试。',
       historyLoadFailed: '会话历史加载失败。',
+      forcedFinalAnswer:
+        '下面的回答是在工具用尽、并且已经不给模型任何工具的情况下生成的，没有经过任何工具核实。',
       deleteFailed: '会话删除失败。',
       renameFailed: '会话改名失败。',
       renameUnsupported: '改名尚未开放：服务端还没有 PATCH /api/sessions/{id}。',

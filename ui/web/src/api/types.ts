@@ -45,6 +45,13 @@ export interface SendMessageResponse {
   finish_reason: string | null
   usage: { input: number; output: number }
   turn_ms: number
+  /**
+   * 这一段正文是**工具用尽之后、把工具摘掉逼出来的**，没有任何工具核实过。
+   * 实测 4B 在这种时候会开始编数字，所以界面必须把它标出来，
+   * 否则用户会把一段没核实过的话当成和平时一样可信的回答。见 ISSUE-043。
+   * 老服务端没有这个字段，按 false 处理。
+   */
+  final_answer_forced?: boolean
 }
 
 export interface CreateSessionResponse {

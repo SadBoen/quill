@@ -64,6 +64,9 @@ export function ChatPage(_props: ChatPageProps): ReactNode {
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
   const [notice, setNotice] = useState<NoticeState | null>(null)
+  // 服务端在「工具往返用尽、把工具摘掉逼出来」的正文上会带这个标记。
+  // 那段话没有任何工具核实过，界面上必须说明，不能让它长得跟平常的回答一样。
+  const [forcedAnswer, setForcedAnswer] = useState(false)
   const [renaming, setRenaming] = useState(false)
   const [titleDraft, setTitleDraft] = useState('')
   const [deletingId, setDeletingId] = useState<string | null>(null)
@@ -188,6 +191,7 @@ export function ChatPage(_props: ChatPageProps): ReactNode {
       setHistory((current) => current ?? [])
       const result = await sendChatMessage(targetId, sentText)
       setLastUsage({ input: result.usage.input, output: result.usage.output })
+      setForcedAnswer(Boolean(result.final_answer_forced))
       setHistory((current) => (current ?? []).reduce(upsertMessage, [
         {
           id: result.user_message.id,
@@ -376,6 +380,14 @@ export function ChatPage(_props: ChatPageProps): ReactNode {
               </form>
             ) : null}
             {historyError ? <p className="chat-banner chat-banner-error" role="alert">{historyError}</p> : null}
+            {forcedAnswer ? (
+              <p className="chat-banner chat-banner-error" role="alert">
+                {t('chat.forcedFinalAnswer', {
+                  defaultValue:
+                    '下面的回答是在工具用尽、并且已经不给模型任何工具的情况下生成的，没有经过任何工具核实。',
+                })}
+              </p>
+            ) : null}
             {visibleNotice ? <p className="chat-banner chat-banner-error" role="alert">{visibleNotice}</p> : null}
             {showWelcome ? (
               <ChatWelcome

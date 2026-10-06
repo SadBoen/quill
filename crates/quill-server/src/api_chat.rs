@@ -637,7 +637,6 @@ pub async fn post_message(
         }
     }
     let turn_ms = started.elapsed().as_millis() as i64;
-    let _ = forced_final_answer;
 
     // 工具往返用尽后仍只有 tool_calls、没有正文：这是**没有回答**，
     // 不能当成功返回。`has_answer()` 在这种情况下会返回 true（它只判断
@@ -722,6 +721,10 @@ pub async fn post_message(
         // 不需要另设一个布尔开关（两个字段可能不同步的那种设计最难维护）。
         "tool_calls": tool_trace,
         "tool_rounds": rounds,
+        // 这一段正文是**工具用尽之后、把工具摘掉逼出来的**，没有工具支撑。
+        // 实测 4B 在这种时候会开始编（ISSUE-043），所以必须让界面知道：
+        // 用户看到的必须是一条警告，而不是一段看起来和平时一样可信的回答。
+        "final_answer_forced": forced_final_answer,
     }))
     .into_response())
 }
