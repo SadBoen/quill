@@ -296,8 +296,15 @@ impl ToolRegistry {
             .map_err(|e| format!("加载 SKILL 列表失败：{e}"))?;
 
         for row in rows {
-            let body =
-                crate::api_extensions::read_skill_body(&root.join(format!("{}.md", row.name)));
+            // 正文路径由 `api_extensions::skill_body_path` 一处算出来 ——
+            // 这里自己拼一份，就会出现「界面显示已启用、模型读不到正文」。
+            // 算不出路径（DB 里名字不合法）就退化成「磁盘上没正文」，
+            // 与「文件被删了」同一种形状：下面的 `NotMounted` 会照常
+            // 报出「库里有行但磁盘上没有正文」，不另造一套说法。
+            let body = match crate::api_extensions::skill_body_path(root, &row.name) {
+                Ok(p) => crate::api_extensions::read_skill_body(&p),
+                Err(_) => String::new(),
+            };
             match skill_visibility(&self.specs, &row, &body) {
                 SkillVisibility::Visible => {}
                 // 停用是用户的明确选择，不是故障 —— 记日志只会把真正的告警淹掉。

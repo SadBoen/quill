@@ -76,21 +76,11 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-fn is_within(root: &Path, candidate: &Path) -> bool {
-    let r = dunce_canonical(root);
-    let c = dunce_canonical(candidate);
-    c.starts_with(&r)
-}
-
-fn dunce_canonical(p: &Path) -> PathBuf {
-    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
-}
-
 pub async fn serve(root: &Path, uri: Uri) -> Response {
     let path = uri.path();
 
     if let Some(target) = safe_join(root, path) {
-        if target.is_file() && is_within(root, &target) {
+        if target.is_file() && crate::pathsafe::is_within(root, &target) {
             return send_file(&target);
         }
     }

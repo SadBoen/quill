@@ -1057,23 +1057,55 @@ pub(crate) fn skill_dir(cfg: &crate::config::Config) -> std::path::PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from("data/skills"))
 }
 
-/// 把 slug 映射成安全的文件名。
+/// 技能正文路径 —— 全项目**唯一**的算法。
+///
+/// 三个调用点（写入 `skill_file`、列举 `list_skills`、挂载
+/// `ToolRegistry::with_skills`）必须都走这里：各写一份必然漂，而漂了的后果
+/// 是「界面说一个位置、模型读另一个位置」，而且没有任何迹象指向原因。
+///
+/// **为什么一个函数要同时服务两类名字**：
+/// 写入侧的名字是 URL slug，刚过完 `mcp_repo::normalize_name`；
+/// 读取侧的名字直接来自 `skills.name`（migration 0001 上有 CHECK）。
+/// 两者的可信度不一样，所以这里**不再**依赖调用方的归一，
+/// 自己做最后一道防线：空名、带路径分隔符、带 `.` 的名字一律拒绝
+/// （合法的 kebab-case 技能名里根本不会出现它们）。
+/// 这样「DB 里有一行脏名字」也只会退化成「磁盘上没正文」，
+/// 而不是读到目录外面去。
+///
+/// 归一化走 `pathsafe::is_within`，两侧同一口径 —— 这一条是硬约束：
+/// Windows 上 `canonicalize` 带 `\\?\` 前缀，只归一化一侧会让**所有**
+/// 技能写入都被判成「落在目录之外」。
+pub(crate) fn skill_body_path(
+    root: &std::path::Path,
+    name: &str,
+) -> Result<std::path::PathBuf, ApiError> {
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains('.') {
+        return Err(ApiError::bad_request(format!(
+            "SKILL 名称 {name:?} 不是合法的技能名。\
+             下一步：只用小写字母、数字与连字符。"
+        )));
+    }
+    let path = root.join(format!("{name}.md"));
+    // 问的是**父目录**而不是文件本身：文件还没落盘，canonicalize
+    // 必然失败走兜底，那时的判定就退化成字面前缀比较了。
+    let parent = path.parent().unwrap_or(root);
+    if !crate::pathsafe::is_within(root, parent) {
+        return Err(ApiError::bad_request(format!(
+            "SKILL 名称 {name:?} 解析后落在技能目录之外，已拒绝。\
+             下一步：只用小写字母、数字与连字符。"
+        )));
+    }
+    Ok(path)
+}
+
+/// 把 slug 映射成安全的文件名（写入侧的入口）。
 ///
 /// **路径穿越防护**：slug 来自 URL/body，直接拼进路径就能用 `../` 跳出目录，
 /// 写到任意位置。归一后仍要确认最终路径落在根目录内 —— 归一规则被绕过时
 /// 这道检查是最后一道。
 fn skill_file(root: &std::path::Path, slug: &str) -> Result<std::path::PathBuf, ApiError> {
     let name = mcp_repo::normalize_name(slug).map_err(ApiError::bad_request)?;
-    let path = root.join(format!("{name}.md"));
-    let canon_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    let parent = path.parent().unwrap_or(root).to_path_buf();
-    if !parent.starts_with(&canon_root) {
-        return Err(ApiError::bad_request(format!(
-            "SKILL 名称 {slug:?} 解析后落在技能目录之外，已拒绝。\
-             下一步：只用小写字母、数字与连字符。"
-        )));
-    }
-    Ok(path)
+    skill_body_path(root, &name)
 }
 
 /// 读 SKILL 正文。**读不到就当空**，由调用方决定这算「没配」还是「坏了」——
@@ -1122,7 +1154,13 @@ pub async fn list_skills(
     let mut taken = builtin_names;
     for r in &rows {
         let mut j = skills_repo::to_json(r);
-        let body = read_skill_body(&dir.join(format!("{}.md", r.name)));
+        // 算不出路径（DB 里名字不合法）就当「磁盘上没正文」—— 与正文
+        // 文件被删是同一种形状，下面的 `content_missing` / `NotMounted`
+        // 照常报得出来，不另造一套说法。
+        let body = match skill_body_path(&dir, &r.name) {
+            Ok(p) => read_skill_body(&p),
+            Err(_) => String::new(),
+        };
         // 正文长度让前端能显示「这个技能多大」，也让我们能如实标出
         // 「文件在库里但磁盘上没找到」的情况。
         if let Some(obj) = j.as_object_mut() {
