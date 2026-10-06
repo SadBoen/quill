@@ -33,6 +33,8 @@ export interface Expert {
   visibility: string
   default_enabled: boolean
   is_builtin: boolean
+  /** 是不是那个自动补齐的通用专家。由服务端判定，前端不许自己认 id。 */
+  is_general: boolean
   /** 被引用的专家库模板 id（见 library.ts 的 LIBRARY_EXPERTS_BY_ID）；手写专家为 null。 */
   source_template: string | null
 }

@@ -53,6 +53,10 @@ export function ChatPage(_props: ChatPageProps): ReactNode {
   const allExperts = experts.data ?? []
   const pickableExperts = allExperts.filter((expert) => expert.default_enabled)
   const hiddenExpertCount = allExperts.length - pickableExperts.length
+  // 「不允许未选角色就聊天」的前端一半：没显式选时就落在通用专家上。
+  // 服务端建会话时也会兜一层，但界面不能先摆出一个「未选角色」的中间态给用户看。
+  // is_general 由服务端给，不在前端硬编码 'general' —— 后端换 id 时界面会跟着说谎。
+  const generalExpert = allExperts.find((expert) => expert.is_general)
   const session = sessions.data?.find((candidate) => candidate.id === sessionId)
   const [history, setHistory] = useState<ChatMessage[] | null>(null)
   const [historyError, setHistoryError] = useState<string | null>(null)
@@ -72,9 +76,9 @@ export function ChatPage(_props: ChatPageProps): ReactNode {
   const generation = useRef(0)
 
   const activeExpertId = sessionId ? (session?.expert_id ?? '') : expertId
-  const activeExpert = pickableExperts.find((expert) => expert.id === activeExpertId)
-  const expertLabel = activeExpert?.display_name || activeExpert?.id || t('chat.title.defaultExpert', { defaultValue: '默认' })
-  const welcome = useChatWelcome(activeExpertId, activeExpert?.source_template ?? null)
+  const activeExpert = pickableExperts.find((expert) => expert.id === (activeExpertId || generalExpert?.id || ''))
+  const expertLabel = activeExpert?.display_name || activeExpert?.id || (experts.isPending ? t('chat.title.loadingExpert', { defaultValue: '角色加载中…' }) : t('chat.title.noExpert', { defaultValue: '没有可用角色' }))
+  const welcome = useChatWelcome(activeExpertId || generalExpert?.id || '', activeExpert?.source_template ?? null)
   const title = session?.title?.trim() ? session.title : t('nav.newChat', { defaultValue: '新对话' })
   const visibleNotice = notice?.sessionId === (sessionId ?? null) ? notice.message : null
   const hasMessages = (history?.length ?? 0) > 0
@@ -147,7 +151,7 @@ export function ChatPage(_props: ChatPageProps): ReactNode {
     setNotice(null)
     setText('')
     try {
-      const targetId = sessionId ?? (await createSession(expertId || undefined)).id
+      const targetId = sessionId ?? (await createSession(expertId || generalExpert?.id)).id
       if (!sessionId) navigate(`/chat/${targetId}`, { replace: true })
       setHistory((current) => current ?? [])
       const result = await sendChatMessage(targetId, sentText)
@@ -388,9 +392,10 @@ export function ChatPage(_props: ChatPageProps): ReactNode {
                 {!sessionId ? (
                   <label className="composer-expert">
                     <span>{t('chat.expert', { defaultValue: '专家' })}</span>
-                    {/* default_enabled=false 的专家不进下拉，否则专家页那个开关就是个摆设。 */}
-                    <select value={expertId} onChange={(event) => setExpertId(event.target.value)}>
-                      <option value="">{t('chat.expertNone', { defaultValue: '（默认）' })}</option>
+                    {/* 这里**不再有**「（默认）」空选项：空选择就是「未选角色」，
+                        而未选角色时其实没有任何人格在跑 —— 界面上给这个选项就是在骗人。
+                        兜底改由 generalExpert 承担，服务端建会话时也会再兜一层。 */}
+                    <select value={expertId || generalExpert?.id || ''} onChange={(event) => setExpertId(event.target.value)}>
                       {pickableExperts.map((expert) => (
                         <option key={expert.id} value={expert.id}>
                           {expert.display_name || expert.id}

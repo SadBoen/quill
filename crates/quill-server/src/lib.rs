@@ -14,6 +14,7 @@ pub mod db;
 pub mod dispatch_ledger;
 pub mod error;
 pub mod experts_repo;
+pub mod general_expert;
 pub mod llm;
 pub mod llm_providers;
 pub mod mcp_client;

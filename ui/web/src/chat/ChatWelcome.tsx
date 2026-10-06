@@ -51,7 +51,16 @@ export function ChatWelcome({ expertName, welcome, quickPrompts, onPickPrompt, f
           defaultValue: '正在和「{{expert}}」对话。下面的卡片会填进输入框，你自己决定什么时候发。',
         })
       : t('chat.welcome.promptHint', { defaultValue: '下面的卡片会填进输入框，你自己决定什么时候发。' })
-    : t('chat.welcome.description', { defaultValue: '先挑一个角色，再描述你要做的事；模型会在这条会话里接着上下文往下答。' })
+    : expertName
+      ? // 已经有角色在位（没显式选时是通用专家），再说「先挑一个角色」就是在
+        // 骗用户多跑一趟。直接说清楚现在是谁在答。
+        t('chat.welcome.readyWithExpert', {
+          expert: expertName,
+          defaultValue: '现在由「{{expert}}」应答，直接描述你要做的事即可；想换角色在输入框左边换。',
+        })
+      : // 真的一个角色都没有（专家还没加载出来，或后端补齐失败）——这时候
+        // 指引去专家页是对的，但要说清楚原因，别让用户以为必须先注册。
+        t('chat.welcome.description', { defaultValue: '还没有可用角色，所以先挑一个；模型会在这条会话里接着上下文往下答。' })
 
   return (
     <section className="chat-welcome">
@@ -88,7 +97,7 @@ export function ChatWelcome({ expertName, welcome, quickPrompts, onPickPrompt, f
           </div>
         ) : (
           <Link className="primary-button chat-welcome-cta" to="/experts">
-            {t('chat.welcome.cta', { defaultValue: '去专家页挑一个角色' })}
+            {t('chat.welcome.cta')}
           </Link>
         )}
       </div>

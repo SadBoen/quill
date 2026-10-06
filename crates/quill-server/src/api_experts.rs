@@ -24,6 +24,10 @@ pub fn list_for_tools(
 }
 
 pub async fn list(State(state): State<AppState>, user: AuthUser) -> Result<Json<Value>, ApiError> {
+    // 先保证「通用专家」存在，再列。
+    // 不这么做的话，一个从没建过专家的用户打开界面只会看到
+    // 「还没有「默认启用」的角色」——而对话页恰恰要求**至少有一个角色可选**。
+    let _ = crate::general_expert::ensure(&state, user.0.user_id)?;
     let registry = registry(&state)?;
     let experts = map_agent_error("列出专家", registry.list_visible(&user.0.user_id))?;
     Ok(Json(json!({
@@ -212,6 +216,10 @@ fn expert_json(e: &Expert) -> Value {
         "visibility": e.visibility().as_wire(),
         "default_enabled": e.default_enabled(),
         "is_builtin": e.is_builtin(),
+        // 「哪一个是通用专家」由服务端说了算，前端不许自己认 id ——
+        // 把 `general` 硬编码在前端的话，后端换 id 时界面会跟着说谎，
+        // 而且没人会发现。显式布尔字段，前端只负责显示。
+        "is_general": e.id().as_str() == crate::general_expert::GENERAL_EXPERT_ID,
     })
 }
 

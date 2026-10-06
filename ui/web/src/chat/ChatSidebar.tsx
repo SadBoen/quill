@@ -200,8 +200,13 @@ export function ChatSidebar({
                   emptyText={t('chat.sidebar.noSessions', { defaultValue: '这个角色还没有会话。' })}
                 />
               ) : null}
+              {/* 这里曾经叫「默认（未选角色）」。那个名字是错的：空 expert_id
+                  根本不表示「默认角色」，而是**没有角色**——没有人格在跑。
+                  新建的会话一律带上通用专家，不会再落进这个桶；
+                  这里保留它是为了让「在补上通用专家之前建的旧会话」还能被找到，
+                  所以标题改成实话，并说明这些会话当时的状态。 */}
               <SessionGroup
-                title={t('chat.sidebar.defaultGroup', { defaultValue: '默认（未选角色）' })}
+                title={t('chat.sidebar.unboundGroup', { defaultValue: '未绑定角色的旧会话' })}
                 sessions={defaultSessions}
                 activeSessionId={activeSessionId}
                 onOpenSession={onOpenSession}
@@ -209,7 +214,7 @@ export function ChatSidebar({
                 deletingId={deletingId}
                 emptyText={
                   activeExpert
-                    ? t('chat.sidebar.noDefaultSessions', { defaultValue: '没有未指定角色的会话。' })
+                    ? t('chat.sidebar.noUnboundSessions', { defaultValue: '没有未绑定角色的旧会话。' })
                     : sessions.length
                       ? t('chat.sidebar.pickExpert', { defaultValue: '上面选一个角色，看它的会话记录。' })
                       : t('chat.sidebar.emptyAll', { defaultValue: '还没有会话，先新建一个。' })

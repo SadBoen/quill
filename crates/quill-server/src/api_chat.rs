@@ -151,12 +151,16 @@ pub async fn create(
 ) -> Result<axum::response::Response, ApiError> {
     let db = state.db()?;
     let uid = user.0.user_id;
-    let expert_id = body
+    let requested_expert = body
         .get("expert_id")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(String::from);
+    // 没指定角色就自动挂通用专家，不留 `expert_id = null`。
+    // 留空的代价是实打实的：会话建出来 `persona_applied=false`，界面上
+    // 归进「默认（未选角色）」分组，用户以为在跟某个角色说话，其实没有。
+    let expert_id = crate::general_expert::resolve_for_session(&state, uid, requested_expert)?;
     let title = body
         .get("title")
         .and_then(Value::as_str)
@@ -205,9 +209,9 @@ pub async fn create(
                 .execute(&pool)
                 .await
                 .map_err(|e| crate::db::storage_error("建会话", e))?;
-                if let Some(e) = expert_for_write {
+                if !expert_for_write.is_empty() {
                     sqlx::query("UPDATE sessions SET expert_id = ? WHERE user_id = ? AND id = ?")
-                        .bind(e)
+                        .bind(expert_for_write)
                         .bind(uid.as_bytes().to_vec())
                         .bind(id.to_vec())
                         .execute(&pool)
@@ -222,12 +226,11 @@ pub async fn create(
     })
     .map_err(storage)?;
 
-    // 建会话时就体检一次绑定：专家不存在/已删的会话照样建（用户可能只是想聊天），
-    // 但必须在响应里明说「你选的专家没生效」，不能等发消息时才让用户自己发现。
-    let persona = match expert_id.as_deref() {
-        Some(_) => resolve_persona(&db, uid, id).await?,
-        None => SessionPersona::default(),
-    };
+    // 建会话时就体检一次绑定：调用方指定了专家但那个专家不存在/已删的会话照样建
+    // （用户可能只是想聊天），但必须在响应里明说「你选的专家没生效」，
+    // 不能等发消息时才让用户自己发现。
+    // 没指定的那些已经在 `resolve_for_session` 里换成通用专家了，所以这里恒有值。
+    let persona = resolve_persona(&db, uid, id).await?;
 
     Ok(Json(json!({
         "id": hex_id,

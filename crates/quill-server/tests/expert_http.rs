@@ -130,7 +130,26 @@ async fn expert_crud_walks_the_full_lifecycle_over_http() {
         "列表必须 200（不是 501/503）"
     );
     let body = text(resp).await;
-    assert!(body.contains("\"experts\":[]"), "初始列表应为空：{body}");
+    // 通用专家是**自动补齐**的：对话页不允许「未选角色就聊天」，所以
+    // 一个从没建过专家的用户打开界面也必须至少有一个可选角色。
+    // 这里从「断言列表为空」改成「断言恰好是通用专家这一条」——
+    // 原断言只钉住「没有别的」，钉不住「有没有它」。
+    let parsed: serde_json::Value = serde_json::from_str(&body).expect("响应必须是 JSON");
+    let list = parsed["experts"].as_array().expect("experts 必须是数组");
+    assert_eq!(list.len(), 1, "新用户应当恰好只有通用专家：{body}");
+    assert_eq!(list[0]["id"], "general", "补出来的必须是通用专家：{body}");
+    assert_eq!(
+        list[0]["is_general"], true,
+        "服务端必须自己说哪一个是通用专家，前端不许硬编码 id：{body}"
+    );
+    assert_eq!(
+        list[0]["default_enabled"], true,
+        "通用专家必须默认启用，否则对话页下拉里没有它：{body}"
+    );
+    assert!(
+        !list[0]["instructions"].as_str().unwrap_or_default().is_empty(),
+        "通用专家的人格正文不许是空串——那等于没建：{body}"
+    );
 
     let resp = build_router(app.clone())
         .oneshot(req(
