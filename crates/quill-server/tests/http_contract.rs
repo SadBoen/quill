@@ -397,7 +397,7 @@ async fn created_session_id_is_byte_identical_to_the_listed_one() {
 async fn every_contract_route_responds_and_is_never_a_false_success() {
     // 「已实现」清单必须跟着实现一起长，否则新接通的路由会因为不再返回 501
     // 而被判成「假成功」——这正是本测试要抓的东西，所以清单不能手懒。
-    const IMPLEMENTED: [(&str, &str); 49] = [
+    const IMPLEMENTED: [(&str, &str); 52] = [
         ("GET", "/api/version"),
         ("GET", "/api/auth/me"),
         ("GET", "/api/healthz"),
@@ -459,6 +459,13 @@ async fn every_contract_route_responds_and_is_never_a_false_success() {
         ("PUT", "/api/admin/providers/{id}/default"),
         ("GET", "/api/admin/providers/{id}/models"),
         ("GET", "/api/admin/models"),
+        // 备份三条（2026-10-06 接线，B4-1）。工作区页有真按钮，打 501 就是
+        // 「点了必失败」。注意 `restore` 虽在这份清单里（不再是 501），
+        // 但它**不还原** —— 响应里 `restored: false`，并给出停服后要跑的命令；
+        // `backup_http.rs` 钉死了「不许出现假成功」。
+        ("POST", "/api/backup/export"),
+        ("POST", "/api/backup/verify"),
+        ("POST", "/api/backup/restore"),
     ];
 
     for &(method, path) in CONTRACT_ROUTES {

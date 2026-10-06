@@ -30,6 +30,8 @@ quill-control = { path = "../quill-control" }
 quill-agent = { path = "../quill-agent" }
 quill-wiki = { path = "../quill-wiki" }
 quill-provider = { path = "../quill-provider" }
+# 备份：导出与还原的实现在这里，HTTP 接线见 `src/api_backup.rs`。
+quill-backup = { path = "../quill-backup" }
 
 axum = { version = "0.8", features = ["http1", "json", "query", "tokio"] }
 

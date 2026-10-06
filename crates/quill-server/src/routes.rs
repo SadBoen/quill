@@ -6,6 +6,7 @@ use axum::Router;
 use crate::api_admin;
 use crate::api_chat;
 use crate::api_auth;
+use crate::api_backup;
 use crate::api_dispatch;
 use crate::api_experts;
 use crate::api_extensions;
@@ -197,25 +198,13 @@ pub fn build_router(state: AppState) -> Router {
             }),
         );
 
+    // 备份。目标目录由服务端按相对名解析（见 api_backup）：
+    // 浏览器不能指定落盘位置。`restore` **不在进程内做** ——
+    // 服务正持有 SQLite 文件，它如实说明原因并给出停服后要跑的命令。
     let backup = Router::new()
-        .route(
-            "/api/backup/export",
-            post(|_u: crate::auth::AuthUser| async {
-                not_implemented("POST", "/api/backup/export")
-            }),
-        )
-        .route(
-            "/api/backup/restore",
-            post(|_u: crate::auth::AuthUser| async {
-                not_implemented("POST", "/api/backup/restore")
-            }),
-        )
-        .route(
-            "/api/backup/verify",
-            post(|_u: crate::auth::AuthUser| async {
-                not_implemented("POST", "/api/backup/verify")
-            }),
-        );
+        .route("/api/backup/export", post(api_backup::export))
+        .route("/api/backup/restore", post(api_backup::restore))
+        .route("/api/backup/verify", post(api_backup::verify));
 
     let upgrade = Router::new()
         .route("/api/version", get(version))

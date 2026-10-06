@@ -1249,6 +1249,7 @@ dependencies = [
  "http-body-util",
  "quill-adapters",
  "quill-agent",
+ "quill-backup",
  "quill-control",
  "quill-domain",
  "quill-provider",
