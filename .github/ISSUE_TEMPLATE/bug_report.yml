@@ -1,0 +1,49 @@
+name: 缺陷报告
+description: 界面或接口的行为与预期不符
+labels: ["状态:待处理", "类型:缺陷"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 实际发生了什么
+      description: 贴真实的报错、响应体或界面文字，不要转述。
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 你以为应该是什么
+      description: 说清「预期」的具体判据，而不只是「不该这样」。
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 怎么复现
+      description: 从哪个界面/命令开始，点或输了什么。
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本与平台
+      placeholder: "commit 短哈希；Windows 11 / WSL2 Ubuntu"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志或响应
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 自查
+      options:
+        - label: 我搜过现有 issue，没有重复
+        - label: 这是行为与预期不符（若是「还没这个功能」，请改用功能请求）

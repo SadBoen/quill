@@ -1,0 +1,42 @@
+name: 功能请求
+description: 想要一个还不存在的能力
+labels: ["状态:待处理", "类型:功能"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你遇到的真实困境
+      description: 说场景，不要直接给方案。方案往往是从困境里长出来的。
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 你想到的做法
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 怎么算做成了
+      description: |
+        写成能验证的判据，最好是「跑一条命令看输出」或「在界面上点一遍」，
+        而不是「支持 XX 功能」。本项目的判据只接受这两种。
+    validations:
+      required: true
+
+  - type: dropdown
+    id: milestone
+    attributes:
+      label: 大致属于哪个里程碑
+      options: [M0 地基, M1 单人闭环, M2 专家与专家团真执行, M3 上下文与成本, M4 数据安全, M5 多用户与多端, M6 上游对齐, "还没想好"]
+    validations:
+      required: false
+
+  - type: textarea
+    id: upstream
+    attributes:
+      label: 上游是怎么做的
+      description: 若 goose 或 octop 已有对应机制，请给出 `file:line` 出处。

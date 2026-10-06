@@ -1,0 +1,153 @@
+# CI：每次 push 与 PR 都跑一遍门禁。
+#
+# **为什么要有它**：这个项目的门禁（`.scripts/gates.sh`）此前只靠人记得手动跑。
+# 后果是「门禁全绿」这句话没有任何强制力 —— 它只证明**有人跑过**，
+# 不证明**现在还是绿的**。别的 clone 下来的人更是完全无从验证。
+#
+# **这个工作流刻意分成两个 job**，因为这些门禁对环境的依赖根本不同：
+#
+#   · gates-core —— fresh clone 上就能跑的那些：Rust 构建与全部测试、
+#     前端 typecheck / lint / vitest / build、乱码、i18n、以及门禁自测。
+#     不需要任何 secret，任何人（包括 fork 的 PR）都能跑。
+#   · gates-upstream —— 需要**私有**上游参考源码（.octop-ref/octop）的那三道：
+#     专家库源 vs 产物双向比对、UPSTREAM.md 的 pin 核对、以及
+#     UPSTREAM-USAGE.md 里每条上游引用的逐行核验。
+#     octop 不在公开仓库里（见 .scripts/fetch-vendor.sh 的说明），
+#     所以这个 job 只在仓库 secrets 里配了 OCTOP_REPO 时才跑；
+#     没配就**如实跳过并说明**，绝不假装通过。
+#
+# 那三道门禁在缺上游时会让 gates.sh 以退出码 1 结束并写明「不算全绿」——
+# 这是刻意的：本地开发者有那份检出，跑不满就该看见。CI 里则拆成独立 job，
+# 因为 GitHub 无法给 fork 的 PR 注入 secret。
+#
+# 另注：`gates-core` 里没有跑 `.upstream-check.mjs --online`（那要联网查上游
+# 是不是已经前进）。它是有意保留给本地按需执行的，理由同上：它核的是
+# 「上游有没有比我们记录的更新」，属于需要判断的时刻，不属于每次必跑的卫生检查。
+
+name: gates
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# 同一分支的新 push 直接取消上一轮：CI 最怕的是排队十几轮跑同一件事。
+concurrency:
+  group: gates-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gates-core:
+    name: 门禁（可公开跑的部分）
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      # 只装工具链本体。这里刻意**不**开 clippy/rustfmt：它们要花时间装，
+      # 而本工作流并没有跑它们 —— 装了不用是纯浪费。等哪天真把 clippy
+      # 接进门禁（带 `-- -D warnings`），再把 components 加回来。
+      - name: 装 Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # 缓存 cargo 产物与 npm 的下载缓存（**不是** node_modules）：
+      # 下面跑的是 `npm ci`，它会先删掉 node_modules 再按 lock 重装 ——
+      # 所以缓存 node_modules 毫无意义，只是白白占磁盘。npm 的下载缓存
+      # （~/.npm）才是 `npm ci` 真正能复用的部分，由 setup-node 的
+      # cache: npm 按 package-lock.json 的哈希来管理。
+      - name: 缓存 cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ hashFiles('Cargo.lock') }}-${{ runner.os }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: ui/web/package-lock.json
+
+      # `npm ci` 而不是 `npm install`：前者严格按 package-lock.json 装，
+      # lock 与 package.json 对不上时**直接失败**。这条纪律值得保住 ——
+      # 一旦放了 `|| npm install`，lock 就只是个摆设了，CI 与本地
+      # 装的会是两棵不同的依赖树，而门禁的绿是其中一棵的绿。
+      # 注意本项目本地有个坑：node_modules 在 WSL 与 Windows 之间共用，
+      # 跑完一侧另一侧会报 native binding 缺失。在 CI 里没有这个问题，
+      # 因为每个 job 都是全新的一次安装。
+      - name: 装前端依赖
+        working-directory: ui/web
+        run: npm ci --no-audit --no-fund
+
+      # 下面逐步跑，而不是直接调 gates.sh：那个脚本在本机（有无上游检出、
+      # 有无 node）会按环境调整步骤，在 CI 里跑反而会得到一个含义模糊的
+      # 退出码。这里把每一步都显式写出来，失败时 GitHub 界面直接指出是哪一道。
+      - name: 门禁自测
+        run: bash .scripts/gate-selftest.sh
+
+      - name: 构建
+        run: cargo build --workspace
+
+      - name: Rust 全部测试
+        run: cargo test --workspace
+
+      - name: 文本门禁 · 乱码
+        run: node .mojibake-check.mjs
+
+      - name: 文本门禁 · i18n
+        run: node .i18n-check.mjs
+
+      - name: 文本门禁 · 上游判定的自测
+        run: node .scripts/upstream-check-selftest.mjs
+
+      - name: 文本门禁 · 出处判定的自测
+        run: node .scripts/provenance-selftest.mjs
+
+      - name: 前端 typecheck
+        working-directory: ui/web
+        run: npm run typecheck
+
+      - name: 前端 lint
+        working-directory: ui/web
+        run: npm run lint
+
+      - name: 前端测试
+        working-directory: ui/web
+        run: npx vitest run
+
+      - name: 前端 build
+        working-directory: ui/web
+        run: npm run build
+
+  gates-upstream:
+    name: 门禁（需要私有上游的那部分）
+    # 没配 OCTOP_REPO 就整条跳过，并在界面上显示为 skipped —— 不是通过。
+    if: ${{ github.event_name != 'pull_request' && secrets.OCTOP_REPO != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: 取回上游参考源码
+        env:
+          OCTOP_REPO: ${{ secrets.OCTOP_REPO }}
+        run: bash .scripts/fetch-vendor.sh
+
+      - name: 专家库源 vs 产物
+        run: node .library-check.mjs
+
+      - name: 上游基线核对
+        run: node .upstream-check.mjs
+
+      - name: 每条上游引用逐行核验
+        run: node .provenance-check.mjs
