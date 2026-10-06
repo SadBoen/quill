@@ -563,6 +563,55 @@ mod hub_error_tests {
         assert!(d.contains("读技能市场列表失败"), "{d}");
         assert!(d.contains("skillSets"), "真正的原因要留着：{d}");
     }
+
+    /// 超限不许拿「连不上」那句「下一步」。
+    ///
+    /// 这一层原先把 `HubError::TooLarge` 一起塞进 `other`，
+    /// 于是 detail 说对了、`next_step` 却在教用户去查网络 ——
+    /// 而网络上没有任何毛病。下面把两档都钉住，防止**只**改一边。
+    ///
+    /// 状态码两档都是 503，理由写在这里免得下次有人顺手改成 413：
+    /// 413 的定义是**请求体**太大（RFC 9110 §15.5.14），我们的请求只有几百字节，
+    /// 发 413 等于告诉调用方「你的请求被拒了」，那是一句新的假话。
+    /// 502 更贴切，但 `ApiError` 里上游类错误统一是 503，
+    /// 且 `error.rs` 明写「状态码另议」；把新状态码留给一次专门的对外改动。
+    #[test]
+    fn an_oversized_response_gets_its_own_advice_and_never_the_network_one() {
+        let oversize = hub_error(
+            "拉技能市场榜单失败",
+            HubError::TooLarge {
+                label: "/api/v1/showcase/recommended".to_string(),
+                limit: crate::skillhub::MAX_HTTP_BYTES,
+            },
+        );
+        assert_eq!(
+            oversize.status(),
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "413 是「请求体太大」，这里超的是上游的响应，不是我们的请求"
+        );
+        assert_eq!(oversize.next_step(), super::SKILLHUB_OVERSIZE_ADVICE);
+        for wrong in ["先确认网络能到上游", "检查网络", "可达的"] {
+            assert!(
+                !oversize.next_step().contains(wrong),
+                "超限不是连不上，「下一步」里不该出现「{wrong}」：{}",
+                oversize.next_step()
+            );
+        }
+        // detail 要留住上限与是哪个接口，用户才知道该拿什么去比。
+        let d = oversize.detail();
+        assert!(d.contains("32"), "上限要给出数字：{d}");
+        assert!(d.contains("/api/v1/showcase/recommended"), "接口要说清：{d}");
+
+        // 反过来也得钉住：真正的传输失败仍然要给网络建议，
+        // 别把这个 bug 修成「谁都不再说网络」。
+        let transport = hub_error("拉技能市场榜单失败", HubError::Fetch("refused".into()));
+        assert!(transport.next_step().contains("先确认网络能到上游"));
+        assert_ne!(
+            transport.next_step(),
+            oversize.next_step(),
+            "两档的「下一步」必须是两句不同的话"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -773,10 +822,23 @@ fn hub_error(what: &str, e: crate::skillhub::HubError) -> ApiError {
         HubError::Status(404) => ApiError::entity_not_found(format!(
             "{what}：技能市场里没有这个东西（上游返回 404），它可能已被下架。"
         )),
-        other => ApiError::upstream_unavailable(
-            format!("{what}：{}", other.message()),
-            SKILLHUB_ADVICE,
-        ),
+        // 剩下的都归「上游没给出可用结果」，但**超限必须自己一句下一步**。
+        //
+        // 之前超限掉进下面这个 `other`，于是响应里的 `next_step` 说的是
+        // 「先确认网络能到上游 / 换可达的镜像」—— 那一档的前提是**市场连不上**，
+        // 而这一次市场好好地回了话，只是回得超过 `MAX_HTTP_BYTES`。
+        // 把没坏的东西报成坏了，用户会去查一件从头到尾都正常的东西。
+        //
+        // 判定用 `is_oversize()`（枚举变体本身），**不拿中文认字**：
+        // 认字的判据会跟着文案改而悄悄失效，那正是这条防线最初塌掉的方式。
+        other => {
+            let advice = if other.is_oversize() {
+                SKILLHUB_OVERSIZE_ADVICE
+            } else {
+                SKILLHUB_ADVICE
+            };
+            ApiError::upstream_unavailable(format!("{what}：{}", other.message()), advice)
+        }
     }
 }
 
@@ -789,6 +851,32 @@ const SKILLHUB_ADVICE: &str =
      先确认网络能到上游；若是自建或镜像的市场，用 `QUILL_SKILLHUB_HOST` \
      指向可达的地址后重启 quill-server。已安装的技能不受影响，\
      它们本来就在本机磁盘上。";
+
+/// 技能市场「回得太大」这一档的「下一步」。
+///
+/// 与 [`SKILLHUB_ADVICE`] 是**对偶**的两句，不能混用：
+/// 那一句的前提是「市场连不上」，这一句的前提是
+/// 「市场好好地回了话，只是回得超过 `skillhub::MAX_HTTP_BYTES`，被我们读的时候拒收了」。
+///
+/// ## 为什么必须分开
+///
+/// 掉进上一句时，用户被叫去**检查网络**、去换一个**可达的**镜像 ——
+/// 而网络没坏、镜像也是通的：它确实回了东西，只不过回得太大。
+/// 换一个可达的镜像只会原样再撞一次同样的上限，
+/// 而真正能动的那两件事（换一个更小的技能包、把上限调高）一个字都没被提到。
+///
+/// 措辞照 `SKILLHUB_ADVICE` 的路子：先说清这次的**前提**是什么，
+/// 再给能照着做的下一步，最后仍要提一句「已安装的技能不受影响」——
+/// 那是这个文件里所有市场类错误共有的收尾，用户最关心的就是这句。
+const SKILLHUB_OVERSIZE_ADVICE: &str =
+    "技能市场（SkillHub）是通的，回来的响应比我们单次接收的上限还大，\
+     于是在读的过程中被我们拒收了 —— 网络与镜像都没有坏，\
+     重试同一个地址不会有结果。\
+     下一步：换一个更小的技能包，或把搜索条件收窄后重试；\
+     若某个市场的响应本来就大于上限，用 `QUILL_SKILLHUB_HOST` \
+     指向一个响应更小的 SkillHub，或改高单次接收的上限\
+     （它是编译期常量 `MAX_HTTP_BYTES`，不读环境变量）后重新构建 quill-server。\
+     已安装的技能不受影响，它们本来就在本机磁盘上。";
 
 #[derive(serde::Deserialize)]
 pub struct HubSkillQuery {

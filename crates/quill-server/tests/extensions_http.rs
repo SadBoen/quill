@@ -1700,3 +1700,316 @@ async fn toggling_a_missing_skill_says_so_with_a_next_step() {
         "资源级 404 不该套上路由级的前缀：{v}"
     );
 }
+
+// ------------------------------------------- 技能市场：超限不许说成「连不上」
+//
+// 这一段钉的是**第二层**的错路。`skillhub` 那边已经把「响应体超上限」
+// 拆成独立的 `HubError::TooLarge`，可 HTTP 这一层原先让它掉进
+// 「不是 Input 也不是 404 ⇒ 上游不可用」的兜底支，
+// 于是响应体里的 `next_step` 说的是「先确认网络能到上游 / 换可达的镜像」。
+// 镜像是通的，它确实回了东西，只不过回得太大 —— 用户去查网络、查镜像，
+// 查的是一件从头到尾都正常的东西。里面的断言方向因此是**反的**：
+// 超限那句里不许出现网络建议，而真正的传输失败**必须**还有网络建议。
+
+/// 技能市场用例共用的串行闸。
+///
+/// 上游地址走 `QUILL_SKILLHUB_HOST`，而 `skillhub::host()` 每次调用现读环境变量，
+/// 环境变量却是**整个测试进程共用**的：两条用例同时改它，就会各自拿着对方的
+/// 地址跑，验的东西不再是它自己摆的那一套。所以改地址的用例一律先拿这把闸。
+static HUB_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// 把上游指向某个假服务器，离开作用域时**原样还原**。
+///
+/// 用 Drop 而不是每个用例结尾手动还原：中途 panic 时环境变量也会被还原，
+/// 否则后面 48 条用例会带着一个指向假上游的地址跑，症状是莫名其妙的超时。
+struct HubEnv {
+    _guard: std::sync::MutexGuard<'static, ()>,
+    previous: Option<String>,
+}
+
+impl HubEnv {
+    async fn point_at(host: &str) -> Self {
+        let guard = HUB_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let previous = std::env::var("QUILL_SKILLHUB_HOST").ok();
+        std::env::set_var("QUILL_SKILLHUB_HOST", host);
+        Self {
+            _guard: guard,
+            previous,
+        }
+    }
+}
+
+impl Drop for HubEnv {
+    fn drop(&mut self) {
+        match &self.previous {
+            Some(v) => std::env::set_var("QUILL_SKILLHUB_HOST", v),
+            None => std::env::remove_var("QUILL_SKILLHUB_HOST"),
+        }
+    }
+}
+
+/// 一个**回不完**的上游：chunked 一直灌，灌到客户端自己拒收为止。
+///
+/// 为什么用「回不完」而不是「回一个定长的巨大文件」：后者要在测试机上真搬
+/// 32 MiB 过去，而前者只要求**确实超过上限**这件事由客户端的边读边判发现 ——
+/// 那正是 `skillhub::read_capped` 的职责，也正是这里要验的那条路。
+async fn never_ending_upstream() -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("假上游必须能绑回环端口");
+    let addr = listener.local_addr().expect("读本机地址");
+    tokio::spawn(async move {
+        while let Ok((mut sock, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut head = [0u8; 2048];
+                let _ = sock.read(&mut head).await;
+                let head = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                            Transfer-Encoding: chunked\r\n\r\n";
+                if sock.write_all(head.as_bytes()).await.is_err() {
+                    return;
+                }
+                let block = vec![b'x'; 64 * 1024];
+                let frame = format!("{:x}\r\n", block.len());
+                // 客户端读够上限就会断连，write 随之报错，这里顺势收工。
+                loop {
+                    if sock.write_all(frame.as_bytes()).await.is_err()
+                        || sock.write_all(&block).await.is_err()
+                        || sock.write_all(b"\r\n").await.is_err()
+                    {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    format!("http://{addr}")
+}
+
+/// 一个**当场没人听**的端口：绑一下拿到号，立刻放掉。
+///
+/// 用它造真正的传输失败（connection refused）。这是「超限」那条路的**对照** ——
+/// 两条用例走的是不同的分支，靠的是不同的 `HubError`，不是同一句话的两种写法。
+async fn unreachable_host() -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("占一个回环端口");
+    let addr = listener.local_addr().expect("读本机地址");
+    drop(listener);
+    format!("http://{addr}")
+}
+
+/// 「一个榜单正常、其余回不完」的上游，用来验 `kind=all` 的**部分**失败。
+///
+/// 榜单路径取自 `skillhub::showcase_path`（`/api/v1/showcase/<kind>`），
+/// 这里按请求行里出现没出现 `ok_path` 决定回哪一种。
+async fn one_board_ok_rest_never_ending(ok_path: &str, ok_body: &'static str) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let ok_path = ok_path.to_string();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("假上游必须能绑回环端口");
+    let addr = listener.local_addr().expect("读本机地址");
+    tokio::spawn(async move {
+        while let Ok((mut sock, _)) = listener.accept().await {
+            let ok_path = ok_path.clone();
+            tokio::spawn(async move {
+                let mut head = [0u8; 4096];
+                let _ = sock.read(&mut head).await;
+                let head = String::from_utf8_lossy(&head).to_string();
+                if !head.contains(&ok_path) {
+                    let head = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                                Transfer-Encoding: chunked\r\n\r\n";
+                    let _ = sock.write_all(head.as_bytes()).await;
+                    let block = vec![b'x'; 64 * 1024];
+                    let frame = format!("{:x}\r\n", block.len());
+                    loop {
+                        if sock.write_all(frame.as_bytes()).await.is_err()
+                            || sock.write_all(&block).await.is_err()
+                            || sock.write_all(b"\r\n").await.is_err()
+                        {
+                            return;
+                        }
+                    }
+                }
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\n\r\n",
+                    ok_body.len()
+                );
+                let _ = sock.write_all(head.as_bytes()).await;
+                let _ = sock.write_all(ok_body.as_bytes()).await;
+            });
+        }
+    });
+    format!("http://{addr}")
+}
+
+async fn hub_get(h: &Harness, query: &str) -> (StatusCode, serde_json::Value) {
+    let resp = build_router(h.state())
+        .oneshot(req(
+            "GET",
+            &format!("/api/extensions/skill-hub/rankings?{query}"),
+            TOKEN_A,
+        ))
+        .await
+        .expect("请求失败");
+    let st = resp.status();
+    let v = json_of(&body_text(resp).await);
+    (st, v)
+}
+
+/// 市场活着、只是回得太大：**不许**让用户去查网络。
+///
+/// 断言的方向是反的：先确认「说清了真的坏了什么」（上限、是哪个接口），
+/// 再确认「没说的话」——网络建议一个字都不许出现。
+#[tokio::test]
+async fn an_oversized_market_response_says_too_big_instead_of_check_the_network() {
+    let h = Harness::new("hub-oversize");
+    let _env = HubEnv::point_at(&never_ending_upstream().await).await;
+
+    let (status, v) = hub_get(&h, "kind=recommended").await;
+    let text = v.to_string();
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{text}");
+
+    let detail = v["error"]["detail"].as_str().unwrap_or("").to_string();
+    assert!(
+        detail.contains("32") && detail.contains("MiB"),
+        "超限要把具体上限说出来，用户才知道该拿什么去比：{text}"
+    );
+    assert!(
+        detail.contains("/api/v1/showcase/recommended"),
+        "要说清是哪个接口超了：{text}"
+    );
+
+    // 三句都只属于「连不上」。市场这时是通的，镜像是活的。
+    for wrong in ["先确认网络能到上游", "检查网络", "可达的"] {
+        assert!(
+            !text.contains(wrong),
+            "响应体是整个给用户看的东西，里面不该出现「{wrong}」：{text}"
+        );
+    }
+}
+
+/// 反过来钉住：真的连不上时，网络建议**必须**还在。
+///
+/// 别把上一条那个 bug 修成「谁都不再说网络」—— 那只是把误导换了个方向。
+#[tokio::test]
+async fn a_market_that_really_is_unreachable_still_gets_the_network_advice() {
+    let h = Harness::new("hub-unreachable");
+    let _env = HubEnv::point_at(&unreachable_host().await).await;
+
+    let (status, v) = hub_get(&h, "kind=recommended").await;
+    let text = v.to_string();
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{text}");
+    assert!(
+        v["error"]["next_step"]
+            .as_str()
+            .unwrap_or("")
+            .contains("先确认网络能到上游"),
+        "真的是连不上，就该说连不上：{text}"
+    );
+    // 也不能反向污染：这一档没有上限可言。
+    let detail = v["error"]["detail"].as_str().unwrap_or("").to_string();
+    assert!(
+        !detail.contains("太大") && !detail.contains("MiB"),
+        "传输失败与超限是两件事，不许互相冒充：{text}"
+    );
+}
+
+/// 两条用例必须是**两条不同的路**，不是同一句话的两种写法。
+///
+/// 上面两条各自钉了一半；这一条把它们并排比一次：
+/// 状态码相同是刻意的（413 说的是「请求体太大」，我们的请求只有几百字节，
+/// 发 413 等于编一句新的假话；理由另见 `hub_error_tests`），
+/// 但「下一步」与 detail 必须都不同。
+#[tokio::test]
+async fn oversize_and_transport_failure_are_two_different_paths_not_one_sentence() {
+    let h1 = Harness::new("hub-two-oversize");
+    let h2 = Harness::new("hub-two-transport");
+
+    let (oversize_status, oversize) = {
+        let _env = HubEnv::point_at(&never_ending_upstream().await).await;
+        hub_get(&h1, "kind=recommended").await
+    };
+    let (transport_status, transport) = {
+        let _env = HubEnv::point_at(&unreachable_host().await).await;
+        hub_get(&h2, "kind=recommended").await
+    };
+
+    assert_eq!(oversize_status, transport_status);
+    assert_ne!(
+        oversize["error"]["next_step"],
+        transport["error"]["next_step"],
+        "两档的「下一步」必须分得开：{}",
+        oversize["error"]["next_step"]
+    );
+    assert_ne!(
+        oversize["error"]["detail"], transport["error"]["detail"],
+        "两档的 detail 也必须分得开"
+    );
+}
+
+/// `kind=all` 的**部分**失败：成功的那几份照常返回，失败的按榜单记下来。
+///
+/// 记下来的每一句都要说清「这个榜单超限了」，而不是笼统一句「市场连不上」——
+/// 用户看到的是一个页签空着，不是整个市场消失。
+#[tokio::test]
+async fn a_kind_all_with_one_oversized_board_reports_that_board_by_name() {
+    let h = Harness::new("hub-all-partial");
+    let body = r#"{"section":"推荐","skills":[{"slug":"pdf","name":"PDF"}]}"#;
+    let _env = HubEnv::point_at(
+        &one_board_ok_rest_never_ending("/api/v1/showcase/recommended", body).await,
+    )
+    .await;
+
+    let (status, v) = hub_get(&h, "kind=all").await;
+    let text = v.to_string();
+    assert_eq!(status, StatusCode::OK, "{text}");
+
+    let errors = v["errors"].as_object().expect("errors 必须是一个对象");
+    assert!(
+        !errors.is_empty(),
+        "有一个榜单超了就不该当成「全部拉到了」：{text}"
+    );
+    assert!(
+        !errors.contains_key("recommended"),
+        "拉到的那个榜单不该混进 errors：{text}"
+    );
+    for (kind, msg) in errors {
+        let m = msg.as_str().unwrap_or("");
+        assert!(
+            m.contains("太大") && m.contains("MiB"),
+            "{kind} 超限要说清上限，而不是笼统说市场坏了：{m}"
+        );
+        assert!(
+            !m.contains("检查网络") && !m.contains("先确认网络能到上游"),
+            "{kind} 超限不许让用户去查网络：{m}"
+        );
+    }
+}
+
+/// `kind=all` 的**全部**失败：这一条是**已知缺口**，写下来当规格。
+///
+/// 六个榜单一个都没回来时，`skillhub::showcase_all()` 把每个榜单的结局
+/// 压成一个 `HubError::Fetch(String)` —— 里面嵌着各自已经写好的那句话，
+/// 可**变体**被压成了传输失败，于是这一层按「连不上」给出网络建议：
+/// 六个榜单全是因为太大才没的，用户却被叫去查网络。
+///
+/// 修好了：`showcase_all` 现在在聚合时**按类保留结局**（只要有一个是超限，
+/// 聚合结果也落在 `TooLarge` 上），六个榜单各自的理由仍逐个带出。
+#[tokio::test]
+async fn a_kind_all_whose_boards_are_all_oversized_is_not_a_network_failure() {
+    let h = Harness::new("hub-all-oversize");
+    let _env = HubEnv::point_at(&never_ending_upstream().await).await;
+
+    let (status, v) = hub_get(&h, "kind=all").await;
+    let text = v.to_string();
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{text}");
+    for wrong in ["先确认网络能到上游", "检查网络", "可达的"] {
+        assert!(
+            !text.contains(wrong),
+            "六个榜单全因超限而空，不该让用户去查网络（当前会被压成 Fetch）：{text}"
+        );
+    }
+}
