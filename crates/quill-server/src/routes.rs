@@ -12,6 +12,7 @@ use crate::api_experts;
 use crate::api_extensions;
 use crate::api_providers;
 use crate::api_teams;
+use crate::api_users;
 use crate::error::ApiError;
 use crate::state::AppState;
 
@@ -44,17 +45,12 @@ pub fn build_router(state: AppState) -> Router {
     let users = Router::new()
         .route(
             "/api/users",
-            get(|_u: crate::auth::AuthUser| async { not_implemented("GET", "/api/users") })
-                .post(|_u: crate::auth::AuthUser| async { not_implemented("POST", "/api/users") }),
+            get(api_users::list).post(|| async { api_users::create_not_allowed() }),
         )
         .route(
             "/api/users/{id}",
-            patch(|_u: crate::auth::AuthUser, _id: Path<String>| async {
-                not_implemented("PATCH", "/api/users/{id}")
-            })
-            .delete(|_u: crate::auth::AuthUser, _id: Path<String>| async {
-                not_implemented("DELETE", "/api/users/{id}")
-            }),
+            patch(api_users::set_status)
+                .delete(|id: Path<String>| async move { api_users::delete_not_allowed(&id) }),
         );
 
     let experts = Router::new()

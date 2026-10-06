@@ -47,7 +47,11 @@ use quill_control::{ControlError, ControlPlane, RegistrationRequest, SystemClock
 /// 不能把 `SqlitePool` 长期持有在 AppState 里：`DbBridge` 用的是「单线程 + 独占池」
 /// 的模型，池的所有权留在它的 worker 里，跨线程直接用会踩数据竞争。
 /// 所以每个需要 ControlPlane 的请求都进 `call` 一次，用完即还。
-async fn with_control<T, F>(db: &Arc<DbBridge>, pbkdf2: quill_control::Pbkdf2Params, f: F) -> Result<T, ControlError>
+pub(crate) async fn with_control<T, F>(
+    db: &Arc<DbBridge>,
+    pbkdf2: quill_control::Pbkdf2Params,
+    f: F,
+) -> Result<T, ControlError>
 where
     F: FnOnce(
             ControlPlane,
@@ -85,7 +89,7 @@ where
     }
 }
 
-fn control_err(op: &str, e: ControlError) -> ApiError {
+pub(crate) fn control_err(op: &str, e: ControlError) -> ApiError {
     // 对外不区分「用户不存在」和「口令不对」：统一走 401 且文案逐字相同，
     // 否则这个端点就成了用户名枚举器。服务端日志里保留真实原因。
     match &e {
@@ -127,6 +131,25 @@ fn control_err(op: &str, e: ControlError) -> ApiError {
         )),
         ControlError::PasswordEqualsUsername => ApiError::bad_request(
             "口令不能和用户名相同。下一步：换一个不同的口令。".to_string(),
+        ),
+        // 权限与存在性**不是**内部错误。这几个变体原来掉进兜底、报成 500，
+        // 于是一个「你不是 owner」的正常拒绝被说成「服务端崩了」——
+        // 用户会去查日志，而不是去换个账号登录。
+        ControlError::NotAnOwner { operation } => ApiError::forbidden(format!(
+            "只有 owner（管理员）才能{operation}。当前账号是普通成员。\n\
+             下一步：用一个带 admin 的账号重新登录；本实例的 owner 由 \
+             QUILL_TOKENS 里的 `:admin` 后缀决定（部署时定，运行中不能改）。"
+        )),
+        ControlError::UserNotFound => ApiError::entity_not_found(
+            "用户不存在（或已被删除）。下一步：先 GET /api/users 看现有名册里的 id 原文。".to_string(),
+        ),
+        ControlError::SelfDisableForbidden => ApiError::conflict(
+            "不能把自己停用。停用之后这条会话立刻失效，你会把自己锁在门外。".to_string(),
+            "让别人停用你，或改用另一个 owner 账号。",
+        ),
+        ControlError::UsernameTaken { .. } => ApiError::conflict(
+            "用户名已被占用。".to_string(),
+            "换一个用户名；停用不释放用户名。",
         ),
         other => {
             eprintln!("[auth] {op} 失败：{other}");
