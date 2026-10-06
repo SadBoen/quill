@@ -51,6 +51,7 @@ need_text_gate=1
 if [ "$HAVE_NODE" = "0" ]; then
   echo "  → 文本门禁跳过：没有 node。这一段请在有 node 的一侧单独跑："
   echo "     node .mojibake-check.mjs / .i18n-check.mjs / .library-check.mjs / .upstream-check.mjs"
+  echo "     node .provenance-check.mjs / .scripts/upstream-check-selftest.mjs / .scripts/provenance-selftest.mjs"
   echo "     node .scripts/upstream-check-selftest.mjs"
   need_text_gate=0
 fi
@@ -109,6 +110,11 @@ if [ "$need_text_gate" = "1" ]; then
   # 上游判定的自测：合成输入，不联网。跟 gate-selftest.sh 同一个道理 ——
   # 「落后上游」那道判定以前永远判通过，只有钉住才抓得住。
   run_text_gate .scripts/upstream-check-selftest.mjs
+  # 出处校验：把 UPSTREAM-USAGE.md 里每条上游引用真的打开核一遍。
+  # 它抓的那类腐烂已经真实发生过一次 —— 只写「文件名 + 行号」，octop 有两个
+  # 同名文件，读者核不到会以为记录是假的。
+  run_text_gate .provenance-check.mjs
+  run_text_gate .scripts/provenance-selftest.mjs
 fi
 
 if [ "$TEXT_ONLY" = "1" ]; then

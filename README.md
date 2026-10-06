@@ -11,6 +11,7 @@
 | [`WORKING.md`](WORKING.md) | 怎么干活、哪些事该自己定 | 执行者 |
 | [`BACKLOG.md`](BACKLOG.md) | 具体还差什么，按里程碑分组 | 执行者 |
 | [`UPSTREAM.md`](UPSTREAM.md) | 跟的是 goose / octop 的哪一版 | 执行者 |
+| [`UPSTREAM-USAGE.md`](UPSTREAM-USAGE.md) | 我们用到上游的每一个机制，逐条给出处与状态 | 执行者 |
 
 当前进度见 `MILESTONES.md` 的「当前进度」一节。
 
@@ -34,7 +35,8 @@ bash .scripts/gates.sh
 node .mojibake-check.mjs    # 用户可见文本里不许有 U+FFFD
 node .i18n-check.mjs        # t() 的占位符要与语言包一致
 node .library-check.mjs     # vendor 进来的库逐字一致
-node .upstream-check.mjs    # 记录的基线与实际一致
+node .upstream-check.mjs    # 记录的基线与实际一致（--online 会判上游是否已前进）
+node .provenance-check.mjs  # UPSTREAM-USAGE.md 里每条上游引用逐行核过
 ```
 
 **已知的环境性失败**：`mcp_client::tests::a_process_that_never_answers_the_handshake_times_out_with_a_runnable_hint`
