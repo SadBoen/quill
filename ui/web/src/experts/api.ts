@@ -130,6 +130,88 @@ export function draftOf(expert: Expert): ExpertDraft {
   }
 }
 
+// ---------------------------------------------------------------------------
+// 专家市场
+//
+// 上游是 SkillHub 的 skillset，经 quill 服务端代理，所以这一层拿到的是
+// 「我们真的取到了什么」。`summary` / `total` 上游没给就是空值，
+// 界面得说「没给」，不许拿 slug 或本页条数顶替（编出来的东西比空着更坏）。
+// ---------------------------------------------------------------------------
+
+export const MARKET_ROUTE = '/api/experts/market'
+
+/** 市场列表的 react-query key。带页码，换页就是换 key。 */
+export const MARKET_KEY = ['experts', 'market'] as const
+
+/** 市场一页的条数。与后端 page_size 的默认值同口径。 */
+export const MARKET_PAGE_SIZE = 20
+
+/** 上游市场里的一个专家包（skillset），还没有装到本机。 */
+export interface MarketExpert {
+  slug: string
+  /** 上游的名字，可能是空串。 */
+  display_name: string
+  /** 上游给的说明。**空串就是上游没给**，界面不许拿 slug 顶替。 */
+  summary: string
+  scene: string
+  skill_slugs: string[]
+  skill_count: number
+  /** 这个 slug 是否已经装成「我的专家」了。 */
+  installed: boolean
+}
+
+export interface MarketList {
+  page: number
+  page_size: number
+  /** 上游给的总数。**`null` 就是上游没给** —— 界面这时只能说「共 ? 个」。 */
+  total: number | null
+  /** 我们真的连的上游地址，界面上要显示：用户得知道这不是内置列表。 */
+  host: string
+  items: MarketExpert[]
+}
+
+/** 安装单个技能的结果。后端只有这三个取值，别自己造第四个。 */
+export type MarketSkillStatus = 'installed' | 'already_present' | 'failed'
+
+export interface MarketInstallSkill {
+  slug: string
+  status: MarketSkillStatus
+  /** 只有 `failed` 才有：上游/服务端给的失败原因，原样透出。 */
+  reason?: string | null
+}
+
+export interface MarketInstallResult {
+  /** 专家已存在，这次没有覆盖。 */
+  already_installed: boolean
+  expert: { id: string; display_name: string; description: string }
+  /** 人格正文落在哪个文件、有多少字。
+   *  `source_file` 为 `null` = 人格取自库里那份（这次没下载包），
+   *  这时界面要另说一句，不能把空当文件名显示。 */
+  persona: { source_file: string | null; chars: number }
+  skills: MarketInstallSkill[]
+}
+
+export function listMarketExperts(page = 1, pageSize = MARKET_PAGE_SIZE): Promise<MarketList> {
+  return apiJson<MarketList>(`${MARKET_ROUTE}?page=${page}&page_size=${pageSize}`)
+}
+
+export function installMarketExpert(slug: string): Promise<MarketInstallResult> {
+  return apiJson<MarketInstallResult>(
+    `${MARKET_ROUTE}/${encodeURIComponent(slug)}/install`,
+    { method: 'POST' },
+  )
+}
+
+/** 市场里显示哪个名字。上游没给名字就说没给，不拿 slug 冒充（那不是名字）。 */
+export function marketLabel(item: MarketExpert): string {
+  return item.display_name?.trim() ?? ''
+}
+
+/** 市场里显示哪句说明。空串原样返回，由界面决定说「上游没给说明」。 */
+export function marketSummary(item: MarketExpert): string {
+  return item.summary?.trim() ?? ''
+}
+
 /** 团队即「一名主持人 + 2~8 名成员」的编队名单。quill 只存这份名单，不执行派工。 */
 export interface Team {
   team_id: string

@@ -34,6 +34,7 @@ import {
   IconTrash,
 } from './icons'
 import { LibraryTab } from './LibraryTab'
+import { MarketTab } from './MarketTab'
 import { TeamsTab } from './TeamsTab'
 import './experts.css'
 
@@ -115,38 +116,12 @@ export function ExpertsPage(): ReactNode {
       {tab === 'mine' ? <MyExperts onGoToLibrary={() => switchTab('library')} /> : null}
       {tab === 'team' ? <TeamsTab onGoToLibrary={() => switchTab('library')} /> : null}
       {tab === 'library' ? <LibraryTab /> : null}
-      {tab === 'market' ? (
-        <NotWiredTab
-          title={t('experts.marketTitle', { defaultValue: '市场' })}
-          detail={t('experts.marketDetail', {
-            defaultValue: '后端还没有这条路由，本轮未实现：quill 目前没有可安装专家的来源，所以这里没有条目，也没有任何下载量、评分或在线状态。',
-          })}
-          nextStep={t('experts.marketNext', {
-            defaultValue: '先确定市场数据来源（自建目录还是外部源），再由后端登记对应路由。',
-          })}
-        />
-      ) : null}
+      {tab === 'market' ? <MarketTab /> : null}
     </div>
   )
 }
 
-function NotWiredTab({ title, detail, nextStep }: { title: string; detail: string; nextStep: string }): ReactNode {
-  const { t } = useTranslation()
-  return (
-    <div className="settings-stack">
-      <Card
-        title={title}
-        actions={<StatusBadge tone="warning">{t('experts.notWiredBadge', { defaultValue: '未接通' })}</StatusBadge>}
-      >
-        <p className="field-help">{detail}</p>
-        <p className="field-help experts-next-step">
-          <strong>{t('experts.nextStepTitle', { defaultValue: '下一步' })}</strong>
-          <span>{nextStep}</span>
-        </p>
-      </Card>
-    </div>
-  )
-}
+
 
 function MyExperts({ onGoToLibrary }: { onGoToLibrary: () => void }): ReactNode {
   const { t } = useTranslation()

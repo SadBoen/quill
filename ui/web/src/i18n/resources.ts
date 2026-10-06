@@ -748,8 +748,51 @@ export const en = {
           'Only this team roster is deleted; the member experts themselves are untouched, and the same ID can be created again later.',
       },
       marketTitle: 'Market',
-      marketDetail: 'The backend has no route for this yet, so it is not implemented in this round: quill has no source of installable experts, so there are no entries here, and no download counts, ratings, or online states.',
-      marketNext: 'Decide where the market data comes from (a built-in catalog or an external source), then let the backend register the matching route.',
+      marketDetail:
+        'Data comes from GET /api/experts/market, which proxies the upstream SkillHub skillset catalog. Upstream is an external service: when it is down this tab says so instead of showing an empty list. There are no download counts, ratings, or online states — upstream does not provide them.',
+      marketNext:
+        'Pick a skillset, install it, then turn the skills it brought in on from “Skill packs”. They land disabled on purpose.',
+      market: {
+        description:
+          'Data comes from {{route}}; the source is the skillset catalog of an external market. There are no download counts, ratings, or online states here — upstream does not give them, so we do not show them.',
+        host:
+          'Upstream is {{host}}. If it is down or you are offline this tab cannot connect — that does not affect experts you already installed.',
+        empty:
+          'Upstream returned 0 expert packs this time — that is what upstream said. It is not a fetch we skipped, and the route is connected.',
+        noSummary: 'Upstream gave no description. No description is no description; the slug does not stand in for one.',
+        noName: '(no name from upstream)',
+        noSkills: 'upstream listed no skills',
+        scene: 'scene {{scene}}',
+        skills: '{{count}} skills',
+        installed: 'Installed',
+        install: 'Install as my expert',
+        installing: 'Installing…',
+        installedOk: 'Installed expert “{{name}}” ({{id}}).',
+        alreadyInstalled: '“{{name}}” was already installed; this run did not overwrite it.',
+        persona: 'Persona',
+        personaBody: '{{file}} · {{chars}} chars',
+        personaFromStore: 'the copy already in the store ({{chars}} chars); no package was downloaded this run',
+        skill_installed: 'installed',
+        skill_already_present: 'was already there',
+        skill_failed: 'failed',
+        skillFailedHint:
+          '{{count}} skill(s) in “{{slug}}” did not install — the reason is listed above. The expert itself is installed.',
+        skillsDisabled:
+          'Skills always come in disabled: a dozen of them is enough to blow the context budget, so the backend does not decide for you to enable them all.',
+        skillsDisabledNext:
+          'Turn on the ones this expert needs from the “Skill packs” page; only then can the model see them.',
+        routeMissing:
+          'The backend route ({{route}}) is not connected yet, so there are no entries here — the market is not empty, the route is simply missing.',
+        routeMissingNext:
+          'The backend has to connect this route to the upstream skillset. Until then this tab stays empty on purpose.',
+        loadFailedNext:
+          'Check that the server can reach the upstream market. It is an external service; nothing needs changing in quill itself.',
+        previous: 'Previous',
+        nextPage: 'Next',
+        page: 'Page {{page}}',
+        totalKnown: ' · {{total}} in total',
+        totalUnknown: ' · ? in total (upstream gave no total; this is just this page)',
+      },
       listTitle: 'My experts',
       listDescription: 'Data comes from {{route}}: the experts you own.',
       count: '{{count}} experts',
@@ -1414,8 +1457,48 @@ export const zhCN = {
           '只删这份团队名单，成员专家本身不受影响；同一个标识之后可以再建。',
       },
       marketTitle: '市场',
-      marketDetail: '后端还没有这条路由，本轮未实现：quill 目前没有可安装专家的来源，所以这里没有条目，也没有任何下载量、评分或在线状态。',
-      marketNext: '先确定市场数据来源（自建目录还是外部源），再由后端登记对应路由。',
+      marketDetail:
+        '数据来自 GET /api/experts/market，代理的是上游 SkillHub 的 skillset 目录。上游是外部服务：它挂了这一页就说连不上，而不是给你一张空列表。这里也没有下载量、评分、在线状态 —— 上游没给，我们就不显示。',
+      marketNext:
+        '挑一个专家包装进来，然后去「技能包」页把它带进来的技能打开 —— 它们落库时是停用的，这是刻意的。',
+      market: {
+        description:
+          '数据来自 {{route}}，来源是外部市场的 skillset 目录。这里没有下载量、评分、在线状态 —— 上游不给，我们就不显示。',
+        host: '上游是 {{host}}。它挂了或断网时这一页连不上 —— 那不影响你已经装好的专家。',
+        empty:
+          '上游这一次返回了 0 个专家包 —— 这是上游说的。不是我们没去取，也不是路由没接通。',
+        noSummary: '上游没给说明。没有说明就是没有，不拿 slug 顶替。',
+        noName: '（上游没给名称）',
+        noSkills: '上游没列技能',
+        scene: '场景 {{scene}}',
+        skills: '含 {{count}} 个技能',
+        installed: '已安装',
+        install: '安装为我的专家',
+        installing: '安装中…',
+        installedOk: '已装入专家「{{name}}」（{{id}}）。',
+        alreadyInstalled: '「{{name}}」已经装过了，这次没有覆盖它。',
+        persona: '人格',
+        personaBody: '{{file}} · {{chars}} 字',
+        personaFromStore: '库里那份（{{chars}} 字），这次没有下载包',
+        skill_installed: '已装入',
+        skill_already_present: '本来就有',
+        skill_failed: '没装上',
+        skillFailedHint:
+          '「{{slug}}」里有 {{count}} 个技能没装上 —— 上面写了原因，专家本身已经装好了。',
+        skillsDisabled:
+          '装进来的技能一律是停用的：十几个技能就能把上下文顶爆，所以后端不替你决定要不要全开。',
+        skillsDisabledNext:
+          '去「技能包」页把它需要的那几个打开，模型这一轮才看得到。',
+        routeMissing:
+          '后端这条路由（{{route}}）还没有接通，所以这里没有条目 —— 不是市场是空的，是路由压根没接上。',
+        routeMissingNext: '由后端把这条路由接上上游 skillset；接通之前这里不会有任何条目。',
+        loadFailedNext: '确认服务端能连上上游市场；那是外部服务，quill 本地这边不用改。',
+        previous: '上一页',
+        nextPage: '下一页',
+        page: '第 {{page}} 页',
+        totalKnown: ' · 共 {{total}} 个',
+        totalUnknown: ' · 共 ? 个（上游没给总数，这里只是本页）',
+      },
       listTitle: '我的专家',
       listDescription: '数据来自 {{route}}：这些是你名下的专家。',
       count: '{{count}} 个专家',

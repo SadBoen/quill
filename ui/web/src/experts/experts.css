@@ -119,6 +119,52 @@
 .experts-form-source { color: var(--muted); font-size: 10px; margin: 0; }
 .experts-form-source-label { color: var(--faint); }
 
+/* ── 专家市场 ──────────────────────────────────────────────────────────────
+   一行 = 一个专家包 + 右侧一个动作位。动作位在未安装时是按钮，
+   装完之后变成一整块结果说明（要装入、失败原因、停用提示都得放下），
+   所以右侧这一列得允许换行，否则结果块会被挤成一条窄缝。 */
+
+.experts-market-host {
+  background: var(--accent-soft);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  margin: 0 0 12px;
+  padding: 8px 10px;
+}
+.experts-market-state { display: grid; gap: 4px; }
+.experts-market-list { display: grid; gap: 9px; list-style: none; margin: 0; padding: 0; }
+.experts-market-card {
+  align-items: flex-start;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 11px 12px;
+}
+.experts-market-main { flex: 1 1 320px; min-width: 0; }
+.experts-market-head { align-items: center; display: flex; flex-wrap: wrap; gap: 7px; }
+.experts-market-slug { color: var(--faint); font-size: 9px; overflow-wrap: anywhere; }
+.experts-market-summary { color: var(--ink); font-size: 11px; line-height: 1.6; margin: 6px 0 0; overflow-wrap: anywhere; }
+.experts-market-meta { align-items: baseline; display: flex; flex-wrap: wrap; gap: 8px; margin: 7px 0 0; }
+.experts-market-skills { color: var(--muted); font-size: 9px; overflow-wrap: anywhere; }
+.experts-market-action { display: grid; flex: 0 1 320px; gap: 7px; justify-items: end; }
+.experts-market-installed { flex: 1 1 100%; }
+.experts-market-result { display: grid; gap: 6px; }
+.experts-market-ok { color: var(--success); font-size: 11px; margin: 0; }
+.experts-market-persona { align-items: baseline; display: flex; flex-wrap: wrap; gap: 8px; margin: 0; }
+.experts-market-persona span:last-child { color: var(--muted); font-size: 10px; }
+.experts-market-skill-status { display: grid; gap: 5px; list-style: none; margin: 0; padding: 0; }
+.experts-market-skill-status li { align-items: baseline; display: flex; flex-wrap: wrap; gap: 7px; }
+.experts-market-skill-status code { background: var(--panel-soft); border-radius: var(--radius-small); font-size: 9px; padding: 2px 6px; }
+/* 失败原因是服务端给的话，原样显示：改写它就等于替后端编一个原因。 */
+.experts-market-skill-reason { color: var(--danger); font-size: 9px; line-height: 1.6; overflow-wrap: anywhere; }
+/* 停用是后端刻意的选择，所以这句用中性色而不是警示色：
+   它是事实说明，不是用户的操作失误。 */
+.experts-market-disabled-note { border-left: 2px solid var(--warning); color: var(--muted); margin: 2px 0 0; padding-left: 9px; }
+.experts-market-pager { align-items: center; display: flex; gap: 10px; justify-content: center; margin-top: 13px; }
+
 /* ── 我的专家：工具栏 / 视图切换 / 表格（版式照 Octop Experts/index.tsx + AgentExpertsTable.tsx，
    组件用 quill 现有的 Card/StatusBadge 手写，类名沿用 Octop 同名以便对账） ── */
 

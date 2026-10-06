@@ -40,10 +40,29 @@ it('后端 501 时显示服务端中文原文，不白屏也不显示假数据',
   expect(screen.queryByText('还没有专家')).not.toBeInTheDocument()
 })
 
-it('未接通的 tab 如实标注状态与下一步', () => {
+it('市场 tab 接的是真路由，不再是「未接通」占位', async () => {
+  // 这个 tab 早先是一个诚实但空洞的占位（后端还没这条路由）。
+  // 后端接通后它必须画真数据 —— 断言也一并换掉：继续断言「未接通」
+  // 就是在给一个已经不存在的行为上锁。
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+    page: 1,
+    page_size: 20,
+    total: 1,
+    host: 'https://api.skillhub.cn',
+    items: [{
+      slug: 'pdf-toolkit',
+      display_name: 'PDF 工具箱',
+      summary: '上游给的说明。',
+      scene: 'office',
+      skill_slugs: ['pdf-extract'],
+      skill_count: 1,
+      installed: false,
+    }],
+  })))
   renderPage('/experts?tab=market')
-  expect(screen.getByText('未接通')).toBeInTheDocument()
-  expect(screen.getByText(/市场数据来源/)).toBeInTheDocument()
+  await waitFor(() => expect(screen.getByText('PDF 工具箱')).toBeInTheDocument())
+  expect(screen.queryByText('未接通')).not.toBeInTheDocument()
+  expect(screen.queryByText(/后端还没有这条路由/)).not.toBeInTheDocument()
 })
 
 it('列表区分有无人格的专家', async () => {
