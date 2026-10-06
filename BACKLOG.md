@@ -562,7 +562,7 @@ team id **直接丢弃**。路由只按 `room_id` + `round` 过滤，于是
 然后发现对话该超还是超。已在该输入框下加一句「暂未生效」，并用一条测试钉住
 （`models-compaction-not-enforced`，变异验证：删掉标注即变红）。
 
-**2026-10-07 复核：这一条从 🔴 降为 🟡。** 全仓库 grep 确认缺陷本身仍然存在
+**2026-10-07 复核：这一条由「阻塞」降为「不阻塞」。** 全仓库 grep 确认缺陷本身仍然存在
 （`compaction_threshold_tokens` 只出现在 `llm.rs` / `llm_providers.rs` / `api_admin.rs` /
 `routes.rs` 的配置、校验、落库与上报里，**没有任何运行时读者**），但**三处界面
 都已经如实标注**了：
