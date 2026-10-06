@@ -241,6 +241,38 @@ pub async fn slug_taken(
     })
 }
 
+/// 这个 id 下有没有**没被软删**的团队行。
+///
+/// 派工路由用它把「路径里的团队不存在」挡在记账之前（2026-10-07）。
+/// 之前那条路由把 `{id}` 解析完就直接塞进台账，从不查库，于是传一个
+/// 编出来的 id 也照样返回 200 与空记录 —— 台账里就此多出一批指向
+/// 不存在团队的派工，而且**没有任何地方消费它**，错了也没人知道。
+///
+/// 之所以要按 `(user_id, id)` 查而不是只查 id：`teams` 的主键就是这两列，
+/// 只按 id 查等于把别人的团队算成自己的。已软删的团队按「不存在」处理 ——
+/// 派工给一个删掉的团队同样说不通。
+pub async fn exists_by_id(
+    db: &DbBridge,
+    uid: quill_adapters::UserId,
+    team_id: [u8; 16],
+) -> Result<bool, quill_agent::AgentError> {
+    let b = blob_of(&uid);
+    db.call(move |pool, _rt| {
+        Box::pin(async move {
+            let n: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM teams \
+                 WHERE user_id = ? AND id = ? AND deleted_at IS NULL",
+            )
+            .bind(b)
+            .bind(team_id.to_vec())
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| storage_error(OP_WRITE, e))?;
+            Ok(n > 0)
+        })
+    })
+}
+
 /// 建团：主持人会话 + teams 行 + 主持人成员行 + 成员行，一个事务。
 pub async fn create(
     db: &DbBridge,

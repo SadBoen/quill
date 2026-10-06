@@ -557,3 +557,55 @@ async fn dispatch_booking_validates_member_id_prefix_and_rejects_empty_members()
     let body = text(resp).await;
     assert!(body.contains("members"), "应点名字段：{body}");
 }
+
+/// 2026-10-07：派工必须先确认团队真的存在。
+///
+/// 之前路径里的 `{id}` 解析完就直接进了台账，于是**编一个不存在的团队 id**
+/// 也能拿到 200 与一份空记录 —— 读起来像「这个团队没有派工历史」，
+/// 台账里却多出一条指向虚空的派工，而且没有任何地方消费它。
+///
+/// 这条钉的是 404，且顺带确认它**不是** 400（400 会被读成「参数写错了」，
+/// 而这里的真相是「这个团队没有」）。
+#[tokio::test]
+async fn dispatch_to_a_team_that_does_not_exist_is_404_and_writes_nothing() {
+    let t = TestDb::new("http-dispatch-unknown-team");
+    // 真的种一个团队进去，让「不存在的那个」确实是另一个 id。
+    let f = seed(&t.bridge(), user_id(UID_A), 0x23, &["cost-analyst"]);
+    let app = state(&t);
+
+    let ghost = {
+        let mut id = f.team_id;
+        id[15] ^= 0xff; // 合法长度、合法十六进制，但不是任何一个团队
+        format!("/api/teams/{}/dispatch", hex(&id))
+    };
+
+    let resp = build_router(app)
+        .oneshot(req(
+            "POST",
+            &ghost,
+            Some(TOKEN_A),
+            Some(serde_json::json!({
+                "room_id": f.room_id,
+                "round": 0,
+                "leader_session_id": f.leader_session.to_compact_hex(),
+                "members": [{
+                    "expert": "cost-analyst",
+                    "member": "cost-analyst-1",
+                    "member_session_id": member_session(0x23, &expert_id("cost-analyst")).to_compact_hex()
+                }]
+            })),
+        ))
+        .await
+        .expect("oneshot 失败");
+
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "团队不存在必须是 404，而不是 200 空记录"
+    );
+    let body = text(resp).await;
+    assert!(
+        body.contains("不存在") || body.contains("404"),
+        "应说明是团队不存在：{body}"
+    );
+}
