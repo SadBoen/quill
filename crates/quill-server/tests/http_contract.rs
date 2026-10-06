@@ -552,12 +552,20 @@ async fn dispatch_routes_are_registered_and_answer_in_chinese() {
             .await
             .unwrap_or_else(|e| panic!("{method} {concrete} oneshot 失败：{e}"));
         let status = resp.status();
-        assert_ne!(
-            status,
-            StatusCode::NOT_FOUND,
-            "{method} {concrete} 必须已注册（404 说明 handler 没挂上）"
-        );
         let t = body_text(resp).await;
+
+        // 「路由没挂上」与「资源不存在」**都是 404**，光看状态码分不开。
+        // 这两条 dispatch 路由现在都会对不存在的团队回 404（那是正确的），
+        // 所以这里要认的是错误信封里的 `code`：路由没挂上是 `not_found`
+        // （来自 fallback，找不到路由），资源不存在是 `entity_not_found`。
+        //
+        // 以前这条断言写的是 `assert_ne!(status, NOT_FOUND)`，在本项目里
+        // 那是把「未注册」和「查无此人」混为一谈 —— 正好是 B1-2 说的那类
+        // 分不清三种状态的问题。区分它们只能靠 code。
+        assert!(
+            !t.contains("\"code\":\"not_found\""),
+            "{method} {concrete} 必须已注册（code=not_found 说明 handler 没挂上）：{t}"
+        );
 
         if !status.is_success() {
             assert!(

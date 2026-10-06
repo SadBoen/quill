@@ -567,8 +567,7 @@ async fn dispatch_booking_validates_member_id_prefix_and_rejects_empty_members()
 /// 这条钉的是 404，且顺带确认它**不是** 400（400 会被读成「参数写错了」，
 /// 而这里的真相是「这个团队没有」）。
 #[tokio::test]
-async fn dispatch_to_a_team_that_does_not_exist_is_404_and_writes_nothing() {
-    let t = TestDb::new("http-dispatch-unknown-team");
+async fn dispatch_to_a_team_that_does_not_exist_is_404_and_writes_nothing() {    let t = TestDb::new("http-dispatch-unknown-team");
     // 真的种一个团队进去，让「不存在的那个」确实是另一个 id。
     let f = seed(&t.bridge(), user_id(UID_A), 0x23, &["cost-analyst"]);
     let app = state(&t);
@@ -607,5 +606,63 @@ async fn dispatch_to_a_team_that_does_not_exist_is_404_and_writes_nothing() {
     assert!(
         body.contains("不存在") || body.contains("404"),
         "应说明是团队不存在：{body}"
+    );
+}
+
+/// 同一条边界，GET 侧也必须成立。
+///
+/// GET 这条路由原先是 `Path(_team)` —— 下划线前缀、**直接丢弃**。于是
+/// 问一个编出来的团队 id 会拿到 200 与一份空记录，读起来像
+/// 「这个团队没有派工历史」—— 那是在把「没有这个东西」说成「它没有记录」。
+///
+/// 判据有两条，别只测一条：
+///   · 不存在的团队 → 404
+///   · 存在的团队 → 200，且响应里带上 `team_id` 与 `filtered_by`，
+///     让调用方知道路径里的 {id} 真的参与了判定，以及列表按什么过滤。
+#[tokio::test]
+async fn listing_dispatch_of_a_missing_team_is_404_not_an_empty_200() {
+    let t = TestDb::new("http-dispatch-list-unknown-team");
+    let f = seed(&t.bridge(), user_id(UID_A), 0x24, &["cost-analyst"]);
+    let app = state(&t);
+
+    let mut ghost = f.team_id;
+    ghost[15] ^= 0xff;
+    let path = format!(
+        "/api/teams/{}/dispatch?room_id={}&round=0",
+        hex(&ghost),
+        f.room_id
+    );
+
+    let resp = build_router(app.clone())
+        .oneshot(req("GET", &path, Some(TOKEN_A), None))
+        .await
+        .expect("oneshot 失败");
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "GET 侧也必须 404：不存在 ≠ 没有记录"
+    );
+    let body = text(resp).await;
+    assert!(!body.contains("\"count\""), "404 里不该出现记录条数：{body}");
+
+    // 反过来：真团队仍然 200，并如实说明自己按什么过滤。
+    let ok_path = format!(
+        "/api/teams/{}/dispatch?room_id={}&round=0",
+        hex(&f.team_id),
+        f.room_id
+    );
+    let resp = build_router(app)
+        .oneshot(req("GET", &ok_path, Some(TOKEN_A), None))
+        .await
+        .expect("oneshot 失败");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = text(resp).await;
+    assert!(
+        body.contains(&hex(&f.team_id)),
+        "响应应回显路径里的 team_id：{body}"
+    );
+    assert!(
+        body.contains("\"filtered_by\":\"room_id+round\""),
+        "应如实说明列表按 room_id+round 过滤，而不是让调用方以为按团队过滤：{body}"
     );
 }

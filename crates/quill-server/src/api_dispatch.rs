@@ -17,9 +17,24 @@ use crate::state::AppState;
 pub async fn list_round(
     State(state): State<AppState>,
     user: AuthUser,
-    Path(_team): Path<String>,
+    Path(team): Path<String>,
     RawQuery(query): RawQuery,
 ) -> Result<Json<Value>, ApiError> {
+    // 团队必须存在，否则 404 —— 与 POST 那条同一把尺（见下面 book 的注释）。
+    //
+    // 这条路由原先是 `Path(_team)`，**下划线前缀、直接丢弃**：于是问一个
+    // 编出来的团队 id 也能拿到 200 与一份空记录，读起来像「这个团队没有
+    // 派工历史」。那是把「没有这个东西」说成「它没有记录」，是假回答。
+    let team_id = parse_hex16(&team, "路径参数 {id}（团队标识）")?;
+    let exists = crate::teams_repo::exists_by_id(state.db()?, user.0.user_id, team_id)
+        .await
+        .map_err(|e| agent_error_to_api("核对团队是否存在", e))?;
+    if !exists {
+        return Err(ApiError::entity_not_found(format!(
+            "团队 {team} 不存在（已软删的团队同样算不存在）。\
+             下一步：先用 GET /api/teams 确认这个 id 还在，再看它的派工记录。"
+        )));
+    }
     let (room_id, round) = parse_room_round(query.as_deref())?;
     let ledger = read_only_ledger(&state)?;
     let prefix = RoundPrefix {
@@ -29,10 +44,18 @@ pub async fn list_round(
     };
     let records = map_agent_error("列出某轮派工", ledger.list_round(&prefix))?;
     Ok(Json(json!({
+        // team_id 一并回给客户端：路径里的 {id} 现在**真的参与了判定**，
+        // 调用方能确认自己问的是哪个团队，不必靠猜。
+        "team_id": team,
         "room_id": room_id,
         "round": round,
         "count": records.len(),
         "dispatches": records.iter().map(record_json).collect::<Vec<Value>>(),
+        // 说清一件事：这个列表按 room_id + round 过滤，**不是**按 team_id ——
+        // 台账的键就是 (owner, room_id, round)。所以「团队存在」与
+        // 「返回的记录属于这个团队」是两回事，改成按团队过滤要动键，
+        // 那是产品契约变更，见 BACKLOG B2-1。
+        "filtered_by": "room_id+round",
     })))
 }
 
