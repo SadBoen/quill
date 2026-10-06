@@ -71,6 +71,7 @@ export const en = {
       experts: 'Experts',
       workspace: 'Workspace',
       memory: 'Knowledge base',
+      usage: 'Token usage',
       devices: 'Devices',
       automations: 'Automations',
       models: 'Models',
@@ -131,6 +132,22 @@ export const en = {
       deleteMine: 'Delete my account',
       deleteHelp: 'The delete entry point is unavailable: {{route}} is not registered in Quill. Next step: if self-service sign-off is still needed, implement {{route}}.',
       backToChat: 'Back to chat',
+    },
+    usage: {
+      title: 'Token usage',
+      description:
+        'From GET /api/usage. Every cell is a value the server actually measured; anything Quill did not record shows as "—", never as 0.',
+      bySession: 'By session',
+      bySessionDescription: '{{count}} sessions in total.',
+      colSession: 'Session',
+      colExpert: 'Role',
+      totalRow: 'Total',
+      noExpert: 'No role bound',
+      empty: 'No sessions yet — send a message on the chat page first.',
+      dashMeaning: '"—" means Quill did not record this metric. It is not 0.',
+      truncatedTitle: 'Statistics are truncated',
+      truncated:
+        'Only the most recent {{count}} sessions are counted here; older ones are excluded. Presenting "the most recent {{count}}" as "everything" would be a claim with no basis.',
     },
     memory: {
       title: 'Knowledge base',
@@ -733,6 +750,7 @@ export const zhCN = {
       experts: '专家',
       workspace: '工作区',
       memory: '资料库',
+      usage: '用量统计',
       devices: '设备',
       automations: '自动化',
       models: '模型',
@@ -793,6 +811,22 @@ export const zhCN = {
       deleteMine: '删除我的账号',
       deleteHelp: '删除入口暂不可用：{{route}} 未在 quill 登记。下一步：若需要自助注销，再实现 {{route}}。',
       backToChat: '回到对话',
+    },
+    usage: {
+      title: '用量统计',
+      description:
+        '来自 GET /api/usage。每一格都是服务端实测值；quill 没记录的那一项显示「—」，不会拿 0 顶替。',
+      bySession: '按会话',
+      bySessionDescription: '共 {{count}} 个会话。',
+      colSession: '会话',
+      colExpert: '角色',
+      totalRow: '合计',
+      noExpert: '未绑定角色',
+      empty: '还没有任何会话，先去对话页发一句话。',
+      dashMeaning: '「—」表示 quill 没有记录这一项，不是 0。',
+      truncatedTitle: '统计被截断',
+      truncated:
+        '这里只统计了最近 {{count}} 个会话，更早的没有计入。把「最近 {{count}} 个」当成「全部」是一句凭空而来的话。',
     },
     memory: {
       title: '资料库',

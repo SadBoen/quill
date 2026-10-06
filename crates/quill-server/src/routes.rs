@@ -104,7 +104,8 @@ pub fn build_router(state: AppState) -> Router {
             "/api/sessions/{id}/messages",
             get(api_chat::list_messages).post(api_chat::post_message),
         )
-        .route("/api/sessions/{id}/metrics", get(api_chat::metrics));
+        .route("/api/sessions/{id}/metrics", get(api_chat::metrics))
+        .route("/api/usage", get(api_chat::usage));
 
     // 只读四个端点已接通（不需要模型）；写入/检索类要模型配合，仍是 501 桩。
     let wiki = Router::new()
@@ -396,6 +397,7 @@ pub const CONTRACT_ROUTES: &[(&str, &str)] = &[
     ("DELETE", "/api/sessions/{id}"),
     ("POST", "/api/sessions/{id}/messages"),
     ("GET", "/api/sessions/{id}/metrics"),
+    ("GET", "/api/usage"),
     ("GET", "/api/wiki/pages"),
     ("GET", "/api/wiki/pages/{path}"),
     ("POST", "/api/wiki/ingest"),

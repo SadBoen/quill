@@ -40,6 +40,28 @@ export function loadSessionMetrics(sessionId: string): Promise<SessionMetrics> {
   return apiJson<SessionMetrics>(`/api/sessions/${encodeURIComponent(sessionId)}/metrics`)
 }
 
+export interface UsageSession {
+  id: string
+  title: string
+  expert_id: string | null
+  last_active_at: number
+  metrics: SessionMetrics
+}
+
+export interface UsageReport {
+  /** 跨全部计入会话的合计。与逐行相加必然一致（同一个纯函数算的）。 */
+  totals: SessionMetrics
+  sessions: UsageSession[]
+  session_count: number
+  limit: number
+  /** 真实会话数超过 limit 时为 true —— 界面必须说出来，不能把「最近 N 个」当「全部」。 */
+  truncated: boolean
+}
+
+export function loadUsage(): Promise<UsageReport> {
+  return apiJson<UsageReport>('/api/usage')
+}
+
 /**
  * 把 ApiError 变成一句能直接显示给用户的话。
  *

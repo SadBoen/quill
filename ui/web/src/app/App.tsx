@@ -12,6 +12,7 @@ import { AppShell } from '../layout/AppShell'
 import { MemoryPage } from '../memory/MemoryPage'
 import { ModelsPage } from '../models'
 import { ThemeProvider } from '../theme/ThemeToggle'
+import { UsagePage } from '../usage/UsagePage'
 import { WorkspacePage } from '../workspace/WorkspacePage'
 
 export function AppRoutes(): ReactNode {
@@ -28,6 +29,7 @@ export function AppRoutes(): ReactNode {
             <Route path="/workspace" element={<WorkspacePage />} />
             <Route path="/workspace/:workspaceRef" element={<WorkspacePage />} />
             <Route path="/memory" element={<MemoryPage />} />
+            <Route path="/usage" element={<UsagePage />} />
             <Route path="/devices" element={<DeviceListPage />} />
             <Route path="/devices/:name" element={<DeviceDetailPage />} />
             <Route path="/devices/:name/mcp" element={<DeviceMcpPage />} />

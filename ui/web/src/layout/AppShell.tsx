@@ -12,6 +12,9 @@ const NAV_ITEMS = [
   { to: '/experts', icon: 'E', labelKey: 'nav.experts', fallback: '专家' },
   { to: '/workspace', icon: 'W', labelKey: 'nav.workspace', fallback: '工作区' },
   { to: '/memory', icon: 'M', labelKey: 'nav.memory', fallback: '资料库' },
+  // 图标是单字母。刻意用 T 而不是 U：admin 区里的 U 已经是「用户」了，
+// 再占一个 U 会让侧栏里两个「U」长得一模一样。
+{ to: '/usage', icon: 'T', labelKey: 'nav.usage', fallback: '用量统计' },
   { to: '/devices', icon: 'D', labelKey: 'nav.devices', fallback: '设备' },
   { to: '/automations', icon: 'A', labelKey: 'nav.automations', fallback: '自动化' },
 ] as const

@@ -5,6 +5,7 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde_json::{json, Value};
 
+use sqlx::Row;
 use quill_provider::{Message, TokenUsage};
 
 use crate::auth::AuthUser;
@@ -255,6 +256,15 @@ fn hex_lower(b: &[u8; 16]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
+/// 读库拿回来的 id 是 `Vec<u8>`（长度未必 16）。长度不对就返回空串 ——
+/// 长度不对的 id 本来就拼不出合法会话路由，与其编一个 id 不如空着。
+fn hex16(b: &[u8]) -> String {
+    match <[u8; 16]>::try_from(b) {
+        Ok(arr) => hex(&arr),
+        Err(_) => String::new(),
+    }
+}
+
 pub async fn get_one(
     State(state): State<AppState>,
     user: AuthUser,
@@ -489,6 +499,156 @@ pub async fn metrics(
         .map_err(storage)?;
 
     Ok(Json(crate::session_metrics::aggregate(&rows).to_json()).into_response())
+}
+
+/// 一次最多统计多少个会话。
+///
+/// 多取一个（`LIMIT 201`）只为判断「有没有被截断」——被截断时接口会明说，
+/// 而不是让用户以为这就是全部。
+pub const USAGE_SESSIONS_LIMIT: i64 = 200;
+
+/// 全部会话的用量统计。左侧导航「用量统计」页的数据源。
+///
+/// **口径全部复用 [`crate::session_metrics::aggregate`]**，没有在 SQL 里另写一套
+/// 汇总规则 —— 那些规则（缺一条耗时就不给、没上报缓存就不报比率…）写两遍必然漂移。
+/// 这里只把行取出来、按会话分组喂给它。合并总计也是同一个函数跑一遍全量行，
+/// 所以「总计」和「每行加起来」必然一致。
+pub async fn usage(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> Result<axum::response::Response, ApiError> {
+    let db = state.db()?;
+    let uid = user.0.user_id;
+
+    let (sessions, rows) = db
+        .call(move |pool, _rt| {
+            Box::pin(async move {
+                let r: Result<(Vec<SessionRow>, Vec<(Vec<u8>, crate::session_metrics::MessageUsage)>), quill_agent::AgentError> =
+                    async {
+                        let listed = sqlx::query(
+                            "SELECT id, title, expert_id, last_active_at FROM sessions \
+                             WHERE user_id = ? AND deleted_at IS NULL \
+                             ORDER BY last_active_at DESC LIMIT ?",
+                        )
+                        .bind(uid.as_bytes().to_vec())
+                        .bind(USAGE_SESSIONS_LIMIT + 1)
+                        .fetch_all(&pool)
+                        .await
+                        .map_err(|e| crate::db::storage_error("列会话", e))?;
+
+                        let sessions: Vec<SessionRow> = listed
+                            .iter()
+                            .map(|row| SessionRow {
+                                id: row
+                                    .try_get::<Vec<u8>, _>("id")
+                                    .unwrap_or_default(),
+                                title: s(row, "title"),
+                                expert_id: {
+                                    let v = s(row, "expert_id");
+                                    if v.is_empty() {
+                                        None
+                                    } else {
+                                        Some(v)
+                                    }
+                                },
+                                last_active_at: n(row, "last_active_at"),
+                            })
+                            .collect();
+
+                        let rows = if sessions.is_empty() {
+                            Vec::new()
+                        } else {
+                            let sql = format!(
+                                "SELECT session_id, role, input_tokens, output_tokens, \
+                                 turn_ms, cache_read_tokens FROM messages \
+                                 WHERE user_id = ? AND session_id IN ({}) ORDER BY seq",
+                                vec!["?"; sessions.len()].join(",")
+                            );
+                            let mut q = sqlx::query(&sql).bind(uid.as_bytes().to_vec());
+                            for row in &sessions {
+                                q = q.bind(row.id.clone());
+                            }
+                            q.fetch_all(&pool)
+                                .await
+                                .map_err(|e| crate::db::storage_error("读用量", e))?
+                                .into_iter()
+                                .map(|row| {
+                                    let role = s(&row, "role");
+                                    let sid = row
+                                        .try_get::<Vec<u8>, _>("session_id")
+                                        .unwrap_or_default();
+                                    (
+                                        sid,
+                                        crate::session_metrics::MessageUsage {
+                                            is_user: role == "user",
+                                            is_assistant: role == "assistant",
+                                            input_tokens: n(&row, "input_tokens"),
+                                            output_tokens: n(&row, "output_tokens"),
+                                            turn_ms: nullable_n(&row, "turn_ms"),
+                                            cache_read_tokens: nullable_n(&row, "cache_read_tokens"),
+                                        },
+                                    )
+                                })
+                                .collect()
+                        };
+                        Ok((sessions, rows))
+                    }
+                    .await;
+                r
+            })
+        })
+        .map_err(storage)?;
+
+    // 多取的那一条在这里被丢掉 —— 丢掉之前先记住「确实被截断了」。
+    let truncated = sessions.len() > USAGE_SESSIONS_LIMIT as usize;
+    let mut sessions = sessions;
+    if truncated {
+        sessions.truncate(USAGE_SESSIONS_LIMIT as usize);
+    }
+
+    // 按会话分组。同一个纯函数，各组各调一次；总计跑一遍全量。
+    let mut per_session: std::collections::HashMap<Vec<u8>, Vec<crate::session_metrics::MessageUsage>> =
+        std::collections::HashMap::new();
+    let mut all_rows: Vec<crate::session_metrics::MessageUsage> = Vec::new();
+    for (sid, usage) in &rows {
+        per_session.entry(sid.clone()).or_default().push(*usage);
+        all_rows.push(*usage);
+    }
+
+    let totals = crate::session_metrics::aggregate(&all_rows);
+    let list: Vec<Value> = sessions
+        .iter()
+        .map(|row| {
+            let empty = Vec::new();
+            let bucket = per_session.get(&row.id).unwrap_or(&empty);
+            json!({
+                "id": hex16(&row.id),
+                "title": row.title,
+                "expert_id": row.expert_id,
+                "last_active_at": row.last_active_at,
+                "metrics": crate::session_metrics::aggregate(bucket).to_json(),
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "totals": totals.to_json(),
+        "sessions": list,
+        "session_count": list.len(),
+        "limit": USAGE_SESSIONS_LIMIT,
+        // 被截断时前端必须说出来：把「只统计了前 200 个」当成「一共就这些」
+        // 是一句凭空而来的话。
+        "truncated": truncated,
+    }))
+    .into_response())
+}
+
+/// `usage` 接口用的会话行。
+struct SessionRow {
+    id: Vec<u8>,
+    title: String,
+    expert_id: Option<String>,
+    last_active_at: i64,
 }
 
 /// 读一个可空的整数列：`NULL` 保持 `None`，绝不塌成 `0`。

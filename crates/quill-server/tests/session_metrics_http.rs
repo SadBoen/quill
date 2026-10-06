@@ -141,6 +141,11 @@ fn seed_messages(t: &TestDb, sid: &str, rows: &[(&str, i64, i64, Option<i64>, Op
         // 每轮都要自己的副本：闭包是 move 的，跨轮复用会被上一轮吃掉。
         let uid_c = uid.clone();
         let sid_c = sid_v.clone();
+        // 消息 id 必须**跨会话唯一**（主键是 user_id+id）。
+        // 早先这里直接用 vec![seq; 16]，一个测试铺两个会话就撞主键了。
+        let mut mid = [0u8; 16];
+        mid[..12].copy_from_slice(&sid_v[..12]);
+        mid[12..].copy_from_slice(&(seq as u32).to_be_bytes());
         t.bridge()
             .call(move |pool, _rt| {
                 Box::pin(async move {
@@ -150,7 +155,7 @@ fn seed_messages(t: &TestDb, sid: &str, rows: &[(&str, i64, i64, Option<i64>, Op
                          VALUES(?,?,?,?,?,'complete','',?,?,?,?,0)",
                     )
                     .bind(uid_c.clone())
-                    .bind(vec![seq as u8; 16])
+                    .bind(mid.to_vec())
                     .bind(sid_c.clone())
                     .bind(seq)
                     .bind(&role)
@@ -284,4 +289,116 @@ async fn a_missing_session_is_404_not_an_empty_statistics_object() {
     let (status, v) = get_json(app, "/api/sessions/0123456789ABCDEF0123456789ABCDEF/metrics").await;
     assert_eq!(status, StatusCode::NOT_FOUND, "找不到会话不能回一份全 0 的统计");
     assert!(v.get("turns").is_none(), "错误信封里不该混进统计字段：{v}");
+}
+
+#[tokio::test]
+async fn usage_lists_every_session_with_its_own_metrics() {
+    let t = TestDb::new("usage-list");
+    seed_user(&t);
+    let app = state(&t);
+
+    // 两个会话，一个有对话、一个没有。
+    let a = create_session(app.clone()).await;
+    seed_messages(
+        &t,
+        &a,
+        &[
+            ("user", 0, 0, None, None),
+            ("assistant", 1000, 100, Some(2000), Some(900)),
+        ],
+    );
+    let b = create_session(app.clone()).await;
+
+    let (status, v) = get_json(app.clone(), "/api/usage").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(v["session_count"], serde_json::json!(2));
+    assert_eq!(v["truncated"], serde_json::json!(false));
+    assert_eq!(v["limit"], serde_json::json!(200));
+
+    let list = v["sessions"].as_array().expect("sessions 应是数组");
+    assert_eq!(list.len(), 2, "两个会话都要列出来，包括那个空的");
+
+    // 找到有数据的那一行。
+    let row = list
+        .iter()
+        .find(|s| s["id"] == serde_json::json!(a))
+        .expect("应当能找到刚才那个会话");
+    let m = &row["metrics"];
+    assert_eq!(m["turns"], serde_json::json!(1));
+    assert_eq!(m["input_tokens"], serde_json::json!(1000));
+    assert_eq!(m["cache_read_tokens"], serde_json::json!(900));
+    assert_eq!(m["tool_duration_ms"], Value::Null, "quill 不记录工具耗时");
+
+    // 没有消息的会话：一行真实的 0 轮次，但 token 是 null。
+    let empty = list
+        .iter()
+        .find(|s| s["id"] == serde_json::json!(b))
+        .expect("空会话也要在列表里");
+    assert_eq!(empty["metrics"]["turns"], serde_json::json!(0));
+    assert_eq!(
+        empty["metrics"]["input_tokens"],
+        Value::Null,
+        "没有消息就没有 token，显示 0 会让用户以为「这次聊天一点没花」"
+    );
+}
+
+#[tokio::test]
+async fn usage_totals_equal_the_sum_of_the_rows() {
+    let t = TestDb::new("usage-totals");
+    seed_user(&t);
+    let app = state(&t);
+
+    let a = create_session(app.clone()).await;
+    seed_messages(
+        &t,
+        &a,
+        &[
+            ("user", 0, 0, None, None),
+            ("assistant", 1000, 100, Some(2000), Some(400)),
+        ],
+    );
+    let b = create_session(app.clone()).await;
+    seed_messages(
+        &t,
+        &b,
+        &[
+            ("user", 0, 0, None, None),
+            ("assistant", 500, 50, Some(1000), Some(100)),
+        ],
+    );
+
+    let (_, v) = get_json(app, "/api/usage").await;
+    let totals = &v["totals"];
+    assert_eq!(totals["turns"], serde_json::json!(2));
+    assert_eq!(totals["input_tokens"], serde_json::json!(1500));
+    assert_eq!(totals["output_tokens"], serde_json::json!(150));
+    assert_eq!(totals["llm_duration_ms"], serde_json::json!(3000));
+    assert_eq!(totals["cache_read_tokens"], serde_json::json!(500));
+
+    let rows: Vec<i64> = v["sessions"]
+        .as_array()
+        .expect("数组")
+        .iter()
+        .map(|s| s["metrics"]["input_tokens"].as_i64().expect("数字"))
+        .collect();
+    let sum: i64 = rows.iter().sum();
+    assert_eq!(
+        sum,
+        totals["input_tokens"].as_i64().expect("数字"),
+        "合计必须等于逐行相加，否则界面上两处数字会互相打架"
+    );
+}
+
+#[tokio::test]
+async fn usage_on_a_fresh_account_is_an_empty_report_not_a_zeroed_one() {
+    let t = TestDb::new("usage-empty");
+    seed_user(&t);
+    let app = state(&t);
+
+    let (status, v) = get_json(app, "/api/usage").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(v["session_count"], serde_json::json!(0));
+    assert_eq!(v["sessions"].as_array().map(Vec::len), Some(0));
+    assert_eq!(v["totals"]["input_tokens"], Value::Null, "没有任何数据就是 null");
+    assert_eq!(v["totals"]["turns"], serde_json::json!(0), "轮次是 0，这是真值");
 }
