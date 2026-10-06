@@ -120,6 +120,21 @@ impl ToolRegistry {
     /// `app` 传 `Arc` 而不是 `&`，是为了让闭包能持有它；请求结束时
     /// registry 一起被丢弃，里面的 `Arc` 也随之释放。
     pub fn builtin(app: Arc<crate::state::AppState>, uid: quill_adapters::UserId) -> Self {
+        Self::builtin_with_expert_tools(app, uid, true)
+    }
+
+    /// `include_expert_tools=false` 时**不挂** `list_experts` / `get_expert_detail`。
+    ///
+    /// **为什么需要这个开关**：会话的角色是用户在界面上选的，不是模型选的。
+    /// 角色一旦定了，把这两个工具挂给模型就是纯噪音 —— 实测 11 条真实任务里有 5 条
+    /// 以 `tool_loop_exhausted` 收场，而日志显示模型把 **4 轮预算里的 3 轮**
+    /// 花在 `list_experts` → `get_expert_detail` 上反复试水，
+    /// 真正该调的 `notes__*` 根本没轮到。见 ISSUE-041。
+    pub fn builtin_with_expert_tools(
+        app: Arc<crate::state::AppState>,
+        uid: quill_adapters::UserId,
+        include_expert_tools: bool,
+    ) -> Self {
         let mut r = ToolRegistry {
             specs: Vec::new(),
             handlers: Vec::new(),
@@ -129,9 +144,9 @@ impl ToolRegistry {
         // 克隆是廉价的引用计数递增，不会复制任何运行状态。
         let app2 = Arc::clone(&app);
 
-        // **一个专家都没有时，这两个工具一律不挂。**
+        // **一个专家都没有时，这两个工具一律不挂**；角色已经定了的时候也不挂。
         //
-        // 实测（2026-10-06，跑 50 条 SkillsBench）：这台库上专家数是 **0**，
+        // 前半条是实测（2026-10-06，跑 50 条 SkillsBench）：这台库上专家数是 **0**，
         // 于是 `list_experts` 每一条请求都挂着，而它**永远只能返回
         // 「没有匹配的专家。」**；`get_expert_detail` 也必然失败。
         // 4B 模型在这两个工具上反复重试（轨迹里连着三四个 `list_experts`），
@@ -151,7 +166,7 @@ impl ToolRegistry {
             }
         };
 
-        if has_experts {
+        if has_experts && include_expert_tools {
             r.register(
                 ToolSpec::new(
                     "list_experts",
@@ -720,21 +735,22 @@ mod tests {
 
     /// 内置表里挂了 AppState 的闭包，单测里造一个够用的替身即可 ——
     /// 这里只断言「结构完整」，不碰数据库。
+    fn dummy_app() -> Arc<crate::state::AppState> {
+        Arc::new(crate::state::AppState {
+            config: crate::config::Config::from_env(),
+            tokens: Arc::new(crate::auth::EnvTokenResolver::default()),
+            db: None,
+            db_problem: Some("测试注入：未建库".to_string()),
+            llm: Arc::new(std::sync::RwLock::new(None)),
+            llm_config: Arc::new(std::sync::RwLock::new(Default::default())),
+            providers: Arc::new(std::sync::RwLock::new(Default::default())),
+            login_limiter: Arc::new(crate::ratelimit::RateLimiter::default()),
+            pbkdf2: quill_control::Pbkdf2Params::for_tests(),
+        })
+    }
+
     fn dummy_builtin() -> ToolRegistry {
-        ToolRegistry::builtin(
-            Arc::new(crate::state::AppState {
-                config: crate::config::Config::from_env(),
-                tokens: Arc::new(crate::auth::EnvTokenResolver::default()),
-                db: None,
-                db_problem: Some("测试注入：未建库".to_string()),
-                llm: Arc::new(std::sync::RwLock::new(None)),
-                llm_config: Arc::new(std::sync::RwLock::new(Default::default())),
-                providers: Arc::new(std::sync::RwLock::new(Default::default())),
-                login_limiter: Arc::new(crate::ratelimit::RateLimiter::default()),
-                pbkdf2: quill_control::Pbkdf2Params::for_tests(),
-            }),
-            quill_adapters::UserId::from_bytes([7u8; 16]),
-        )
+        ToolRegistry::builtin(dummy_app(), quill_adapters::UserId::from_bytes([7u8; 16]))
     }
 
     #[test]
@@ -841,6 +857,46 @@ mod tests {
             "同名工具重复注册会让模型在两个定义间无所适从"
         );
         assert_eq!(r.call(&call("echo")).expect("应走新实现"), "新");
+    }
+
+    #[test]
+    fn the_expert_tools_can_be_left_out_when_the_role_is_already_picked() {
+        // ISSUE-041：角色在界面上定过之后，这两个工具对模型就是纯噪音 ——
+        // 实测 11 条真实任务里 5 条因此以 tool_loop_exhausted 收场。
+        let uid = quill_adapters::UserId::from_bytes([7u8; 16]);
+        let app = dummy_app();
+
+        let with = ToolRegistry::builtin_with_expert_tools(Arc::clone(&app), uid, true);
+        let without = ToolRegistry::builtin_with_expert_tools(Arc::clone(&app), uid, false);
+
+        let names = |r: &ToolRegistry| {
+            r.specs()
+                .into_iter()
+                .map(|s| s.name)
+                .collect::<Vec<String>>()
+        };
+        let (a, b) = (names(&with), names(&without));
+
+        // 这个夹具库里有专家，所以开着的那个应当挂上；
+        // 关掉的那个**必须**一个专家工具都不剩。
+        for gone in ["list_experts", "get_expert_detail"] {
+            if a.iter().any(|n| n == gone) {
+                assert!(
+                    !b.iter().any(|n| n == gone),
+                    "关掉后仍挂上了 {gone}：{b:?}"
+                );
+            }
+        }
+        // 别的内置工具一个都不能少 —— 不能为了省预算把工具表掏空。
+        assert_eq!(
+            b.len(),
+            a.len().saturating_sub(
+                a.iter()
+                    .filter(|n| *n == "list_experts" || *n == "get_expert_detail")
+                    .count()
+            ),
+            "关掉专家工具只该少这两个：{a:?} vs {b:?}"
+        );
     }
 
     #[test]

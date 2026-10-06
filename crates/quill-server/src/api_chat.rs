@@ -525,7 +525,16 @@ pub async fn post_message(
     //
     // 技能目录要在 `state` 被 move 进 Arc 之前取出来。
     let skill_root = crate::api_extensions::skill_dir(&state.config);
-    let registry = crate::tools::ToolRegistry::builtin(Arc::new(state), uid);
+    // 角色已经在界面上定下来的会话，不再挂 list_experts / get_expert_detail：
+    // 模型不需要（也不该）替用户挑角色，那两个工具只是噪音。实测它们会吃掉
+    // 4 轮工具预算里的 3 轮，直接把本来能答的任务压成 tool_loop_exhausted。
+    // 见 ISSUE-041。
+    let role_already_picked = persona.expert_id.is_some();
+    let registry = crate::tools::ToolRegistry::builtin_with_expert_tools(
+        Arc::new(state),
+        uid,
+        !role_already_picked,
+    );
     // SKILL 与内置工具在模型看来没有区别：都是 `tools` 字段里的一条。
     let registry = registry
         .with_skills(db.as_ref(), uid, &skill_root)
@@ -692,6 +701,11 @@ pub struct SessionPersona {
     /// 消息纯属给模型发噪声）。
     pub instructions: Option<String>,
 
+    /// 会话上**确实绑定了**的角色 id（空白串按未绑定算）。
+    /// 用来判断「角色是不是已经在界面上定过了」—— 定过了就不该再把
+    /// `list_experts` / `get_expert_detail` 挂给模型。见 ISSUE-041。
+    pub expert_id: Option<String>,
+
     /// 专家不可用时的中文提示，会原样带进 HTTP 响应的 `expert_notice`。
     /// **不允许静默降级**：用户点了专家却没生效，必须让他知道。
     pub notice: Option<String>,
@@ -733,6 +747,9 @@ async fn resolve_persona(
         .filter(|s| !s.is_empty())
         .map(str::to_string)
     else {
+        // 没绑定角色：`expert_id` 为空，人格为空，但**要记住「没绑定」**，
+        // 因为这种情况下才需要把 list_experts / get_expert_detail 挂给模型
+        // 让它自己挑。见 ISSUE-041。
         return Ok(SessionPersona::default());
     };
 
@@ -779,6 +796,7 @@ async fn resolve_persona(
         );
         return Ok(SessionPersona {
             instructions: None,
+            expert_id: Some(expert_id.clone()),
             notice: Some(format!(
                 "会话绑定的专家「{expert_id}」已不可用（不存在或已被删除），已按默认人格回答。\
                  下一步：在专家页重新选择一个可用专家，或新建会话。"
@@ -798,6 +816,7 @@ async fn resolve_persona(
 
     Ok(SessionPersona {
         instructions: Some(instructions).filter(|s| !s.trim().is_empty()),
+        expert_id: Some(expert_id.clone()),
         notice: None,
     })
 }
