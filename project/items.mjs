@@ -37,7 +37,13 @@ export const ITEMS = [
     id: 'B0-2',
     milestone: 'M0',
     title: '一条命令能跑完全部门禁，且退出码可信',
-    verify: { kind: 'manual', how: '在装有 node + cargo 的一侧跑 bash .scripts/gates.sh，看退出码' },
+    // 这条曾经是 manual，理由写的是「要人记得手动跑」。可它自己就写明了
+    // 那条命令是 `bash .scripts/gates.sh` —— 判据里已经有一句可直接执行的话，
+    // 把它标成人工，等于让机器能做而故意不做。
+    //
+    // 标 slow：它要编译并跑全工作区测试（分钟级）。--quick 必须跳过它，
+    // 否则「秒级出结果」就成了谎话。skip 与「通过」在状态里分两栏显示。
+    verify: { kind: 'cmd', cmd: 'bash .scripts/gates.sh', cwd: 'wsl', slow: true },
     blocks: ['M0'],
   },
   {
@@ -65,7 +71,10 @@ export const ITEMS = [
     id: 'B0-6',
     milestone: 'M0',
     title: 'git 历史里不再有指向 main 之外的分支',
-    verify: { kind: 'manual', how: 'git branch -a —— 本项目不开分支，历史全在 main' },
+    // 只看**本地**分支。origin/HEAD 与 origin/main 是远程跟踪引用，不是分支；
+    // 把它们算进来会让判据恒红 —— 而恒红的判据等于没有判据，只会让所有人学会忽略它。
+    // 变异验证：条件反过来（-ne 0）时确实变红。
+    verify: { kind: 'cmd', cmd: 'test $(git branch --format="%(refname:short)" | grep -cvx main) -eq 0', cwd: 'wsl' },
     blocks: [],
   },
 
@@ -74,7 +83,9 @@ export const ITEMS = [
     id: 'B1-1',
     milestone: 'M1',
     title: '界面上不存在「点了必失败」的按钮',
-    verify: { kind: 'manual', how: '在浏览器里逐页点一遍；每个入口要么真通，要么明确写成未接通并说明缺什么' },
+    // 为什么只能人工：判据是「没有点了必失败的按钮」，而「失败」只在真点下去
+    // 之后才存在。HTTP 层看不出界面有没有把 405 说成成功 —— 那正是假成功发生的地方。
+    verify: { kind: 'manual', how: '为什么只能人工：失败只在真点下去之后才存在，HTTP 层看不出界面有没有把错误说成成功。在浏览器里逐页点一遍；每个入口要么真通，要么明确写成未接通并说明缺什么' },
     blocks: ['M1'],
   },
   {
@@ -95,7 +106,10 @@ export const ITEMS = [
     id: 'B1-1d',
     milestone: 'M1',
     title: '前端审计的 44 条「为什么不修」已逐条给出理由',
-    verify: { kind: 'manual', how: '读 BACKLOG.md 的 B1-1d，确认每条都有理由而不是「以后再说」' },
+    // 为什么只能人工：「理由写得够不够」是判断，不是事实。
+    // 机器能数出有几条、能不能 grep 到「以后再说」，但「这条理由是否真的回答了
+    // 为什么现在不修」没有可判定的形式。硬要自动化只会造出一个恒为真的判据。
+    verify: { kind: 'manual', how: '为什么只能人工：「理由是否真的回答了为什么现在不修」是判断，没有可判定的形式。读 BACKLOG.md 的 B1-1d，确认每条都有理由而不是「以后再说」' },
     blocks: [],
   },
   {
@@ -109,28 +123,41 @@ export const ITEMS = [
     id: 'B1-3',
     milestone: 'M1',
     title: '会话改名返 405 时，界面如实提示而不是假成功',
-    verify: { kind: 'manual', how: '点改名，确认界面说明「后端未开放该路由」' },
+    // 为什么只能人工：判据落在「界面如实提示」上，而 405 是完全正确的行为 ——
+    // 后端确实没开放那条路由。要验的是界面有没有**把 405 说成成功**，
+    // 那是渲染出来给人看的东西，只能人看。
+    verify: { kind: 'manual', how: '为什么只能人工：要验的是界面有没有把 405 说成成功，那是渲染出来给人看的。点改名，确认界面说明「后端未开放该路由」' },
     blocks: [],
   },
   {
     id: 'B1-4',
     milestone: 'M1',
     title: '首轮浏览器实点验收跑完（备份收紧为 admin 之后需要重跑）',
-    verify: { kind: 'manual', how: '全新一次性实例，不设 QUILL_TOKENS，逐页点一遍并贴实际结果' },
+    // 为什么只能人工：验收对象是「人点下去看到什么」，包括视觉层级、文案与
+    // 意外状态。备份收紧为 admin 之后必须重跑，因为之前那轮验的是更宽松的权限，
+    // 沿用旧结论等于用错的假设签字。
+    verify: { kind: 'manual', how: '为什么只能人工：验收对象是「人点下去看到什么」，含视觉与意外状态。全新一次性实例，不设 QUILL_TOKENS，逐页点一遍并贴实际结果（备份收紧为 admin 之后必须重跑，旧结论验的是更宽松的权限）' },
     blocks: ['M1'],
   },
   {
     id: 'B1-5',
     milestone: 'M1',
     title: 'M1 判据里的「派工」已划归 M2（否则 M1 永远达不成）',
-    verify: { kind: 'manual', how: '确认 MILESTONES.md 的 M1 判据里没有派工' },
+    // 为什么只能人工：M1 的边界是散文里的一节，不是可解析的结构。
+    // 用 grep 卡「M1 段落里不许出现派工」很容易在边界识别失败时**静默通过** ——
+    // 那比不自动化更坏：它会让人以为这条已经被机器守着。
+    verify: { kind: 'manual', how: '为什么只能人工：M1 的边界是散文里的一节，grep 卡边界失败时会静默通过，比不自动化更坏。确认 MILESTONES.md 的 M1 判据里没有派工' },
     blocks: [],
   },
   {
     id: 'B1-6',
     milestone: 'M1',
     title: '专家市场（列表 + 安装）接通',
-    verify: { kind: 'manual', how: 'GET /api/experts/market 与 install 各点一遍' },
+    // 为什么只能人工：清单里确实有 api_expert_market 的测试，但它们验的是
+    // slug 长度、列约束、来源前缀这类**边界**；判据要验的是「市场页真的接通」。
+    // 拿一条边界测试绑上来，它会一直绿，而市场页仍然是死的 ——
+    // 那正是本设计要防的「绑了不等于证明了」。
+    verify: { kind: 'manual', how: '为什么只能人工：现有 api_expert_market 测试验的是 slug 长度与列约束等边界，绑上来会一直绿而市场页仍然死。GET /api/experts/market 与 install 各点一遍' },
     blocks: [],
   },
   {
@@ -174,14 +201,23 @@ export const ITEMS = [
     id: 'B2-3',
     milestone: 'M2',
     title: '建团队静默多出的那个会话，是否要在侧栏隐藏（产品决定）',
-    verify: { kind: 'manual', how: '建一个团队，看侧栏里那个 team_leader 会话，再定要不要藏' },
+    // 为什么只能人工：这是产品决定，不是事实。「要不要藏」没有对错，
+    // 机器能做的只有把那个会话渲染出来给人看。
+    verify: { kind: 'manual', how: '为什么只能人工：产品决定，没有对错，机器能做的只是把那个会话渲染出来给人看。建一个团队，看侧栏里那个 team_leader 会话，再定要不要藏' },
     blocks: [],
   },
   {
     id: 'B2-4',
     milestone: 'M2',
     title: 'teams 的限制列不再是摆设（max_dispatch / max_replan / max_ask_depth / guidelines）',
-    verify: { kind: 'manual', how: 'grep crates/*/src 确认这四列仍零引用即未做；做了就换成 grep 判据' },
+    // 原来写的是 manual，how 里还留着一句「做了就换成 grep 判据」。
+    // 那句话本身就是这条待办没被收尾的证据 —— 判据已经想清楚了却一直没接上。
+    // 现在接上了：grep 命中即视为「不再是摆设」。
+    //
+    // 2026-10-07 实测 exit=1（crates 下零引用，确实还是摆设），
+    // 所以它现在会如实报「未通过」而不是躲在「需人工」里。
+    // 变异验证：条件反过来时 exit=0。
+    verify: { kind: 'cmd', cmd: 'grep -rqE "max_dispatch|max_replan|max_ask_depth|guidelines" crates/quill-server/src crates/quill-store/src', cwd: 'wsl' },
     blocks: ['M2'],
   },
 
@@ -190,7 +226,11 @@ export const ITEMS = [
     id: 'B3-1',
     milestone: 'M3',
     title: '压缩阈值不再只存不读（真发生压缩，用量前后连续）',
-    verify: { kind: 'manual', how: '超阈值后要真的发生压缩并能从压缩点续上；现在只有标注没有本体' },
+    // 为什么只能人工：判据是「真的发生压缩，且能从压缩点续上」。
+    // 现在的实现只有阈值字段与界面标注，没有压缩本体 —— B3-1a 已经把那半个
+    // 真相用测试钉住了（明写「暂未生效」）。剩下这半个要跑一次真实的长对话
+    // 才能验，没有能替代的断言。
+    verify: { kind: 'manual', how: '为什么只能人工：现在只有阈值字段与标注、没有压缩本体，剩下这半个要跑一次真实长对话才能验。超阈值后要真的发生压缩并能从压缩点续上' },
     blocks: ['M3'],
   },
   {
@@ -204,14 +244,18 @@ export const ITEMS = [
     id: 'B3-2',
     milestone: 'M3',
     title: 'token 口径与 goose 一致（缓存是输入的子集，总量按减法算）',
-    verify: { kind: 'manual', how: 'B3-2 记录的悬而未决项：在没定上游之前不改' },
+    // 为什么只能人工：口径本身还没定。缓存算不算输入的子集、总量按加还是按减，
+    // 取决于上游怎么算；在没对齐之前，任何「验证」都是在给一个未定的口径背书。
+    verify: { kind: 'manual', how: '为什么只能人工：口径尚未对齐上游，此刻任何验证都是给未定的口径背书。BACKLOG B3-2 记录的悬而未决项：在没定上游之前不改' },
     blocks: [],
   },
   {
     id: 'B3-3',
     milestone: 'M3',
     title: '上下文图在加载态有渲染，不是空白',
-    verify: { kind: 'manual', how: '断网/慢网下打开用量页的上下文图' },
+    // 为什么只能人工：现有 ContextWindowChart 测试验的是「没有实测值时明说没量过」
+    // 这类**空态**，不是「加载态有渲染」。加载态要的是真把网络拖慢才看得见。
+    verify: { kind: 'manual', how: '为什么只能人工：现有测试验的是空态而非加载态，加载态要真把网络拖慢才看得见。断网/慢网下打开用量页的上下文图' },
     blocks: [],
   },
 
@@ -241,7 +285,10 @@ export const ITEMS = [
     id: 'B4-2',
     milestone: 'M4',
     title: '在线升级机制存在（目前只有「升级前先备份」的守卫）',
-    verify: { kind: 'manual', how: 'crates/quill-upgrade 只有约 107 行，真更新机制不存在；别按「只差路由」估工时' },
+    // 为什么只能人工：判据是「真更新机制存在」，而现状是 crates/quill-upgrade
+    // 只有约 107 行、只有升级前先备份的守卫。可以写「行数 > N」这种判据，
+    // 但 N 是拍的 —— 它会在有人写了 200 行占位代码时变绿，那比恒红更糟。
+    verify: { kind: 'manual', how: '为什么只能人工：「机制存在」无法用行数阈值表达——阈值是拍的，会被占位代码骗过。crates/quill-upgrade 只有约 107 行，真更新机制不存在；别按「只差路由」估工时' },
     blocks: ['M4'],
   },
 
@@ -264,14 +311,21 @@ export const ITEMS = [
     id: 'B5-2',
     milestone: 'M5',
     title: '/api/cron 有路由（自动化页配的是假后端）',
-    verify: { kind: 'manual', how: 'curl 一下 /api/cron，现在是 404' },
+    // 为什么只能人工：1403 条测试名里 grep 不到任何与 cron 相关的用例 ——
+    // 路由根本不存在，自然也没有测试可以绑。自动化页配的是假后端这件事
+    // 只有真发一次请求才知道；在路由建起来之前，任何判据都只能绑一个 404。
+    verify: { kind: 'manual', how: '为什么只能人工：1403 条测试名里没有任何 cron 相关用例——路由不存在就没有测试可绑。curl 一下 /api/cron，现在是 404' },
     blocks: [],
   },
   {
     id: 'B5-3',
     milestone: 'M5',
     title: '不再上报没有真来源的字段（plugins / wiki_index / skill_count / tool_allowlist）',
-    verify: { kind: 'manual', how: '按 BACKLOG B5-3 的逐列复核表再核一遍 crates/*/src' },
+    // 「逐列复核」是人脑里的判断，机器做不了；但「这几个名字还在代码里」
+    // 机器完全做得了，而且那才是这条待办的实质 —— 字段还在，就还在上报。
+    // 真要逐列判断某字段的来源是否成立，那是另一件事，见 BACKLOG B5-3 的复核表。
+    // 2026-10-07 实测 28 处引用 → exit=1，如实报「未通过」。
+    verify: { kind: 'cmd', cmd: '! grep -rqE "wiki_index|skill_count|tool_allowlist" crates/quill-server/src crates/quill-store/src', cwd: 'wsl' },
     blocks: [],
   },
 

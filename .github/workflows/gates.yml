@@ -109,6 +109,14 @@ jobs:
       - name: 文本门禁 · 出处判定的自测
         run: node .scripts/provenance-selftest.mjs
 
+      # 项目状态计算器的自测。**必须进 CI**：status.mjs 算出的是一张
+      # 「哪些待办真的完成了」的表，而 2026-10-08 它自己的用例名拼接是坏的，
+      # 三条真绿的判据被报成「判据本身坏了」。本地自测当时 21 项全绿也没发现 ——
+      # 因为自测里那个用例名是手写的合成数据，从没经过真正拼名字的代码。
+      # 这条不进 CI，就等于把「状态表可信」寄托在某个人的机器上。
+      - name: 状态计算器自测
+        run: node scripts/status-selftest.mjs
+
       - name: 前端 typecheck
         working-directory: ui/web
         run: npm run typecheck

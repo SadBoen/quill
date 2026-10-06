@@ -129,16 +129,29 @@ function collectRustTests() {
 const FE_JSON = '/tmp/quill-status-vitest.json';
 
 /**
- * 前端测试：一次跑，同时得到「有哪些」与「哪些过了」。
+ * 前端用例全名 = `仓库相对路径 > describe... > 用例名`。
  *
- * **为什么不解析默认输出**（这个坑踩过）：vitest 默认 reporter **只在失败时**
- * 打印逐条用例名，全绿时整份输出只有 9 行汇总。按 `✓ ` 去解析通过项，
- * 结果是每一条前端判据都被误报成「没通过」—— 而那些测试当时是真绿的。
- * 一个「全绿时什么都不说」的输出格式，没法用来证明「某条确实绿了」。
+ * **单独抽出来，因为这段曾经是错的，而且自测没抓到**：
+ * 它原来只取文件名，于是生成 `ChatPage.test.tsx > 用例名`，
+ * 而 `project/items.mjs` 里写的是 `src/chat/ChatPage.test.tsx > 用例名` ——
+ * 两边对不上，三条判据全被判成「判据本身坏了」。
  *
- * 所以改用 json reporter：`assertionResults[]` 里每条都有 title 与 status，
- * 结构化的东西不必靠正则猜。
+ * 为什么自测没抓到：旧自测把 `'fe > 用例甲'` 直接**手写**进证据集，
+ * 名字是假的，从来没经过这个函数。测的是判定，不是拼名字 —— 测错了层。
+ * 所以现在这个函数必须导出、自测必须用它的真实输出当判据名。
+ *
+ * 纯函数，不碰文件不跑命令，所以能被喂穷尽。
  */
+export function feFullName(absPath, ancestorTitles, title) {
+  const norm = String(absPath || '').replace(/\\/g, '/');
+  // 砍到 `ui/web/` 为止；找不到就退化成原样（不猜，宁可让判据绑不上，
+  // 那会被显式报成「判据坏了」，而不是悄悄匹配错对象）。
+  const i = norm.lastIndexOf('ui/web/');
+  const rel = i >= 0 ? norm.slice(i + 'ui/web/'.length) : norm;
+  const anc = Array.isArray(ancestorTitles) ? ancestorTitles.filter(Boolean) : [];
+  return [rel, ...anc, title].join(' > ');
+}
+
 function collectFrontendTests() {
   const r = runWsl(
     'export PATH="$HOME/.cargo/bin:$PATH"; [ -x "$HOME/.local/node/bin/node" ] && export PATH="$HOME/.local/node/bin:$PATH"; ' +
@@ -155,12 +168,8 @@ function collectFrontendTests() {
   const known = new Set();
   const passing = new Set();
   for (const file of doc.testResults || []) {
-    // name 是绝对路径；判据里写的是仓库相对路径，所以取最后一段文件名 ——
-    // 这与 `vitest list` 的输出格式一致，换 reporter 不会让判据失效。
-    const fileName = String(file.name || '').split(/[\\/]/).pop();
     for (const a of file.assertionResults || []) {
-      const ancestors = Array.isArray(a.ancestorTitles) ? a.ancestorTitles : [];
-      const full = [fileName, ...ancestors, a.title].join(' > ');
+      const full = feFullName(file.name, a.ancestorTitles, a.title);
       known.add(full);
       if (a.status === 'passed') passing.add(full);
     }
@@ -282,14 +291,26 @@ function main() {
     if (rustKnown) for (const t of rustKnown) knownTests.add(t);
     else log('  ⚠ 收集不到 Rust 测试清单，Rust 侧判据不可信');
 
-    const r = collectPassingRust();
-    if (r) for (const t of r) passing.add(t);
-    else log('  ⚠ cargo test 未成功，Rust 侧判据不可信');
+    // 自检只需要「有哪些测试」，不需要「哪些过了」——
+    // 所以 self-check 模式下跳过全量测试那次跑。
+    //
+    // **为什么必须跳**：`--self-check` 是 `bash .scripts/gates.sh` 里的一道，
+    // 而 gates.sh 本身又是 `project/items.mjs` 里一条 cmd 判据的命令
+    // （B0-2 全量门禁 / B0-3 fast 门禁）。于是全量跑 status 时，
+    // gates.sh 会把 `--self-check` 拉成子进程。
+    // 若它自己也要跑一遍全量 cargo test，一次 status 就会在 gates.sh
+    // 已经在跑测试的同时再拉起一份，两边互相等cargo 锁 ——
+    // 第一次跑就是这么卡住的。
+    if (!SELF_CHECK) {
+      const r = collectPassingRust();
+      if (r) for (const t of r) passing.add(t);
+      else log('  ⚠ cargo test 未成功，Rust 侧判据不可信');
+    }
 
     const fe = collectFrontendTests();
     if (fe) {
       for (const t of fe.known) knownTests.add(t);
-      for (const t of fe.passing) passing.add(t);
+      if (!SELF_CHECK) for (const t of fe.passing) passing.add(t);
     } else {
       log('  ⚠ vitest 未成功，前端侧判据不可信');
     }

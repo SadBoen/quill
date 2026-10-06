@@ -17,7 +17,7 @@
  * 跑法：node scripts/status-selftest.mjs
  */
 
-import { decide, selfCheck, VERDICT } from './status.mjs';
+import { decide, selfCheck, feFullName, VERDICT } from './status.mjs';
 
 let failed = 0;
 let checks = 0;
@@ -166,6 +166,71 @@ console.log('\n场景 11：全部合法的声明必须零问题（别让 self-ch
     { id: 'Y4', verify: { kind: 'manual', how: '人工点' } },
   ];
   check('零问题', selfCheck(items, baseEvidence.knownTests), []);
+}
+
+console.log('\n场景 12：**前端用例名必须由真实代码拼出来**（这里曾经测错了层）');
+{
+  // 这三条是 2026-10-08 从真实 vitest json 输出里抄出来的形状，
+  // 不是编的：ChatPage 的两条 ancestorTitles 是**空数组**，
+  // ModelsPage 那条外面套了一层 describe。空数组这形状最容易把拼接写坏，
+  // 而旧自测手写 `'fe > 用例甲'` 恰好绕开了它 —— 于是真跑时三条判据全绑不上。
+  const real = [
+    {
+      label: '无 describe 的用例',
+      args: [
+        '/mnt/d/96_CoderWorld/quill/ui/web/src/chat/ChatPage.test.tsx',
+        [],
+        '切到另一个会话时，上一个会话的话不会留在屏幕上',
+      ],
+      want: 'src/chat/ChatPage.test.tsx > 切到另一个会话时，上一个会话的话不会留在屏幕上',
+    },
+    {
+      label: '套了一层 describe 的用例',
+      args: [
+        '/mnt/d/96_CoderWorld/quill/ui/web/src/models/ModelsPage.test.tsx',
+        ['压缩阈值输入框'],
+        '明写「暂未生效」：这个数存得下来，但没有任何代码读它',
+      ],
+      want:
+        'src/models/ModelsPage.test.tsx > 压缩阈值输入框 > 明写「暂未生效」：这个数存得下来，但没有任何代码读它',
+    },
+    {
+      label: 'Windows 反斜杠路径',
+      args: [
+        'D:\\96_CoderWorld\\quill\\ui\\web\\src\\chat\\ChatPage.test.tsx',
+        [],
+        '用例甲',
+      ],
+      want: 'src/chat/ChatPage.test.tsx > 用例甲',
+    },
+  ];
+  for (const c of real) {
+    check(`拼出全名（${c.label}）`, feFullName(...c.args), c.want);
+  }
+
+  // 关键一环：把**函数的真实输出**原样当作判据名喂给 decide。
+  // 如果拼接逻辑退化了（比如退回只取文件名），这里必然红。
+  const name = feFullName(
+    '/mnt/d/96_CoderWorld/quill/ui/web/src/chat/ChatPage.test.tsx',
+    [],
+    '切到另一个会话时，上一个会话的话不会留在屏幕上',
+  );
+  const ev = {
+    ...baseEvidence,
+    knownTests: new Set([name]),
+    passing: new Set([name]),
+  };
+  check(
+    '拼出来的名字能被自己的判据匹配上',
+    decide({ verify: { kind: 'test', name } }, ev).verdict,
+    VERDICT.PASS,
+  );
+  check(
+    '退回 basename 的老写法则绑不上（这正是线上发生过的故障）',
+    decide({ verify: { kind: 'test', name: 'ChatPage.test.tsx > 切到另一个会话时，上一个会话的话不会留在屏幕上' } }, ev)
+      .verdict,
+    VERDICT.BROKEN,
+  );
 }
 
 console.log('\n' + '='.repeat(60));
