@@ -468,6 +468,12 @@ mod tests {
     /// 无需管理员权限）`canonicalize(root/link/new.md)` 返回
     /// `NotFound`，旧写法在这里会放行。现在退到最长存在祖先，
     /// `root/link` 被解析成真实目标，判定随之正确。
+    ///
+    /// **只跑 Windows**：链接的建法本身就分平台（`symlink_dir` vs
+    /// `mklink /J`），而且这正是 Windows 上才踩到的坑 ——
+    /// 非 Windows 上文件系统大小写敏感、没有逐字路径前缀，这条路径的
+    /// 价值完全不同，硬跑只会把「跨平台能编译」这件事弄坏。
+    #[cfg(windows)]
     #[test]
     fn a_not_yet_written_file_behind_a_link_outside_root_is_rejected() {
         let tmp = TempDir::new("link");
