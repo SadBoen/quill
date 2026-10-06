@@ -605,6 +605,98 @@ mod hub_source_tests {
     }
 }
 
+/// 钉住 [`plan_install`]：一个技能名**只能有一个正文**，
+/// 而 `installed_count` 必须等于装完真的存在的技能数。
+///
+/// 这条曾经是坏的，而且坏得很难看：有 manifest 时包里每个 `.md` 都算成同一个
+/// slug，第二个条目的正文盖掉第一个，库里只剩一行，循环却照样数了两下 ——
+/// 于是「装到 2 个技能」，实际只有 1 个，而且正文是谁全看 zip 里的顺序。
+#[cfg(test)]
+mod install_plan_tests {
+    use super::{plan_install, MANIFEST_FILE};
+    use crate::skillhub::parse_manifest;
+
+    const MANIFEST: &str = r#"{"slug":"tech-test-automation","displayName":"自动化测试"}"#;
+
+    /// 造一份解包结果。`plan_install` 只看条目名，不看正文，
+    /// 所以正文在这里统一填个能认出来的东西就够了。
+    fn entries(names: &[&str]) -> Vec<(String, String)> {
+        names
+            .iter()
+            .map(|n| (n.to_string(), format!("正文 of {n}")))
+            .collect()
+    }
+
+    fn slugs(plan: &super::InstallPlan) -> Vec<String> {
+        plan.picks.iter().map(|(_, s)| s.clone()).collect()
+    }
+
+    #[test]
+    fn two_bodies_in_one_package_produce_one_skill_and_the_loser_is_named() {
+        // 上游的正常形状：manifest + `SKILL.md` + `README.md`。
+        // 三个条目（manifest 不算）里只有**一个**技能名能存在。
+        let files = entries(&[MANIFEST_FILE, "SKILL.md", "README.md"]);
+        let manifest = parse_manifest(MANIFEST).expect("manifest 应当能解析");
+        let plan = plan_install(Some(&manifest), &files).expect("应当能算出计划");
+
+        assert_eq!(
+            slugs(&plan),
+            vec!["tech-test-automation".to_string()],
+            "一个包 = 一个技能名，正文只留第一篇"
+        );
+        assert_eq!(plan.skipped.len(), 1, "被盖掉的那一篇要点名");
+        let (loser, keeper, skill) = &plan.skipped[0];
+        assert_eq!(loser, "README.md");
+        assert_eq!(keeper, "SKILL.md", "要说清留下的是哪一篇");
+        assert_eq!(skill, "tech-test-automation");
+    }
+
+    #[test]
+    fn the_single_body_package_is_untouched_by_the_new_check() {
+        // `tech-test-automation` 的真实形状：manifest + 一篇正文。
+        // 这里不能多挡任何东西 —— 挡了就是让一个本来能装的包装不上。
+        let files = entries(&[MANIFEST_FILE, "identify.md"]);
+        let manifest = parse_manifest(MANIFEST).expect("manifest 应当能解析");
+        let plan = plan_install(Some(&manifest), &files).expect("应当能算出计划");
+
+        assert_eq!(slugs(&plan), vec!["tech-test-automation".to_string()]);
+        assert!(plan.skipped.is_empty(), "只有一个正文，不该报撞名");
+    }
+
+    #[test]
+    fn two_directories_with_the_same_basename_collide_without_a_manifest() {
+        // 没有 manifest 时用包内文件名命名，而 `skillhub_unpack` 把条目名
+        // 拍成 basename 且不去重：`a/x.md` 与 `b/x.md` 都会变成 `x`。
+        let files = entries(&["x.md", "y.md", "x.md"]);
+        let plan = plan_install(None, &files).expect("应当能算出计划");
+
+        assert_eq!(slugs(&plan), vec!["x".to_string(), "y".to_string()]);
+        assert_eq!(plan.skipped.len(), 1);
+        assert_eq!(plan.skipped[0].2, "x");
+    }
+
+    #[test]
+    fn a_package_of_distinct_bodies_without_a_manifest_installs_each_one() {
+        let files = entries(&["alpha.md", "beta.md"]);
+        let plan = plan_install(None, &files).expect("应当能算出计划");
+
+        assert_eq!(slugs(&plan), vec!["alpha".to_string(), "beta".to_string()]);
+        assert!(plan.skipped.is_empty());
+    }
+
+    #[test]
+    fn a_package_of_only_metadata_installs_nothing_and_skips_nothing() {
+        // 这时由 handler 那条「一个都没装上就报 400」接手。
+        // `plan_install` 不该在这里编一个技能出来。
+        let files = entries(&[MANIFEST_FILE]);
+        let manifest = parse_manifest(MANIFEST).expect("manifest 应当能解析");
+        let plan = plan_install(Some(&manifest), &files).expect("应当能算出计划");
+
+        assert!(plan.picks.is_empty());
+        assert!(plan.skipped.is_empty());
+    }
+}
+
 /// `GET /api/extensions/skill-hub` —— 列出技能市场（SkillHub）里的技能集。
 ///
 /// **上游是外部服务**（默认 `https://api.skillhub.cn`，可用 `QUILL_SKILLHUB_HOST` 改）。
@@ -613,7 +705,16 @@ mod hub_source_tests {
 /// 上游挂了就说挂了。**绝不能返回空列表** ——
 /// 「市场连不上」与「市场里没有技能」在界面上是两件完全不同的事，
 /// 而空列表这句话会让用户以为是后者，然后跑去怀疑自己的技能包。
+///
+/// ## 为什么要 `AuthUser`（哪怕一个字段都不用）
+///
+/// 这个端点只是读，但 `kind=all` 一次要并发拉 6 个上游榜单
+/// （`skillhub::showcase_all`），而本项目的认证是**逐 handler** 的 ——
+/// `GuardLayer` 只兜 panic，不做鉴权。不挂 `AuthUser`，它就是一个
+/// **未登录就能打的对外放大器**：拿别人的服务器替自己去敲上游，还不限速。
+/// 这里连一个字段都不需要，只要求「调用者有会话」。
 pub async fn skill_hub_list(
+    _user: AuthUser,
     Query(q): Query<HubListQuery>,
 ) -> Result<Response, ApiError> {
     let page = match crate::skillhub::list_skillsets(q.page, q.page_size).await {
@@ -701,7 +802,11 @@ pub struct HubSkillQuery {
 ///
 /// 与 [`skill_hub_list`]（技能包）是**两件事**，不是同一个列表的两种叫法。
 /// 上游实测：技能包 56 个，单技能搜索 `pdf` 出来 5 个，两边 slug 各不相同。
+///
+/// 认证：同 [`skill_hub_list`] —— 读接口也是要打到外部服务上的，
+/// 逐 handler 的 `AuthUser` 是唯一的门。
 pub async fn skill_hub_search(
+    _user: AuthUser,
     Query(q): Query<HubSkillQuery>,
 ) -> Result<Response, ApiError> {
     let items = match crate::skillhub::search_skills(&q.q, q.limit).await {
@@ -734,7 +839,11 @@ fn recommended() -> String {
 /// `kind=all` 是**我们**的聚合词（上游没有这个端点），走并发拉全部再合并。
 /// 部分榜单没拉到时，成功的那部分照常返回、失败的记进 `errors` ——
 /// 全部失败才算连不上。
+///
+/// 认证：同 [`skill_hub_list`]。这个端点最需要它 —— `kind=all` 一次六发上游，
+/// 未登录就能按需放大。
 pub async fn skill_hub_rankings(
+    _user: AuthUser,
     Query(q): Query<HubRankQuery>,
 ) -> Result<Response, ApiError> {
     if q.kind == "all" {
@@ -867,6 +976,97 @@ pub async fn skill_hub_install_skill(
     .into_response())
 }
 
+/// 技能包里的 manifest：它是元数据，不是技能正文。
+const MANIFEST_FILE: &str = "manifest.json";
+
+/// 一次安装的**打算**：每个技能名用包里哪个条目，以及哪些条目被挡掉了。
+///
+/// 单独一个结构体、单独一个函数，是为了让「哪些条目会落到同一个技能名上」
+/// 这件事在**动磁盘之前**就算完。撞名一旦发生在写盘之后，就是一个
+/// 「库里有行、正文被另一篇盖掉」的技能 —— 那正是本项目最恨的
+/// 「看起来装成功了、实际内容是随机的」。
+struct InstallPlan {
+    /// 要装的：`(unpacked.files 里的下标, 技能名)`。
+    /// **一个技能名最多出现一次。**
+    picks: Vec<(usize, String)>,
+    /// 被挡掉的：`(被挡掉的条目名, 占住那个技能名的条目名, 技能名)`。
+    /// 说出来，不静默丢。
+    skipped: Vec<(String, String, String)>,
+}
+
+/// 把包内条目映射成技能名，并**挡掉撞名的那些**。
+///
+/// ## 为什么名字取包 slug，却不能因此把整包正文都装成同一个名字
+///
+/// 技能名必须是包 slug（见 `skill_hub_install` 的文档，以及
+/// `hub_source_tests` 里钉住的那条测试）——`tool_name` 就是 slug，
+/// 而这个名字会直接出现在对话工具表里让模型调。
+///
+/// 但有 manifest 时，**包里每个 `.md` 都会算成同一个 slug**。而
+/// `skills.name` 上有 `UNIQUE(user_id, name)`、`skill_file` 又给出同一个
+/// `<slug>.md`：第二个条目的正文会盖掉第一个，库里也只剩一行 ——
+/// 而循环照样 `installed.push`，`installed_count` 于是报 2、实际只存在 1 个。
+/// 没有 manifest 时 `skillhub_unpack` 把条目名拍成 basename 且不去重，
+/// `a/x.md` 与 `b/x.md` 撞成同一个 `x`，是同一个问题。
+///
+/// **这里选「第一个占住、后面逐条报成撞名」，而不是整包失败**：
+/// 一个包同时带 `SKILL.md` 与 `README.md` 是上游的正常形状，为它把整包
+/// 装不下去，是拿一个真问题换一个更大的问题。哪个条目占住，与单技能那条
+/// （`skill_hub_install_skill` 取 `.first()`）保持同一个口径。
+///
+/// **也不能给 slug 随便加个后缀来「消歧」** —— 上游没有那个技能，
+/// 名字是编的，而这个名字正是模型在工具表里看到的东西。
+///
+/// 被挡掉的那几项在响应里逐条点名（`skipped_duplicate`），
+/// 与 `installed_count` 一起构成「装到几个、落下几个」。
+fn plan_install(
+    manifest: Option<&crate::skillhub::HubManifest>,
+    files: &[(String, String)],
+) -> Result<InstallPlan, ApiError> {
+    let mut picks: Vec<(usize, String)> = Vec::new();
+    let mut taken: Vec<(String, String)> = Vec::new(); // (技能名, 占住它的条目名)
+    let mut skipped: Vec<(String, String, String)> = Vec::new();
+
+    for (i, (name, _)) in files.iter().enumerate() {
+        // manifest.json 不是技能，是元数据。**不算进「装了几个」**。
+        if name == MANIFEST_FILE {
+            continue;
+        }
+        // 技能名优先取**包的 slug**，不是包内文件名。
+        //
+        // 实测：`tech-test-automation` 的 zip 里那篇正文叫 `identify.md`，
+        // 按文件名装出来就叫 `identify` —— 这个名字既看不懂，也会直接
+        // 出现在对话工具表里让模型调（`tool_name` 就是 slug）。
+        // 一个包 = 一个技能，名字就该是那个包。
+        let stem = manifest
+            .map(|m| m.slug.trim())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| name.trim_end_matches(".md").to_string());
+        // 归一失败（上游给了个带斜杠的 slug）时退回文件名，而不是整包失败 ——
+        // `normalize_name` 的错误信息里没有「换个名字继续」这句话。
+        let slug_row = match mcp_repo::normalize_name(&stem) {
+            Ok(n) => n,
+            Err(_) => {
+                mcp_repo::normalize_name(name.trim_end_matches(".md"))
+                    .map_err(ApiError::bad_request)?
+            }
+        };
+
+        match taken.iter().find(|(s, _)| *s == slug_row) {
+            // 已经有条目占住这个名字了：这一篇**不装**。
+            // 装上去只会覆盖掉已装的那一篇，然后多报一个不存在的技能。
+            Some((_, keeper)) => skipped.push((name.clone(), keeper.clone(), slug_row)),
+            None => {
+                taken.push((slug_row.clone(), name.clone()));
+                picks.push((i, slug_row));
+            }
+        }
+    }
+
+    Ok(InstallPlan { picks, skipped })
+}
+
 /// `POST /api/extensions/skill-hub/{slug}/install` —— 把一个技能集装进本地技能目录。
 ///
 /// ## 这条路的风险在哪
@@ -875,6 +1075,10 @@ pub async fn skill_hub_install_skill(
 /// 先过完 [`crate::skillhub_unpack`] 的全部检查（条目数、解压总量、压缩比、
 /// 路径穿越），**再**落盘。任何一条检查不过就整包拒绝 ——
 /// 不能「装到一半发现不对」然后留半个技能在目录里。
+///
+/// 落盘之前还要**先把要装哪几个算完**（[`plan_install`]）：多个条目算到
+/// 同一个技能名上时只装第一个，其余逐条报成撞名。先算后写，写之前就确定了
+/// 「这一包到底会产出几个技能」，也就不会出现「报装 2 个、正文只有 1 篇」。
 ///
 /// ## 装完默认是停用的
 ///
@@ -908,13 +1112,17 @@ pub async fn skill_hub_install(
     let manifest: Option<crate::skillhub::HubManifest> = unpacked
         .files
         .iter()
-        .find(|(name, _)| name == "manifest.json")
+        .find(|(name, _)| name == MANIFEST_FILE)
         .and_then(|(_, body)| crate::skillhub::parse_manifest(body));
 
     let referenced: Vec<String> = manifest
         .as_ref()
         .map(|m| m.referenced_slugs())
         .unwrap_or_default();
+
+    // **先算清楚要装哪几个，再动磁盘。** 撞名的条目在这里就被挡掉，
+    // 不会先写进去再被第二篇盖掉 —— 那会装出一个正文随机、却报着「装好了」的技能。
+    let plan = plan_install(manifest.as_ref(), &unpacked.files)?;
 
     let dir = skill_dir(&state.config);
     std::fs::create_dir_all(&dir)
@@ -923,34 +1131,10 @@ pub async fn skill_hub_install(
     let db = state.db()?;
     let mut installed: Vec<Value> = Vec::new();
 
-    for (name, body) in &unpacked.files {
-        // manifest.json 不是技能，是元数据。**不算进「装了几个」**。
-        if name == "manifest.json" {
-            continue;
-        }
-        // 技能名优先取**包的 slug**，不是包内文件名。
-        //
-        // 实测：`tech-test-automation` 的 zip 里那篇正文叫 `identify.md`，
-        // 按文件名装出来就叫 `identify` —— 这个名字既看不懂，也会直接
-        // 出现在对话工具表里让模型调（`tool_name` 就是 slug）。
-        // 一个包 = 一个技能，名字就该是那个包。
-        let stem = manifest
-            .as_ref()
-            .map(|m| m.slug.trim())
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
-            .unwrap_or_else(|| name.trim_end_matches(".md").to_string());
-        // 归一失败（上游给了个带斜杠的 slug）时退回文件名，而不是整包失败 ——
-        // `normalize_name` 的错误信息里没有「换个名字继续」这句话。
-        let slug_row = match mcp_repo::normalize_name(&stem) {
-            Ok(n) => n,
-            Err(_) => {
-                mcp_repo::normalize_name(name.trim_end_matches(".md"))
-                    .map_err(ApiError::bad_request)?
-            }
-        };
+    for (idx, slug_row) in &plan.picks {
+        let (_, body) = &unpacked.files[*idx];
         // 落盘路径只允许 `skill_file` 这一处计算（`sanitize_name` 已在解包时挡过穿越）。
-        let path = skill_file(&dir, &slug_row)?;
+        let path = skill_file(&dir, slug_row)?;
 
         // 正文哈希算的是**真要落盘的这几行**，不是下载下来的 zip ——
         // 这两者的哈希本来就不该相等。
@@ -1006,7 +1190,19 @@ pub async fn skill_hub_install(
         "display_name": manifest.as_ref().and_then(|m| m.display_name()),
         // **装到几个就说几个。** manifest 里点名的子技能只有 slug 与简介，
         // 没有正文，所以它们**不在** installed 里 —— 把它们算进去就是编数据。
+        // 这个数现在等于**装完真的存在**的技能数：撞名的条目在 `plan_install`
+        // 里就被挡掉并记进 `skipped_duplicate`，不会在这里被多算一次。
         "installed_count": installed.len(),
+        // **挡掉的要逐条点名。** 只给一个数字的话，用户会以为那些条目的正文
+        // 也装上了 —— 它们没有：同一个技能名在磁盘上只有一份正文文件。
+        "skipped_duplicate": plan.skipped.iter()
+            .map(|(entry, keeper, skill)| json!({
+                "entry": entry,
+                "would_have_overwritten": skill,
+                "kept_entry": keeper,
+            }))
+            .collect::<Vec<_>>(),
+        "skipped_duplicate_count": plan.skipped.len(),
         "skipped_other": unpacked.skipped_other,
         "referenced_not_installed": referenced,
         "compressed_bytes": unpacked.compressed_bytes,
