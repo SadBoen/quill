@@ -27,6 +27,20 @@ use quill_provider::{ToolCall, ToolSpec};
 /// 取 4 是够用的上限：真实任务（查两次专家、再查一次会话）用不到一半。
 pub const MAX_TOOL_ROUNDS: usize = 4;
 
+/// 轮次用尽后、去掉工具再问一次时塞给模型的话。
+///
+/// 措辞要点：**让它把手上已有的信息说出来，而不是要求它「给出正确答案」**。
+/// 工具查不到东西是正常结果（服务器没配、文件不存在、桩只回一句话），
+/// 模型如实说明缺什么才是有用输出；逼它「想办法」只会让它继续要工具。
+pub const FINAL_ANSWER_PROMPT: &str =
+    "不要再调用任何工具了。现在请直接用你手上已有的信息回答：\
+     说清楚你已经查到了什么、哪些信息拿不到、拿不到的原因是什么。\
+     不知道就直说不知道，不要编。";
+
+/// 收尾调用在工具轨迹里用的标记名。界面上会看到这一条，
+/// 它表示「这一段是去掉工具之后逼出来的正文」，不是用户调的工具。
+pub const FINAL_ANSWER_MARKER: &str = "final_answer";
+
 /// 单个工具结果回灌给模型时的长度上限。
 ///
 /// 工具可能返回整份文件或长列表，全量回灌会让下一轮的上下文迅速膨胀。
@@ -897,6 +911,29 @@ mod tests {
             ),
             "关掉专家工具只该少这两个：{a:?} vs {b:?}"
         );
+    }
+
+    #[test]
+    fn the_final_answer_prompt_asks_for_a_honest_partial_not_a_guess() {
+        // 收尾调用的措辞是关键：要求它「说出查到了什么、缺什么」，
+        // 而不是「想办法给出答案」—— 后者只会让它继续要工具。
+        let p = FINAL_ANSWER_PROMPT;
+        assert!(p.contains("不要再调用任何工具"), "要先断掉调工具的念头：{p}");
+        assert!(p.contains("查到了什么"), "要它把已有的说出来：{p}");
+        assert!(p.contains("拿不到"), "要它说清缺什么：{p}");
+        assert!(p.contains("不要编"), "不许编：{p}");
+        // 不能出现「必须给出正确答案」这类要求 —— 那是查不到数据时的死路。
+        for forbidden in ["必须给出正确答案", "想办法", "一定"] {
+            assert!(!p.contains(forbidden), "收尾提示里不该出现「{forbidden}」：{p}");
+        }
+    }
+
+    #[test]
+    fn the_final_answer_marker_is_not_something_a_model_can_call() {
+        // 它只出现在工具轨迹里，不是可调用的工具名 —— 不能和真工具重名。
+        assert_eq!(FINAL_ANSWER_MARKER, "final_answer");
+        assert_ne!(FINAL_ANSWER_MARKER, "list_experts");
+        assert_ne!(FINAL_ANSWER_MARKER, "notes__read-note");
     }
 
     #[test]

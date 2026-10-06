@@ -1728,6 +1728,81 @@
 | 9 | ✅ | 16246ms / 入 1083 出 100 | 诚实说拿不到电影奖项与比特币价格，没有编造 |
 | 10 | ⚠ | `tool_loop_exhausted` | **用户消息这次没消失**（新 bundle 生效，ISSUE-039 回归通过）；日志显示 `get_expert_detail 执行成功（147 字符）`，ISSUE-040 修复已生效，但模型仍在专家工具上耗预算 → ISSUE-041 |
 | 11 | ⚠ | `tool_loop_exhausted` | 第 5 条起累计 5/11 都是这个错配；模型 4 轮里 3 轮花在挑角色上 → ISSUE-041 |
+| 12 | ✅ | 20723ms / 入 844 出 118 | **ISSUE-041 真机回归通过**：模型直接给正文，并准确说「我目前只有笔记管理工具（notes__read-note 和 notes__list-notes）」，不再空转挑角色 |
+| 13 | ⚠ | `tool_loop_exhausted` | 轨迹 `notes__list-notes` → `read-note` ×3：模型**找对了工具**，是桩服务器每次回同一句「stub」，它无从收敛。用户消息正常显示 |
+| 14 | ⚠ | `tool_loop_exhausted` | 同型，`notes__list-notes` / `read-note` / `list-notes` ×2 |
+
+### 关于环境：一个必须说清楚的前提
+
+这台实例上**真挂着一台 MCP 服务器**，是 quill 自己写的端到端对端 `quill-mcp-stub`
+（`src/bin/mcp_stub.rs`），3 个工具：
+
+```
+GET /api/extensions/mcp
+  notes | enabled=True | transport=stdio | cmd=…/target/debug/quill-mcp-stub
+  connected=1, failed=0, mounted_count=3
+```
+
+**它对任何调用都回同一句「stub」**，所以模型拿不到任何可以收敛的信息，
+第 13、14 条那种 `tool_loop_exhausted` 基本是它造成的 ——
+**不是 quill 的 bug，也不是模型弱**。如实记下来，免得把这几条算到 quill 头上。
+`/api/extensions/mcp` 的响应里有 `note` 字段说明了这一点，
+但**界面上没露出来**（见 ISSUE-037 剩下的那一半）。
+
+实测桩的返回（直接用 JSON-RPC 打 `target/debug/quill-mcp-stub`，绕开 quill）：
+
+| 调用 | 返回 |
+|---|---|
+| `list-notes`，参数 `{}` | `stub 执行了 list-notes` |
+| `list-notes`，参数 `{"path":"/nope/does-not-exist"}` | `stub 执行了 list-notes` |
+| `read-note`，参数 `{"path":"a.md"}` | `stub 执行了 read-note` |
+
+**三种完全不同的调用拿到同一句话**，确实无从收敛。
+
+---
+
+## ISSUE-042 · 工具轮次用尽就直接报错，从不做最后一次「不给工具、必须给正文」的收尾
+
+- **发现于**：用户看着第 14 条那条一模一样的报错问「你不觉得有问题，要查一下？」
+- **现象**：第 5、7、8、10、11、13、14 条全部以同一句
+  `模型连续 4 轮都在请求调用工具，没有给出正文` 收场，
+  用户拿到的是**一条错误、一句正文都没有**。
+  而同一个模型在第 1、2、3、6、9、12 条里**主动**说清了
+  「我查不到、需要你提供 X」—— 也就是说**它完全有能力给出有用的部分结果**。
+- **严重度**：严重（把「模型没收敛」直接变成「用户什么都没有」，
+  上下文里明明已经有它查到的东西）
+- **根因**：`api_chat.rs` 的工具循环是这样结束的：
+  ```rust
+  while !reply.tool_calls.is_empty() {
+      if rounds >= MAX_TOOL_ROUNDS { break; }   // ← 直接跳出
+      …
+      reply = provider.chat(&follow_up)…;      // ← 每次都还带着 tools
+  }
+  if reply.answer().is_empty() && !reply.tool_calls.is_empty() {
+      return Err(ApiError::tool_loop_exhausted(…));
+  }
+  ```
+  跳出时 `reply` 里仍然只有 `tool_calls`、没有 `text`，
+  于是走错误分支。**整个过程里没有任何一次「把工具摘掉再问一遍」**。
+  而每次 `follow_up` 都重新带上完整工具表，模型当然有理由继续要工具。
+- **复现**：让模型需要调用某个「怎么调都只回同一句话」的工具，
+  连续 4 轮之后看响应 —— 得到错误，模型说过的那些信息全被丢掉。
+- **修复**：轮次用尽且仍无正文时，**再做一次收尾调用**：
+  - 工具**不带**（再给一次只会再要一轮）；
+  - 塞一条 `FINAL_ANSWER_PROMPT`：
+    「不要再调用任何工具了。现在请直接用你手上已有的信息回答：
+    说清楚你已经查到了什么、哪些信息拿不到、拿不到的原因是什么。
+    不知道就直说不知道，不要编。」
+  - 拿到非空正文就用它；调用本身失败或仍然为空，才保留原来的
+    `tool_loop_exhausted` 结论。
+  - 这次收尾在 `tool_trace` 里留下 `final_answer` 标记，
+    界面上能看出「这一段是去掉工具之后逼出来的正文」，不是用户调的工具。
+- **措辞为什么这么写**：要求它「想办法给出答案」只会让它继续要工具；
+  要求它「说出查到了什么、缺什么」才是有用输出。测试里明确钉住
+  「收尾提示里不许出现『必须给出正确答案』『想办法』『一定』」。
+- **回归**：`tools::tests::the_final_answer_prompt_asks_for_a_honest_partial_not_a_guess`、
+  `tools::tests::the_final_answer_marker_is_not_something_a_model_can_call`。
+- **状态**：已修待真机回归。
 
 - 这两条跑之前，第 1 条是**必然 503** 的（13 个技能常驻 9845 tokens > 8192 窗口），
   而且界面一个字都不提示。修完之后同一个环境能正常跑完 —— 这是 ISSUE-035 与

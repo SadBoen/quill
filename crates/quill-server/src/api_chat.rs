@@ -600,7 +600,44 @@ pub async fn post_message(
         };
         reply = provider.chat(&follow_up).await.map_err(provider_failure)?;
     }
+
+    // 轮次用尽、模型仍然只给 tool_calls 没有正文时，**再做一次收尾调用**：
+    // 把工具**摘掉**，并明确要求「用手上的信息作答」。
+    //
+    // 为什么非要这一步：模型其实完全有能力说清「我查到了什么、缺什么」——
+    // 同一批 4B 在第 1、2、3、6、9、12 条任务里都主动这么做了。
+    // 不做这一步，用户拿到的只是一条 `tool_loop_exhausted` 错误，
+    // **一句有用的正文都没有**，而那些信息本来就在上下文里。
+    let mut forced_final_answer = false;
+    if !reply.tool_calls.is_empty() && reply.answer().trim().is_empty() {
+        eprintln!(
+            "[chat] 工具往返用尽仍无正文，去掉工具再问一次，强制它作答"
+        );
+        msgs.push(Message::assistant_tool_calls(reply.tool_calls.clone()));
+        msgs.push(Message::user(crate::tools::FINAL_ANSWER_PROMPT.to_string()));
+        // **不带 tools**：模型此刻已经证明会一直要工具，再给一次只是再要一轮。
+        let final_request = crate::llm::build_request(&llm_config, msgs.clone());
+        match provider.chat(&final_request).await {
+            Ok(last) => {
+                tool_trace.push(json!({
+                    "id": "final",
+                    "name": crate::tools::FINAL_ANSWER_MARKER,
+                    "arguments": json!({ "rounds_exhausted": crate::tools::MAX_TOOL_ROUNDS }),
+                    "ok": true,
+                    "result": last.answer().to_string(),
+                }));
+                if !last.answer().trim().is_empty() {
+                    reply = last;
+                    forced_final_answer = true;
+                }
+            }
+            Err(e) => {
+                eprintln!("[chat] 收尾调用失败，保留原来的 tool_loop_exhausted 结论：{e}");
+            }
+        }
+    }
     let turn_ms = started.elapsed().as_millis() as i64;
+    let _ = forced_final_answer;
 
     // 工具往返用尽后仍只有 tool_calls、没有正文：这是**没有回答**，
     // 不能当成功返回。`has_answer()` 在这种情况下会返回 true（它只判断
