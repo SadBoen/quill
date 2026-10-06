@@ -978,6 +978,15 @@ function ProviderForm({
           disabled={isPending}
           onChange={(event) => patch({ compaction_threshold_tokens: Number(event.target.value) })}
         />
+        {/* 这个数**存下来了，但没有任何代码读它**（全仓库只出现在迁移、
+            增删改查与测试里）。不给标注的话，用户会在这里改一个不生效的
+            数字，然后发现对话该超还是超。压缩本体是 M3 的活。 */}
+        <small className="field-help" data-testid="models-compaction-not-enforced">
+          {t('models.compactionNotEnforced', {
+            defaultValue:
+              '暂未生效：这个值会被保存并显示在对话页，但目前没有任何压缩逻辑会读它 —— 超过上限不会自动摘要，需要自己新建会话。',
+          })}
+        </small>
       </label>
       <label>
         {t('models.maxOutputTokens', { defaultValue: '最大输出' })}

@@ -122,7 +122,7 @@ Rust 工具链在 WSL2，node/npm 只在 Windows 侧。
 `error.rs:244` MethodNotAllowed→405）。旧文档写「routes.rs:93-96」行号已漂移。
 界面目前不发这个请求、按实情提示 —— 保持，不要为了"补齐"去加一个没想清楚的语义。
 
-### B1-4 首轮浏览器实点验收跑完，剩下四条没验 🟡
+### B1-4 首轮浏览器实点验收跑完，剩下四条没验 🟡（其中第 3 条本轮已审完）
 
 2026-10-06 在全新一次性实例（`/tmp/quill-m1-accept`，不设 `QUILL_TOKENS` 以便首管引导出现）
 上点了一遍。**通过的**：首管引导建号 → 登录 → 刷新后会话仍在（真读库）；
@@ -133,13 +133,22 @@ Rust 工具链在 WSL2，node/npm 只在 Windows 侧。
 
 **没验 / 没做完的**，逐条写明原因，不含糊过去：
 
-1. **流式增量输出没看见**。界面表现为「生成中… 等待模型返回…」占位，然后整段出现；
-   这次模型 2.3 秒就答完，看不到逐字增长。判据写的是「流式输出正常」，
-   这一点**不能算已验**，要用一个慢一点的模型（或人工打断）再看一次。
+1. **流式增量输出：确认了「根本没接」，不是「没看见」**（2026-10-06 摸底）。
+   链路的两头都是现成的：`quill-provider` 里 `Provider::stream` / `SseDecoder` /
+   工具调用的分片重组都已写好并有单测（`openai.rs:165`、`sse.rs`、`wire.rs:381`），
+   但**服务端一处都没调它** —— `api_chat.rs:991/1036/1056` 全是 `provider.chat()`
+   （一次性拿完整回包），路由只有 `POST /api/sessions/{id}/messages`，
+   前端 `ui/web/src/chat/` 里**没有一处 EventSource / getReader**。
+   所以现在看到「生成中…」占位后整段出现，是当前实现的必然结果，
+   不是模型答得太快。这也解释了为什么「换个慢模型再看一次」这条修法没用。
+   **接法**：新开一条 SSE 路由（不改老路由的语义），服务端把现有的
+   工具往返循环改成逐步吐字，前端读流增量渲染。
 2. **一轮里用工具时界面不炸** 没测。判据明写了这句。
-3. **`GET /api/admin/config` 的字段有没有「建了列但零读写」** 没审。只看了 `/healthz` 的
-   `max_context_tokens` / `compaction_threshold_tokens` 真被对话页显示出来。
+3. ~~**`GET /api/admin/config` 的字段有没有「建了列但零读写」**~~ —— **本轮已审完**，
+   结论写在 B3-1：8 个字段里 7 个真生效，唯一只存不读的是 `compaction_threshold_tokens`。
+   顺带把模型管理页那个没标注的输入框补了「暂未生效」，并用测试钉住。
 4. **`npm run lint` 仍跑不起来**（B0-3），`react-hooks/exhaustive-deps` 从未生效过。
+   这一条要你点头加配置（改依赖政策），没点头之前一直挂着。
 
 **另有一条测不了而不是没测**：「停用某个账号」的成功路径，在这台验收机上做不了 ——
 实例里只有 owner 一个账号，而服务端有硬保护 `SelfDisableForbidden`
@@ -245,7 +254,7 @@ octop 的专家市场与它的技能市场是**同一个上游**，所以没有�
 
 ## M3 · 上下文与成本可信
 
-### B3-1 对外报了一个不存在的开关 🔴
+### B3-1 对外报了一个不存在的开关 🔴 界面已如实标注，压缩本体仍未做
 
 `/healthz` 与 `GET /api/admin/config` 都在上报 `compaction_threshold_tokens`，
 但 `compaction_threshold_tokens` 在 `crates/**` 里只出现在配置层
@@ -254,7 +263,24 @@ octop 的专家市场与它的技能市场是**同一个上游**，所以没有�
 `checkpoint_key` / `checkpoint_path` / `replan_count` / `error_state` / `last_error`，
 `0001_init.sql:245-287`）在 server 侧**零读写**。
 
-这是 M3 的主体：真做压缩，参照 `vendor/goose/crates/goose-context-management`（别自己发明）。
+**2026-10-06 审完这一条（M1-3 的产出）**，把「报了但没人读」的字段逐个点清了：
+
+- `GET /api/admin/config` 的 8 个字段里 **7 个真生效**（protocol / base_url / model /
+  has_api_key / max_context_tokens / max_output_tokens / updated_at，都会进运行时或落库）。
+- 唯一只存不读的是 **`compaction_threshold_tokens`**。全仓库 grep 确认：它只出现在迁移、
+  增删改查与测试里，**没有任何运行时读者**（B3-1 的判断成立，而且比原先写的更彻底 ——
+  连配置层之外都没有）。
+- `/healthz` 的字段逐个对过，**没有第二个「报了不生效」的**：`llm.configured` 真读
+  provider 槽位，`max_context_tokens` / `max_tokens` 真的进请求体，
+  `warnings` 会带停用的默认 provider。
+
+**本轮把界面上的谎言去掉了**：对话页的 tooltip 早就写着「压缩尚未实现」，但**模型管理页
+的「压缩阈值」是一个可编辑输入框，旁边什么也没说** —— 用户在这里改一个不生效的数字，
+然后发现对话该超还是超。已在该输入框下加一句「暂未生效」，并用一条测试钉住
+（`models-compaction-not-enforced`，变异验证：删掉标注即变红）。
+
+压缩本体仍是 M3 的主体：真做压缩，参照 `vendor/goose/crates/goose-context-management`
+（别自己发明）。顺带那 8 个 session 列仍然零读写，一并归在这一条里。
 
 ### B3-2 token 口径已验证正确，暂不动 ✅ / ⚠
 

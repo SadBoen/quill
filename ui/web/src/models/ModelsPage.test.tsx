@@ -1,5 +1,10 @@
-import { describe, expect, it } from 'vitest'
-import { contextMismatch, type PoolGroup } from './ModelsPage'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+import i18n from '../i18n'
+import { ModelsPage, contextMismatch, type PoolGroup } from './ModelsPage'
 import type { PoolEntry } from './api'
 
 // 三个数都取自 2026-10-06 的真机实测（ISSUE-023）：
@@ -56,5 +61,72 @@ describe('contextMismatch', () => {
 
   it('探测值为 0 视为没报，不当成「零窗口」', () => {
     expect(contextMismatch(group(CONFIGURED, [entry(0)]))).toBeNull()
+  })
+})
+
+describe('压缩阈值输入框', () => {
+  beforeEach(async () => {
+    // 不切语言的话，按钮名是英文 "Edit"，下面的按名查找会扑空 —— 那是断言写错，
+    // 不是页面坏了。
+    await i18n.changeLanguage('zh-CN')
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('明写「暂未生效」：这个数存得下来，但没有任何代码读它', async () => {
+    // 审计结论（2026-10-06，全仓库 grep）：compaction_threshold_tokens 只出现在
+    // 迁移、增删改查与测试里，**没有任何运行时读者**。所以它是一个能编辑却不生效
+    // 的开关 —— 界面上不给标注，用户就会在这里改一个不动的数字，然后发现对话该超还是超。
+    const provider = {
+      id: 'p1',
+      name: '本机',
+      kind: 'custom',
+      protocol: 'openai',
+      base_url: 'http://127.0.0.1:18080/v1',
+      has_api_key: false,
+      model: 'local',
+      max_context_tokens: 32768,
+      compaction_threshold_tokens: 8000,
+      max_output_tokens: 2048,
+      enabled: true,
+      is_default: true,
+      created_at: 0,
+      updated_at: 0,
+    }
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      const body = url.includes('/providers')
+        ? { providers: [provider] }
+        : { default_provider_id: 'p1', pool: [], unavailable: [], disabled: [] }
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }))
+
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <MemoryRouter>
+        <QueryClientProvider client={client}>
+          <ModelsPage />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    )
+
+    // 自定义端点那张卡默认是收起的：先展开，否则断言的是「找不到」，不是「没标注」。
+    fireEvent.click(await screen.findByRole('button', { name: '编辑' }))
+    await waitFor(() => expect(screen.getByDisplayValue('8000')).toBeInTheDocument())
+    // 按 testid 定位，不用文案：文案一改测试就红，而这里要守的是
+    // 「这个输入框旁边必须有一句说明」，不是那一句具体怎么措辞。
+    const note = screen.getByTestId('models-compaction-not-enforced')
+    // testid 挂在输入框上会让人以为那是输入框的标识；守的是标注本身。
+    expect(note.tagName).toBe('SMALL')
+    expect(note).toHaveTextContent(/暂未生效/)
+    expect(note).toHaveTextContent(/没有任何压缩逻辑会读它/)
+
+    // 变异验证：把下面这行去掉，测试必须变红。
+    //（已验证会红：删掉 <small> 那整段后，getByTestId 找不到元素。）
   })
 })
