@@ -53,16 +53,33 @@ quill 抄两个上游：一个是**Agent 内核底座**，一个是**产品设�
 ### 下次怎么查
 
 ```bash
-# 1. 我们现在是哪版
-grep -A3 '\[workspace.package\]' vendor/goose/Cargo.toml | grep version
+# 1. 我们现在是哪版（离线，不联网）
+node .upstream-check.mjs
 
-# 2. 上游最新是哪版
-curl -s https://api.github.com/repos/aaif-goose/goose/releases/latest \
-  | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const r=JSON.parse(s);console.log(r.tag_name, r.published_at)})"
+# 2. 上游有没有往前走（联网；落后会**退出码 1**）
+node .upstream-check.mjs --online
 ```
 
-版本一样 → 不用管。有差 → 去看 https://github.com/aaif-goose/goose/releases 的 release notes，
-只关注上面「我们实际用到」那张表里三个文件相关的变化。
+`--online` 现在是能失败的：落后会退出 1，并打印落后几个 release/commit、
+新出的 release 列表、compare 链接，以及**上游这批改动里碰到我们依赖的那些文件**。
+查不到上游（网络失败、被限流）同样退出 1，且明说「这是查不到，不是已是最新」——
+它不会在没查到的情况下印一句 OK。判定逻辑有自测：
+`node .scripts/upstream-check-selftest.mjs`（纯合成输入，不联网）。
+
+离线路径（默认，不带 `--online`）只比对「记录 vs 本地」，不依赖网络。
+
+### ⚠️ sparse 集合之外、离线核不到的部分
+
+`.octop-ref/octop` 是 sparse checkout，以下路径**不在手边**，引用它们时无法逐行核对：
+
+- `src/octop/infra/skills/skillhub_market.py`（端点常量在这里，而**不在** experts 那份）
+- `src/octop/infra/skills/skillhub_common.py`
+- `dashboard/src/pages/Control/**`（唯一用 recharts 的地方）
+- `dashboard/src/pages/Agent/Skills/SkillHubTab.tsx`
+
+所以：`skillhub.rs` 里的三条端点是**真机实测**定下来的，不是逐字抄来的；
+文件头注释现在也这么写，别再写成「照抄 infra/skills/ 那份、experts 那份是旧的」——
+那份不在手边，「哪份是旧的」根本判断不了。
 
 ---
 

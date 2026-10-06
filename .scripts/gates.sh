@@ -51,6 +51,7 @@ need_text_gate=1
 if [ "$HAVE_NODE" = "0" ]; then
   echo "  → 文本门禁跳过：没有 node。这一段请在有 node 的一侧单独跑："
   echo "     node .mojibake-check.mjs / .i18n-check.mjs / .library-check.mjs / .upstream-check.mjs"
+  echo "     node .scripts/upstream-check-selftest.mjs"
   need_text_gate=0
 fi
 
@@ -105,6 +106,9 @@ if [ "$need_text_gate" = "1" ]; then
   run_text_gate .i18n-check.mjs
   run_text_gate .library-check.mjs
   run_text_gate .upstream-check.mjs
+  # 上游判定的自测：合成输入，不联网。跟 gate-selftest.sh 同一个道理 ——
+  # 「落后上游」那道判定以前永远判通过，只有钉住才抓得住。
+  run_text_gate .scripts/upstream-check-selftest.mjs
 fi
 
 if [ "$TEXT_ONLY" = "1" ]; then
