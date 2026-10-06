@@ -14,7 +14,13 @@
 #   bash .scripts/fetch-vendor.sh
 # 它按 UPSTREAM.md 记录的 pin 精确 checkout，不跟踪主分支。
 /vendor/
-/.octop-ref/
+/.octop-ref/*
+# 但这两个要入库：它们是**我们自己的**工具与出处说明，不是上游源码。
+# 上游那份几百兆的 sparse checkout 挡住，但这三个小文件必须留下 ——
+# 否则「出处可复查」这件事没法交接：下一个想核对某条上游引用的人，
+# 既没有查询工具，也没有 pin 的说明。
+!/.octop-ref/README.md
+!/.octop-ref/graph.mjs
 
 /data/
 /workspace/

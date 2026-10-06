@@ -14,6 +14,11 @@
 
 当前进度见 `MILESTONES.md` 的「当前进度」一节。
 
+> **另一条基线**：真实任务测试集（MCP-Atlas + SkillsBench）的进度、逐条结果与
+> 「哪些能力已真机验过」，记在 [`TESTSETS/STATUS.md`](TESTSETS/STATUS.md)，
+> 出处与许可见 [`TESTSETS/README.md`](TESTSETS/README.md)。
+> 它是**跑出来的**事实，`BACKLOG.md` 是**读代码**得出的一致性判断，两者冲突时以 STATUS 为准。
+
 ## 验证项目是活的
 
 ```bash
