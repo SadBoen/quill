@@ -13,9 +13,14 @@ const NAV_ITEMS = [
   { to: '/workspace', icon: 'W', labelKey: 'nav.workspace', fallback: '工作区' },
   { to: '/memory', icon: 'M', labelKey: 'nav.memory', fallback: '资料库' },
   // 图标是单字母。刻意用 T 而不是 U：admin 区里的 U 已经是「用户」了，
-// 再占一个 U 会让侧栏里两个「U」长得一模一样。
-{ to: '/usage', icon: 'T', labelKey: 'nav.usage', fallback: '用量统计' },
-  { to: '/devices', icon: 'D', labelKey: 'nav.devices', fallback: '设备' },
+  // 再占一个 U 会让侧栏里两个「U」长得一模一样。
+  { to: '/usage', icon: 'T', labelKey: 'nav.usage', fallback: '用量统计' },
+  // 这一项以前叫「设备」，点进去渲染的却是「MCP 服务」页
+  // （devices/Devices.tsx 里 title 就是「MCP 服务」），而 /api/devices
+  // 后端压根没注册、返回 404。名不副实的入口比没有入口更费时间 ——
+  // 用户会以为找错了地方。
+  { to: '/devices', icon: 'D', labelKey: 'nav.mcpServers', fallback: 'MCP 服务' },
+  { to: '/skills', icon: 'K', labelKey: 'nav.skills', fallback: '技能包' },
   { to: '/automations', icon: 'A', labelKey: 'nav.automations', fallback: '自动化' },
 ] as const
 
@@ -23,7 +28,11 @@ const ADMIN_NAV_ITEMS = [
   { to: '/admin/models', icon: 'L', labelKey: 'nav.models', fallback: '模型' },
   { to: '/admin/instance', icon: 'S', labelKey: 'admin.settings', fallback: '实例设置' },
   { to: '/admin/users', icon: 'U', labelKey: 'admin.users', fallback: '用户' },
-  { to: '/admin/mcp', icon: 'M', labelKey: 'admin.sharedMcp', fallback: '共享 MCP' },
+  // 这里原来有一项「共享 MCP」。**它和上面的「MCP 服务」操作的是同一份数据**：
+  // 同一个 `/api/extensions/mcp`、同一个 `MCP_KEY` 查询缓存，只是两套长得
+  // 不一样的表单。而 quill 只有实例级一套 MCP，「共享」这个词暗示的
+  // 「多用户各自分享」并不存在。两处入口改一边另一边不跟着变，
+  // 最终必然漂移，所以合并成一处。
 ] as const
 
 export function AppShell(): ReactNode {

@@ -1,6 +1,6 @@
 use axum::extract::Path;
 use axum::response::IntoResponse;
-use axum::routing::{delete, get, patch, post, put};
+use axum::routing::{get, patch, post, put};
 use axum::Router;
 
 use crate::api_admin;
@@ -148,7 +148,10 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/api/extensions/skills/{name}",
-            delete(api_extensions::delete_skill),
+            // PATCH 只改启用开关。**这条路由此前是缺的**，于是界面上没有任何
+            // 办法把一个技能从 `enabled=false` 打开 —— 停用的技能不挂进对话
+            // 工具表，模型调不到，等于后端做完了而功能没出口。
+            patch(api_extensions::update_skill).delete(api_extensions::delete_skill),
         )
         .route(
             "/api/extensions/plugins",
@@ -413,6 +416,8 @@ pub const CONTRACT_ROUTES: &[(&str, &str)] = &[
     ("DELETE", "/api/extensions/mcp/{name}"),
     ("GET", "/api/extensions/skills"),
     ("POST", "/api/extensions/skills"),
+    ("PATCH", "/api/extensions/skills/{name}"),
+    ("DELETE", "/api/extensions/skills/{name}"),
     ("GET", "/api/extensions/plugins"),
     ("POST", "/api/extensions/bundle/import"),
     ("GET", "/api/extensions/bundle/export"),

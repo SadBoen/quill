@@ -397,7 +397,7 @@ async fn created_session_id_is_byte_identical_to_the_listed_one() {
 async fn every_contract_route_responds_and_is_never_a_false_success() {
     // 「已实现」清单必须跟着实现一起长，否则新接通的路由会因为不再返回 501
     // 而被判成「假成功」——这正是本测试要抓的东西，所以清单不能手懒。
-    const IMPLEMENTED: [(&str, &str); 43] = [
+    const IMPLEMENTED: [(&str, &str); 44] = [
         ("GET", "/api/version"),
         ("GET", "/api/auth/me"),
         ("GET", "/api/healthz"),
@@ -412,6 +412,9 @@ async fn every_contract_route_responds_and_is_never_a_false_success() {
         ("DELETE", "/api/extensions/mcp/{name}"),
         ("GET", "/api/extensions/skills"),
         ("POST", "/api/extensions/skills"),
+        // 技能开关。停用的技能不挂进对话工具表，而此前这条路由没登记，
+        // 界面上也就没有任何一处能把技能打开 —— 后端做完了、开关没出口。
+        ("PATCH", "/api/extensions/skills/{name}"),
         ("DELETE", "/api/extensions/skills/{name}"),
         ("GET", "/api/experts"),
         ("POST", "/api/experts"),

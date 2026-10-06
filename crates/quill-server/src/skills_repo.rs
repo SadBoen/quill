@@ -179,6 +179,47 @@ pub async fn upsert(
     })
 }
 
+/// 只改启用开关，**一个别的列都不碰**。
+///
+/// ## 为什么不能复用 [`upsert`]
+///
+/// `upsert` 收一个 `hash: Vec<u8>` 参数，而这个值是**直接写进
+/// `skills.content_hash` 列**的。拿它做「只改 enabled」时，调用方手里
+/// 并没有真正的正文哈希 —— 随手传一个（哪怕是 `""` 的哈希）就会把
+/// 这一列悄悄改成一个与磁盘正文对不上的值，而且**没有任何报错**：
+/// 哈希只在被用来比对时才露馅，那时已经很难追了。
+///
+/// 另一条同源的坑：`upsert` 还会把 `deleted_at` 重置成 NULL。
+/// 只想启用一个技能却顺手把它「复活」了，也是它。
+///
+/// 所以这里是**一条只写 `enabled` 的 UPDATE**。它没有别的列可写，
+/// 结构上就不可能改坏别的东西 —— 这一点比在这里写注释提醒调用方可靠。
+pub async fn set_enabled(
+    db: &DbBridge,
+    uid: UserId,
+    name: &str,
+    enabled: bool,
+) -> Result<bool, quill_agent::AgentError> {
+    let b = crate::db::blob_of(&uid);
+    let n = name.to_string();
+    db.call(move |pool, _rt| {
+        Box::pin(async move {
+            let r = sqlx::query(
+                "UPDATE skills SET enabled = ?, updated_at = ? \
+                 WHERE user_id = ? AND name = ? AND deleted_at IS NULL",
+            )
+            .bind(if enabled { 1i64 } else { 0i64 })
+            .bind(now_ms())
+            .bind(&b)
+            .bind(&n)
+            .execute(&pool)
+            .await
+            .map_err(|e| storage_error(OP_WRITE, e))?;
+            Ok(r.rows_affected() > 0)
+        })
+    })
+}
+
 /// 软删。返回是否真的删掉了 —— 已经不在了返回 false，让 DELETE 幂等。
 pub async fn soft_delete(
     db: &DbBridge,

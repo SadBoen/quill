@@ -1,0 +1,116 @@
+/* 技能包页。刻意不复用别处的卡片类：这一页的行是「开关 + 一段说明」，
+   结构跟表单行、跟表格行都不同，硬套用会让三处互相牵制。 */
+
+.skills-cost {
+  /* 每次点开关都会改这个数，所以它得显眼一点，但不该抢过列表本身。 */
+  background: var(--accent-soft);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  margin: 0 0 12px;
+  padding: 8px 10px;
+}
+
+.skills-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.skills-row {
+  align-items: flex-start;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 10px 12px;
+}
+
+/* 停用的行压暗，让「现在真的挂进工具表的是哪几个」一眼分得出来。
+   靠 opacity 而不是改颜色：颜色是语义的一部分，混着用会串。 */
+.skills-row[data-enabled='false'] {
+  opacity: 0.68;
+}
+
+.skills-row-main {
+  min-width: 0;
+}
+
+.skills-row-head {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.skills-slug {
+  font-weight: 600;
+}
+
+.skills-desc {
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.skills-meta {
+  margin: 4px 0 0;
+}
+
+.skills-why {
+  color: var(--warning);
+  font-size: 11px;
+  line-height: 1.6;
+  margin: 6px 0 0;
+}
+
+.skills-row-actions {
+  align-items: flex-end;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  gap: 6px;
+}
+
+.skills-switch {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.skills-confirm {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 260px;
+  text-align: right;
+}
+
+.skills-link-button {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.skills-link-button.is-danger {
+  color: var(--danger);
+}
+
+.skills-link-button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}

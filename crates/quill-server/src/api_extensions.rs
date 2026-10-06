@@ -605,6 +605,17 @@ pub async fn list_skills(
             if body.is_empty() {
                 obj.insert("content_missing".into(), json!(true));
             }
+            // **模型这一轮真正看到的那段字**。界面上算常驻开销只能用它，
+            // 不能用上面那个 `description` 列 —— 两者在 description 为空时
+            // 分叉：库里那一列是空的，`skill_summary` 却会退回正文开头一段。
+            // 拿空列去算，结果是「116 个技能 · 常驻开销 0 字符」：
+            // 一个既好看又危险的说法，它让人以为可以随便开，而模型每轮
+            // 实际都在吃这些正文开头（ISSUE-035/036 那个 8192 窗口就是这么
+            // 被顶爆的）。**宁可难看也不许说反。**
+            obj.insert(
+                "model_sees_summary".into(),
+                json!(skills_repo::skill_summary(r, &body)),
+            );
             let vis = crate::tools::skill_visibility(&taken, r, &body);
             obj.insert("model_can_see".into(), json!(vis.model_can_see()));
             if let crate::tools::SkillVisibility::NotMounted(why) = vis {
@@ -762,4 +773,82 @@ pub async fn delete_skill(
         "file_removed": removed_file,
     }))
     .into_response())
+}
+
+/// `PATCH /api/extensions/skills/{name}` —— 只改开关，不碰正文。
+///
+/// ## 为什么必须是这一条
+///
+/// `tools::skill_visibility` 第一句就是 `if !row.enabled { Disabled }`：
+/// **停用的技能不挂进对话工具表，模型这一轮根本调不到它。**
+/// 而 `save_skill`（POST）要连正文一起重传 —— 拿它当「启停」用，
+/// 就得先读回全文、改一个布尔、再整体写回去。正文几千上万字，
+/// 一次误操作就是把技能写坏了。
+///
+/// 真机上就是这个状态：库里所有技能 `enabled = false`，一个都没挂上，
+/// 而**界面上没有任何地方能改这个值**（前端此前一次都没调用过
+/// `/api/extensions/skills`）。后端做完了、开关没出口，功能等于没做。
+///
+/// 只接受 `enabled` 一个字段：其余字段改动一律 400，
+/// 免得有人以为 PATCH 能改名字或描述，悄悄把一个技能改成了另一个。
+pub async fn update_skill(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(name): Path<String>,
+    JsonBody(patch): JsonBody,
+) -> Result<Response, ApiError> {
+    let obj = patch.as_object().ok_or_else(|| {
+        ApiError::bad_request(
+            "请求体必须是 JSON 对象。下一步：{\"enabled\": true} 或 {\"enabled\": false}。".to_string(),
+        )
+    })?;
+
+    // `only_keys_at` 会把多余的键逐个点名，而不是只说「参数不对」。
+    crate::api_experts::only_keys_at(&patch, &["enabled"], "SKILL 的 PATCH")?;
+
+    let enabled = obj
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| {
+            ApiError::bad_request(
+                "enabled 必须是 true 或 false。下一步：{\"enabled\": true} 可以让模型这一轮调到它，\
+                 {\"enabled\": false} 会把它从对话工具表里摘掉。"
+                    .to_string(),
+            )
+        })?;
+
+    let norm = mcp_repo::normalize_name(&name).map_err(ApiError::bad_request)?;
+    let db = state.db()?;
+
+    // 走只写一列的专用更新：复用 `upsert` 会把 `content_hash` 换成
+    // 调用方手里的值（这里没有真正的正文哈希），还会顺手把 `deleted_at`
+    // 重置成 NULL —— 一次「只想启用」的点击就会改坏别的列。
+    // 详见 `skills_repo::set_enabled` 的说明。
+    let changed = skills_repo::set_enabled(db, user.0.user_id, &norm, enabled)
+        .await
+        .map_err(|e| map_err("更新 SKILL", e))?;
+
+    if !changed {
+        // 区分「没有这个技能」和「有但已经软删」：后者 refresh 后自然就没了，
+        // 前者多半是名字打错。两种都给得出下一步，所以不用同一个笼统的 404。
+        // 用 `entity_not_found` 而不是 `not_found`：后者说的是「**这条路径**
+        // 没有登记」，会把「本实例没有路由」拼在 detail 前面，句子直接不通。
+        // 这里是「路径存在、但没有这个技能」，两件事必须分开说。
+        // 顺带一提，这正是本项目那条规矩的又一次应验：
+        // 404 只能说明路径没登记 —— 不能拿它当「资源不存在」的下场。
+        return Err(ApiError::entity_not_found(format!(
+            "名为 {norm} 的 SKILL 不存在或已删除，所以这次开关没有改动任何东西。\
+             下一步：刷新列表确认名字；要新建先 POST /api/extensions/skills。"
+        )));
+    }
+
+    // 回读而不是把拼出来的对象返回：界面显示的必须与库里一致。
+    let saved = skills_repo::get(db, user.0.user_id, &norm)
+        .await
+        .map_err(|e| map_err("回读 SKILL", e))?
+        .ok_or_else(|| {
+            ApiError::internal(format!("刚改完的 SKILL {norm} 立刻就读不到了"))
+        })?;
+
+    Ok(Json(json!({ "skill": skills_repo::to_json(&saved) })).into_response())
 }

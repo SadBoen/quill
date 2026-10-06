@@ -1516,3 +1516,187 @@ async fn another_users_mcp_servers_never_reach_your_tool_table() {
     let b_names = spec_names(&chat_tool_table(&h, UID_B).await);
     assert!(b_names.contains(&"secret__read-note".to_string()), "B 自己应当看得见：{b_names:?}");
 }
+
+// ------------------------------------------------- 技能开关
+//
+// 这一组盯的是「界面上按一下开关」这件事端到端真的成立。
+//
+// 此前这条路是断的，而且是**两头都断**：
+//   - 前端一次都没调用过 `/api/extensions/skills`，连列表都没有界面；
+//   - 唯一能改 `enabled` 的 `PATCH /api/extensions/skills/{name}` 压根没登记。
+// 结果真机上库里所有技能 `enabled = false`，而界面上没有任何一处能打开它。
+// 停用的技能不挂进对话工具表（`tools::skill_visibility` 第一句），所以
+// **后端做完了而开关没有出口，功能就等于没做**。
+
+async fn patch_skill(h: &Harness, slug: &str, body: serde_json::Value) -> (StatusCode, serde_json::Value) {
+    let request = Request::builder()
+        .method("PATCH")
+        .uri(format!("/api/extensions/skills/{slug}"))
+        .header("authorization", format!("Bearer {TOKEN_A}"))
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .expect("构造请求");
+    let resp = build_router(h.state()).oneshot(request).await.expect("请求失败");
+    let st = resp.status();
+    let v = json_of(&body_text(resp).await);
+    (st, v)
+}
+
+#[tokio::test]
+async fn toggling_a_skill_really_puts_it_into_the_chat_tool_table() {
+    let h = Harness::new("ext-skill-toggle");
+    seed_user(&h.db.bridge(), UID_A);
+    post_skill(&h, serde_json::json!({"slug": "later", "content": "一套做法。", "enabled": false})).await;
+
+    // 先钉住起点：停用时列表说不可见，工具表里也确实没有它。
+    let listed = listed_skills(&h, TOKEN_A).await;
+    let before = find_skill(&listed, "later");
+    assert_eq!(before["enabled"], serde_json::json!(false));
+    assert_eq!(before["model_can_see"], serde_json::json!(false));
+    assert!(
+        !spec_names(&tool_table(&h, UID_A).await).contains(&"later".to_string()),
+        "停用的技能不该在工具表里"
+    );
+
+    let (status, v) = patch_skill(&h, "later", serde_json::json!({"enabled": true})).await;
+    assert_eq!(status, StatusCode::OK, "打开开关应当成功：{v}");
+
+    // 开关打开之后，列表里的 enabled 与 model_can_see 必须**同时**翻过来：
+    // 只翻一个就会重新出现「界面说能用、模型调不到」的老问题。
+    let listed = listed_skills(&h, TOKEN_A).await;
+    let after = find_skill(&listed, "later");
+    assert_eq!(after["enabled"], serde_json::json!(true));
+    assert_eq!(after["model_can_see"], serde_json::json!(true));
+    assert!(
+        spec_names(&tool_table(&h, UID_A).await).contains(&"later".to_string()),
+        "开关开了就该真的挂进工具表"
+    );
+
+    // 再关回去，两边都得跟着关 —— 单向能开不能关，比根本不能开更难查。
+    let (status, _) = patch_skill(&h, "later", serde_json::json!({"enabled": false})).await;
+    assert_eq!(status, StatusCode::OK);
+    let listed = listed_skills(&h, TOKEN_A).await;
+    assert_eq!(find_skill(&listed, "later")["model_can_see"], serde_json::json!(false));
+    assert!(!spec_names(&tool_table(&h, UID_A).await).contains(&"later".to_string()));
+}
+
+#[tokio::test]
+async fn the_list_tells_you_the_text_the_model_actually_sees() {
+    // 界面上「每轮常驻开销」只能拿这一个字段去算。
+    //
+    // 真机上 116 个技能的 `description` 列**全是空的**，而
+    // `skills_repo::skill_summary` 在 description 为空时会退回正文开头一段。
+    // 拿空列去算，界面上就是「116 个技能 · 常驻开销 0 字符」——
+    // 一个既好看又危险的说法：让人以为可以随便开，而模型每一轮都在吃这些字。
+    // ISSUE-035/036 那个 8192 上下文窗口就是这么被顶爆的。
+    let h = Harness::new("ext-skill-model-sees-summary");
+    seed_user(&h.db.bridge(), UID_A);
+    post_skill(
+        &h,
+        serde_json::json!({
+            "slug": "bodyonly",
+            // 故意不给 description：逼它走「退回正文开头」那条路。
+            "content": "# 用法\n\n这是一段从正文开头退回来的说明，模型每一轮都会看到它。",
+        }),
+    )
+    .await;
+
+    let listed = listed_skills(&h, TOKEN_A).await;
+    let row = find_skill(&listed, "bodyonly");
+    assert_eq!(row["description"], serde_json::json!(""), "这一列确实应该是空的");
+    let seen = row["model_sees_summary"].as_str().expect("必须给界面一个能算的字数");
+    assert!(
+        seen.contains("从正文开头退回来的说明"),
+        "该退回正文开头才对：{seen}"
+    );
+
+    // 并且必须与工具表里那个描述同源：界面说 N 字符，模型吃的也是 N 字符。
+    let specs = tool_table(&h, UID_A).await.specs();
+    let spec = specs
+        .iter()
+        .find(|s| s.name == "bodyonly")
+        .unwrap_or_else(|| panic!("工具表里没有 bodyonly：{:?}", specs.iter().map(|s| &s.name).collect::<Vec<_>>()));
+    assert_eq!(spec.description, seen, "界面显示的字与模型看到的字必须一致");
+}
+
+#[tokio::test]
+async fn toggling_a_skill_does_not_rehash_or_erase_it() {
+    // 回归的是 ISSUE-052 里最险的那一步：当初的实现是「取出现有行、
+    // 改一个布尔、整体 upsert 回去」，而 `upsert` 收的 `content_hash`
+    // 是**直接写进数据库列**的 —— 调用方手里没有真正的正文哈希，
+    // 随手传一个就把这一列改成了与磁盘正文对不上的值，且**全程不报错**。
+    // 哈希只在被用来比对时才露馅，那时已经很难追了。
+    //
+    // 所以这里断言的是**正文与摘要都没被动过**，而不只是「开关生效了」。
+    let h = Harness::new("ext-skill-toggle-keeps-content");
+    seed_user(&h.db.bridge(), UID_A);
+    post_skill(
+        &h,
+        serde_json::json!({
+            "slug": "keepme",
+            "content": "# 标题\n\n这一步很重要，切换开关之后必须一字不差。",
+            "description": "一份要保住原文的说明。",
+            "version": "9.9.9",
+        }),
+    )
+    .await;
+
+    let listed = listed_skills(&h, TOKEN_A).await;
+    let before = find_skill(&listed, "keepme");
+    let chars_before = before["content_chars"].clone();
+    let desc_before = before["description"].clone();
+    let version_before = before["version"].clone();
+    assert!(chars_before.as_u64().unwrap_or(0) > 0, "正文本该有内容：{before}");
+
+    patch_skill(&h, "keepme", serde_json::json!({"enabled": true})).await;
+
+    let listed = listed_skills(&h, TOKEN_A).await;
+    let after = find_skill(&listed, "keepme");
+    assert_eq!(after["enabled"], serde_json::json!(true));
+    assert_eq!(after["content_chars"], chars_before, "切一次开关把正文写坏了");
+    assert_eq!(after["description"], desc_before, "摘要被顺手清了");
+    assert_eq!(after["version"], version_before, "版本被顺手改了");
+}
+
+#[tokio::test]
+async fn toggling_a_skill_refuses_anything_but_the_enabled_field() {
+    // 只接受 enabled。放行别的字段等于让人以为 PATCH 能改名字或描述，
+    // 悄悄把一个技能改成了另一个 —— 而请求会成功返回 200。
+    let h = Harness::new("ext-skill-toggle-rejects-extras");
+    seed_user(&h.db.bridge(), UID_A);
+    post_skill(&h, serde_json::json!({"slug": "strict", "content": "一套做法。"})).await;
+
+    for bad in [
+        serde_json::json!({"enabled": true, "description": "偷改摘要"}),
+        serde_json::json!({"slug": "other"}),
+    ] {
+        let (status, v) = patch_skill(&h, "strict", bad.clone()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad} 应当被拒：{v}");
+        assert!(
+            v["error"]["next_step"].is_string(),
+            "错误必须带下一步：{v}"
+        );
+    }
+
+    // 拒完之后技能得原样还在，别把「参数不合法」变成「顺手删了」。
+    let listed = listed_skills(&h, TOKEN_A).await;
+    assert_eq!(find_skill(&listed, "strict")["slug"], serde_json::json!("strict"));
+}
+
+#[tokio::test]
+async fn toggling_a_missing_skill_says_so_with_a_next_step() {
+    let h = Harness::new("ext-skill-toggle-missing");
+    seed_user(&h.db.bridge(), UID_A);
+    let (status, v) = patch_skill(&h, "not-there", serde_json::json!({"enabled": true})).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{v}");
+    // 「没找到」与「找到了但开关没生效」必须能分开，否则用户会去查一个
+    // 其实已经改成功了的开关。
+    assert!(v["error"]["next_step"].is_string(), "错误必须带下一步：{v}");
+    // 用的是 `entity_not_found` 而不是 `not_found`：后者的文案是
+    // 「本实例没有路由 {path}」，拿它说「这个技能不存在」会拼出一句病句，
+    // 而且把「路径没登记」和「资源没有」混成了一件事。
+    assert!(
+        !v["error"]["detail"].as_str().unwrap_or("").contains("本实例没有路由"),
+        "资源级 404 不该套上路由级的前缀：{v}"
+    );
+}

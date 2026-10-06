@@ -2185,3 +2185,82 @@ GET /api/extensions/mcp
 - **回归**：`formatWhen.test.ts` 2 条、`UsagePage` +1（断言行内带真实时间）。
 - **状态**：已修已回归，已真机确认。
 
+## ISSUE-052 · 技能包后端做完了，但开关没有出口 —— 真机上一个都开不了
+
+- **发现**：用户问「SKILL 和 MCP 不是都搞好了吗？左侧也没有导航呀？」。
+  顺着这句话去查，发现**比「导航没做」严重得多**。
+- **真机事实**（`GET /api/extensions/skills` 原样返回）：
+  ```
+  {"slug":"ac-branch-pi-model", "enabled":false, "model_can_see":false, ...}
+  {"slug":"ada-plan-view-accessibility", "enabled":false, ...}
+  ...（库里几十个技能，全是 enabled:false）
+  ```
+- **根因是两头都断了**：
+  1. **前端一次都没有调用过 `/api/extensions/skills`。**
+     全仓 grep `extensions/skills` 只在 `capabilityGaps.ts` 里命中，
+     而那是一张「这项能力接没接通」的**状态表**，不是管理界面。
+     技能在聊天页的「工具」面板里只以一行「技能包 · 部分接通」出现过。
+  2. **唯一能改 `enabled` 的 `PATCH /api/extensions/skills/{name}` 压根没登记。**
+     `routes.rs` 里那条路由只挂了 `delete`。
+- **为什么这等于功能没做**：`tools::skill_visibility` 第一句就是
+  `if !row.enabled { return SkillVisibility::Disabled }` ——
+  停用的技能不挂进对话工具表，模型这一轮调不到。
+  **后端把整条链都做完了，但没有任何一个出口能把开关打开。**
+  旁证：用量统计页的上下文构成图里 `skills` 段恒为 0 字符。
+- **修复**：
+  - 后端补 `PATCH /api/extensions/skills/{name}`（`api_extensions::update_skill`）。
+    **只接受 `enabled` 一个字段**，其余字段逐个点名拒绝 ——
+    放行别的字段等于让人以为 PATCH 能改名字或描述，悄悄把一个技能改成另一个，
+    而请求还返回 200。
+  - 新增 `skills_repo::set_enabled`：一条**只写 `enabled` 列**的 UPDATE。
+    **刻意不复用 `upsert`** —— 见下面那条更险的坑。
+  - 前端新增左侧「技能包」入口 + `skills/SkillsPage.tsx`（列 / 启停 / 删）。
+  - 界面把 **`enabled` 与 `model_can_see` 分开显示**：
+    开关开着但磁盘正文被删了，模型照样调不到，只写「已启用」就是在说假话。
+  - 顶部常驻显示「启用技能的摘要合计 N 字符」：开关谁都能点，
+    而每个启用技能的摘要都跟着每一轮请求走（ISSUE-036 实测 13 个技能
+    ≈ 10810 tokens 就把 8192 的窗口顶爆了）。**代价必须一直摆在眼前。**
+- **实现途中踩到并绕开的一个坑（值得单记）**：
+  `skills_repo::upsert` 收一个 `hash: Vec<u8>` 参数，而这个值是
+  **直接写进 `skills.content_hash` 列**的。做「只改一个布尔」时，
+  调用方手里并没有真正的正文哈希 —— 我第一版传了 `content_hash("")`，
+  它会**安静地**把这一列改成一个与磁盘正文对不上的值，全程不报错。
+  哈希只在被用来比对时才露馅，那时已经很难追。
+  同一函数还会把 `deleted_at` 重置成 NULL，所以「只想启用一个技能」
+  还会顺手把它复活。
+  这就是为什么最后选了「一条只写一列的 UPDATE」：
+  **它没有别的列可写，结构上就不可能改坏别的东西。**
+- **回归**：`extensions_http` 新增 4 条（开关真的进出工具表 / 不重算哈希不清摘要 /
+  只接受 enabled / 不存在时带下一步），前端 `SkillsPage.test.tsx` 8 条。
+- **状态**：已修已回归，已真机确认。
+
+## ISSUE-053 · 左侧「设备」点进去是 MCP 服务页，而「共享 MCP」与它是同一份数据
+
+- **发现**：用户问「设备和共享 MCP 是什么作用？」
+- **名不副实**：`AppShell` 里的导航项写「设备」，点进去渲染的却是
+  `devices/Devices.tsx:309` 的 **`MCP 服务`** 页（eyebrow 是「扩展」）。
+  而 `GET /api/devices` 后端压根没注册，真机请求返回 **404**。
+  同一文件里的设备详情页自己就写着「quill 里没有设备名册」，
+  并把在线状态、令牌提示、配置版本列为「拿不到，不做假数据」。
+  **名不副实的入口比没有入口更费时间** —— 用户会以为自己找错了地方。
+- **两处 MCP 入口是同一份数据**：`admin/Admin.tsx:155` 的注释自己写着
+  「quill 只有一套实例级 MCP，路由为 `/api/extensions/mcp`」。
+  「共享 MCP」页与「MCP 服务」页用的是同一个接口、同一个 `MCP_KEY`
+  查询缓存，只是两套长得不一样的表单。旧页面上甚至已经印着一句
+  「本页与『扩展 · MCP 服务』是同一份配置的两种入口」——
+  **知道自己重复了，但没合并。**
+  而「共享」这个词暗示的多用户分享并不存在，quill 只有实例级一套。
+- **修复**：
+  1. 导航项改名为「**MCP 服务**」（`nav.mcpServers`），名字先跟内容对上。
+  2. `/devices/:name` 与 `/devices/:name/mcp` 改成重定向到 `/devices`。
+     明说「做不到」是对的（那页的文案没说错），**留一页写着「quill 没有
+     设备名册」的死页是错的** —— 直接把人送到唯一真实存在的东西。
+  3. admin 导航去掉「共享 MCP」，`/admin/mcp` 重定向到 `/devices`，
+     `AdminMcpPage` 整个删掉。老链接仍然能用：书签、外链、别人发给你的
+     地址不该因为改了信息架构就变成 404。
+- **为什么必须删代码而不是只删入口**：两套表单会各自演化。改一边另一边不跟着变，
+  最终必然漂成「界面上写着一套、存下去是另一套」——
+  这正是 `session_metrics::aggregate` 那条「口径只写一处」规矩的同一个道理。
+- **顺带修掉**：`AppShell.tsx` 有一行注释被此前的编辑搞丢了缩进（不影响编译）。
+- **状态**：已修已回归，已真机确认。
+
