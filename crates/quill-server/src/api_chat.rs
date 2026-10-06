@@ -444,6 +444,148 @@ pub async fn list_messages(
     Ok(Json(json!({ "messages": rows })).into_response())
 }
 
+/// 上下文窗口占用。抄 octop 的 `ContextWindowRing` 的数据源。
+///
+/// **环的总占用是实测的**：`used_tokens` 取该会话最后一条 assistant 消息的
+/// `input_tokens` —— 那正是模型端真实收到的入参大小。`max_tokens` 取配置值。
+///
+/// **分段是字符数，不是 token 数。** quill 没有分词器，把字符说成 token 就是
+/// 凭空造数字（见 [`crate::session_metrics`] 里的说明）。所以分段只表达
+/// 「谁占得多」，单位在响应里明写 `segment_unit: "chars"`。
+pub async fn context(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+) -> Result<axum::response::Response, ApiError> {
+    let db = state.db()?;
+    let uid = user.0.user_id;
+    let sid = parse_id(&id)?;
+    ensure_session(db, uid, sid).await?;
+
+    // 实测入参：最后一条 assistant 消息的 input_tokens。
+    let used_tokens: Option<i64> = db
+        .call(move |pool, _rt| {
+            Box::pin(async move {
+                let r: Result<Option<i64>, quill_agent::AgentError> = async {
+                    let v: Option<i64> = sqlx::query_scalar(
+                        "SELECT input_tokens FROM messages \
+                         WHERE user_id = ? AND session_id = ? AND role = 'assistant' \
+                         AND input_tokens > 0 ORDER BY seq DESC LIMIT 1",
+                    )
+                    .bind(uid.as_bytes().to_vec())
+                    .bind(sid.to_vec())
+                    .fetch_optional(&pool)
+                    .await
+                    .map_err(|e| crate::db::storage_error("读上下文占用", e))?;
+                    Ok(v)
+                }
+                .await;
+                r
+            })
+        })
+        .map_err(storage)?;
+
+    // 构成：按与聊天路径**完全相同**的方式重建一遍工具表，然后按增量切片。
+    // 复用真实的 builder 而不是另写一份统计 —— 另写一份必然与实际发送的请求漂移。
+    //
+    // `state` 会在下面被 move 进 registry，所以先把它要用的 llm_config 读出来。
+    // 上限取运行时配置（与 /healthz 的 max_context_tokens 同一个来源），
+    // 不重新读库 —— 读出来一份可能和运行时热替换后的值不一致。
+    let max_tokens: i64 = state
+        .llm_config
+        .read()
+        .map_err(|_| ApiError::internal("llm_config 锁被毒化"))?
+        .max_context_tokens
+        .into();
+    let persona = resolve_persona(&db, uid, sid).await?;
+    let skill_root = crate::api_extensions::skill_dir(&state.config);
+    let role_already_picked = persona.expert_id.is_some();
+    let registry = crate::tools::ToolRegistry::builtin_with_expert_tools(
+        // clone 而非 move：上面 `state.db()` 借的是 `state` 自己，后面还要用
+        // 同一个 db 去加技能/ MCP。AppState 内部全是 Arc，克隆是廉价的。
+        Arc::new(state.clone()),
+        uid,
+        !role_already_picked,
+    );
+    let builtin_specs = registry.specs();
+    let n_builtin = builtin_specs.len();
+    let registry = registry
+        .with_skills(db.as_ref(), uid, &skill_root)
+        .await
+        .map_err(|e| ApiError::internal(format!("统计上下文时加载 SKILL 失败：{e}")))?;
+    let skill_specs = registry.specs();
+    let n_skills = skill_specs.len();
+    let all_specs = registry
+        .with_mcp_tools(db.as_ref(), uid, &crate::tools::user_key(uid))
+        .await
+        .map_err(|e| ApiError::internal(format!("统计上下文时加载 MCP 失败：{e}")))?
+        .specs();
+
+    // `with_skills` / `with_mcp_tools` 是往同一个 Vec 尾部追加的，所以按长度切片
+    // 就是它们的来源归属 —— 不需要在工具表上另挂一个 origin 字段。
+    let sum_chars = |slice: &[quill_provider::ToolSpec]| {
+        slice
+            .iter()
+            .map(crate::session_metrics::tool_spec_chars)
+            .sum()
+    };
+    let breakdown = crate::session_metrics::ContextBreakdown {
+        system_prompt: persona
+            .instructions
+            .as_deref()
+            .map(|s| s.chars().count())
+            .unwrap_or(0),
+        tool_definitions: sum_chars(&builtin_specs),
+        skills: sum_chars(&skill_specs[n_builtin..]),
+        mcp: sum_chars(&all_specs[n_skills..]),
+        conversation: load_history_chars(&db, uid, sid).await?,
+    };
+
+    let segments: Vec<Value> = crate::session_metrics::context_segments(&breakdown)
+        .into_iter()
+        .map(|s| json!({ "key": s.key, "chars": s.chars }))
+        .collect();
+
+    Ok(Json(json!({
+        "max_tokens": max_tokens,
+        // None = 还没跟模型说过话，没有实测值。**不是 0。**
+        "used_tokens": used_tokens,
+        "used_percent": used_tokens
+            .map(|u| crate::session_metrics::context_used_percent(u, max_tokens)),
+        "segments": segments,
+        // 明写单位。界面上必须显示这个「字符」二字，否则用户会当成 token。
+        "segment_unit": "chars",
+    }))
+    .into_response())
+}
+
+/// 历史消息的字符总数（对话段）。
+async fn load_history_chars(
+    db: &crate::db::DbBridge,
+    uid: quill_domain::UserId,
+    sid: [u8; 16],
+) -> Result<usize, ApiError> {
+    db.call(move |pool, _rt| {
+        Box::pin(async move {
+            let r: Result<usize, quill_agent::AgentError> = async {
+                let texts: Vec<String> = sqlx::query_scalar(
+                    "SELECT content FROM messages \
+                     WHERE user_id = ? AND session_id = ? AND role IN ('user','assistant')",
+                )
+                .bind(uid.as_bytes().to_vec())
+                .bind(sid.to_vec())
+                .fetch_all(&pool)
+                .await
+                .map_err(|e| crate::db::storage_error("读对话字符数", e))?;
+                Ok(texts.iter().map(|t| t.chars().count()).sum())
+            }
+            .await;
+            r
+        })
+    })
+    .map_err(storage)
+}
+
 /// 会话级 Token 统计。界面那排指标 chip 的数据源。
 ///
 /// 聚合口径全在 [`crate::session_metrics`] 里，是纯函数、测得到。

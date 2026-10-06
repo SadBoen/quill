@@ -402,3 +402,72 @@ async fn usage_on_a_fresh_account_is_an_empty_report_not_a_zeroed_one() {
     assert_eq!(v["totals"]["input_tokens"], Value::Null, "没有任何数据就是 null");
     assert_eq!(v["totals"]["turns"], serde_json::json!(0), "轮次是 0，这是真值");
 }
+
+#[tokio::test]
+async fn context_reports_no_measurement_for_a_session_that_never_called_the_model() {
+    let t = TestDb::new("ctx-empty");
+    seed_user(&t);
+    let app = state(&t);
+    let sid = create_session(app.clone()).await;
+
+    let (status, v) = get_json(app, &format!("/api/sessions/{sid}/context")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        v["used_tokens"],
+        Value::Null,
+        "没跟模型说过话就没有实测值，画一个 0% 的环等于说「还有一大半没用」"
+    );
+    assert_eq!(v["used_percent"], Value::Null);
+    // 分段是字符数，单位必须明写，否则用户会当 token 读。
+    assert_eq!(v["segment_unit"], serde_json::json!("chars"));
+    let segs = v["segments"].as_array().expect("segments 是数组");
+    assert_eq!(segs.len(), 5, "五段固定给出：没值也是 0，不是消失");
+    for seg in segs {
+        assert!(seg["chars"].is_number(), "每段都要有字符数：{seg}");
+    }
+}
+
+#[tokio::test]
+async fn context_uses_the_last_real_input_tokens_and_never_invents_one() {
+    let t = TestDb::new("ctx-used");
+    seed_user(&t);
+    let app = state(&t);
+    let sid = create_session(app.clone()).await;
+
+    // 两条 assistant 消息：环只认**最后一条**的入参（那才是当前上下文大小）。
+    seed_messages(
+        &t,
+        &sid,
+        &[
+            ("user", 0, 0, None, None),
+            ("assistant", 8000, 100, Some(3000), None),
+            ("user", 0, 0, None, None),
+            ("assistant", 12000, 50, Some(2000), Some(6000)),
+        ],
+    );
+
+    let (status, v) = get_json(app, &format!("/api/sessions/{sid}/context")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(v["used_tokens"], serde_json::json!(12000), "要认最后一条，不是求和");
+
+    // 命中率按最后一次算；12000 里有 6000 命中 → 50%。
+    let hit: Vec<i64> = v["segments"]
+        .as_array()
+        .expect("数组")
+        .iter()
+        .map(|s| s["chars"].as_i64().unwrap_or(0))
+        .collect();
+    assert_eq!(hit.len(), 5);
+    assert!(hit.iter().sum::<i64>() >= 0, "字符数不能是负的");
+
+    // 对话段的字符数应当正好等于两条 user 消息的正文长度之和。
+    let conv: i64 = v["segments"]
+        .as_array()
+        .expect("数组")
+        .iter()
+        .find(|s| s["key"] == serde_json::json!("conversation"))
+        .expect("必须有 conversation 段")["chars"]
+        .as_i64()
+        .expect("数字");
+    assert_eq!(conv, 0, "夹具里的 user 消息正文是空串，所以是 0 —— 这是真值不是缺失");
+}

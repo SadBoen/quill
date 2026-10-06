@@ -1,0 +1,205 @@
+import { useQuery } from '@tanstack/react-query'
+import type { ReactNode } from 'react'
+import { useTranslation } from 'react-i18next'
+
+import { EChart, useCssVar } from '../charts/EChart'
+import { loadSessionContext, type SessionContext } from './contextApi'
+
+/**
+ * 上下文窗口图。抄 octop 的 `ContextWindowRing`，但用 echarts 而不是手搓 SVG。
+ *
+ * 一张图说两件事：
+ * - **环形**：上下文占了多少（实测 token）。
+ * - **构成条**：这些 token 是被谁吃掉的（按字符数，相对构成）。
+ *
+ * ## 两条不能越过的线
+ *
+ * 1. **环的总占用是实测的**：`used_tokens` 来自模型端真实上报的
+ *    `input_tokens`。不用「字符数 ÷ 4」这种估算 —— 那样环上的百分比
+ *    就是一个凭空的数字。
+ * 2. **构成段是字符数，不是 token 数。** quill 没有分词器，所以图例上
+ *    明写「字符」。把字符数当 token 数报出去，是这个页面最容易犯的错。
+ *
+ * 两者的关系和 octop 一致：环的宽度由实测值决定，构成段只提供**相对比例**。
+ */
+
+const SEGMENT_COLOR: Record<string, string> = {
+  system_prompt: '#9ca3af',
+  tool_definitions: '#c4b5fd',
+  skills: '#fbbf24',
+  mcp: '#e879f9',
+  conversation: '#22d3ee',
+}
+
+export function contextSegmentColor(key: string): string {
+  return SEGMENT_COLOR[key] ?? '#94a3b8'
+}
+
+export function contextSegmentLabel(key: string, t: (k: string, o: Record<string, unknown>) => string): string {
+  const map: Record<string, string> = {
+    system_prompt: t('usage.segSystem', { defaultValue: '系统提示' }),
+    tool_definitions: t('usage.segTools', { defaultValue: '内置工具' }),
+    skills: t('usage.segSkills', { defaultValue: '技能' }),
+    mcp: t('usage.segMcp', { defaultValue: 'MCP' }),
+    conversation: t('usage.segConversation', { defaultValue: '对话历史' }),
+  }
+  return map[key] ?? key
+}
+
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1000) return `${Math.round(n / 1000)}k`
+  return String(n)
+}
+
+export function ContextWindowChart({
+  sessionId,
+  context,
+}: {
+  sessionId: string
+  context: SessionContext | null
+}): ReactNode {
+  const { t } = useTranslation()
+
+  // canvas 不认 CSS 变量，必须读成真色值（见 useCssVar 的说明）。
+  const cInk = useCssVar('--ink', '#172033')
+  const cLine = useCssVar('--line', '#dce5f0')
+  const cSuccess = useCssVar('--success', '#087562')
+  const cWarning = useCssVar('--warning', '#805a08')
+  const cDanger = useCssVar('--danger', '#a43f48')
+
+  const query = useQuery({
+    queryKey: ['session-context', sessionId],
+    queryFn: () => loadSessionContext(sessionId),
+    enabled: Boolean(sessionId),
+    staleTime: 10_000,
+    retry: false,
+  })
+  const data = context ?? query.data ?? null
+
+  if (!data) return null
+
+  // 没跟模型说过话 → 没有实测值。**这里必须显式说明，不能画一个 0% 的空环**：
+  // 「0%」看着像「还有一大半没用」，实际是「完全没量过」。
+  if (data.used_tokens === null) {
+    return (
+      <p className="usage-chart-note">
+        {t('usage.contextUnmeasured', {
+          defaultValue: '上下文占用：还没跟模型通过话，没有实测值。',
+        })}
+      </p>
+    )
+  }
+
+  const used = data.used_tokens
+  const percent = data.used_percent ?? 0
+  const ringColor = percent >= 80 ? cDanger : percent >= 50 ? cWarning : cSuccess
+
+  const ringOption = {
+    tooltip: {
+      trigger: 'item',
+      formatter: () =>
+        `${t('usage.contextRingTip', {
+          used: formatTokens(used),
+          max: formatTokens(data.max_tokens),
+          percent,
+          defaultValue: '已占用 {{used}} / {{max}} tokens（{{percent}}%）',
+        })}`,
+    },
+    series: [
+      {
+        type: 'pie',
+        radius: ['72%', '92%'],
+        center: ['50%', '50%'],
+        avoidLabelOverlap: false,
+        // 百分比只挂在「已占用」那一段上。两段都配 center label 的话，
+        // 剩余那段会拿同一个百分比再画一遍，文字叠在文字上。
+        label: {
+          show: true,
+          position: 'center',
+          formatter: `${percent}%`,
+          fontSize: 15,
+          fontWeight: 600,
+          color: cInk,
+        },
+        labelLine: { show: false },
+        emphasis: { label: { show: true } },
+        data: [
+          {
+            value: Math.min(used, data.max_tokens),
+            itemStyle: { color: ringColor },
+            label: { show: true },
+          },
+          {
+            value: Math.max(data.max_tokens - used, 0),
+            itemStyle: { color: cLine },
+            label: { show: false },
+          },
+        ],
+      },
+    ],
+  }
+
+  // 构成段按字符数。相对比例来自字符占比，总宽度由上面的实测环决定。
+  const segData = data.segments
+    .filter((s) => s.chars > 0)
+    .map((s) => ({
+      name: contextSegmentLabel(s.key, t),
+      value: s.chars,
+      itemStyle: { color: contextSegmentColor(s.key) },
+    }))
+
+  const compositionOption = {
+    tooltip: {
+      trigger: 'item',
+      formatter: (p: { name: string; value: number; percent: number }) =>
+        `${p.name}：${formatTokens(p.value)} 字符（${p.percent}%）`,
+    },
+    legend: { bottom: 0, itemWidth: 10, itemHeight: 10, textStyle: { fontSize: 11 } },
+    series: [
+      {
+        type: 'pie',
+        radius: ['38%', '62%'],
+        center: ['50%', '44%'],
+        label: { show: false },
+        data: segData,
+      },
+    ],
+  }
+
+  return (
+    <div className="usage-chart-pair">
+      <figure className="usage-chart">
+        <figcaption>{t('usage.contextRing', { defaultValue: '上下文占用' })}</figcaption>
+        <EChart
+          option={ringOption}
+          height={168}
+          ariaLabel={t('usage.contextRingAria', {
+            used: formatTokens(used),
+            max: formatTokens(data.max_tokens),
+            percent,
+            defaultValue: '上下文已占用 {{used}} / {{max}} tokens，占 {{percent}}%',
+          })}
+        />
+      </figure>
+      <figure className="usage-chart">
+        <figcaption>
+          {t('usage.contextComposition', { defaultValue: '上下文构成' })}
+          <small className="field-help">
+            {t('usage.charsNotTokens', {
+              defaultValue: '按字符数，不是 token 数（quill 没有分词器）',
+            })}
+          </small>
+        </figcaption>
+        <EChart
+          option={compositionOption}
+          height={168}
+          ariaLabel={t('usage.contextCompositionAria', {
+            detail: segData.map((s) => `${s.name} ${s.value} 字符`).join('，'),
+            defaultValue: '上下文构成：{{detail}}',
+          })}
+        />
+      </figure>
+    </div>
+  )
+}

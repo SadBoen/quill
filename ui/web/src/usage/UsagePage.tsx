@@ -12,6 +12,9 @@ import {
   type SessionMetrics,
 } from '../chat/sessionMetrics'
 import { loadUsage, type UsageReport } from '../chat/chatApi'
+import { UsageCharts } from './UsageCharts'
+import { ContextWindowChart } from './ContextWindowChart'
+import { formatWhen } from './formatWhen'
 import './usage.css'
 
 /**
@@ -56,6 +59,7 @@ function MetricsTable({ report }: { report: UsageReport }): ReactNode {
         <thead>
           <tr>
             <th scope="col">{t('usage.colSession', { defaultValue: '会话' })}</th>
+            <th scope="col">{t('usage.colLastActive', { defaultValue: '最后活动' })}</th>
             <th scope="col">{t('usage.colExpert', { defaultValue: '角色' })}</th>
             {METRIC_KEYS.map((key) => (
               <th scope="col" key={key}>
@@ -67,6 +71,7 @@ function MetricsTable({ report }: { report: UsageReport }): ReactNode {
         <tbody>
           <tr className="usage-row usage-row-total">
             <th scope="row">{t('usage.totalRow', { defaultValue: '合计' })}</th>
+            <td>—</td>
             <td>—</td>
             {METRIC_KEYS.map((key) => (
               <td key={key} data-metric={key}>
@@ -83,6 +88,10 @@ function MetricsTable({ report }: { report: UsageReport }): ReactNode {
                   {session.title || t('nav.newChat', { defaultValue: '新对话' })}
                 </Link>
               </th>
+              {/* 时间取自 /api/usage 本来就返回的 last_active_at（排序用的也是它），
+                  这样图上每根柱子都能对回表里这一行 —— 侧栏里这些会话全都叫「新对话」，
+                  只看名字分不出谁是谁。 */}
+              <td className="usage-when">{formatWhen(session.last_active_at)}</td>
               <td>
                 {session.expert_id || (
                   <span className="field-help">{t('usage.noExpert', { defaultValue: '未绑定角色' })}</span>
@@ -130,6 +139,24 @@ export function UsagePage(): ReactNode {
                       '这里只统计了最近 {{count}} 个会话，更早的没有计入。把「最近 {{count}} 个」当成「全部」是一句凭空而来的话。',
                   })}
                 </p>
+              </Card>
+            ) : null}
+            <Card
+              title={t('usage.chartsTitle', { defaultValue: '图表' })}
+              description={t('usage.chartsDescription', {
+                defaultValue: '全部来自服务端实测值；没测到的项不进图，下面表格里显示「—」。',
+              })}
+            >
+              <UsageCharts report={usage.data} />
+            </Card>
+            {usage.data.sessions[0] ? (
+              <Card
+                title={t('usage.contextTitle', { defaultValue: '最近一个会话的上下文窗口' })}
+                description={t('usage.contextDescription', {
+                  defaultValue: '环是实测 token；构成是字符数（quill 没有分词器）。',
+                })}
+              >
+                <ContextWindowChart sessionId={usage.data.sessions[0].id} context={null} />
               </Card>
             ) : null}
             <Card

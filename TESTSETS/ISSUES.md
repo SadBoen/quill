@@ -2056,3 +2056,132 @@ GET /api/extensions/mcp
   跨会话唯一是**结构上**保证的，而不是靠测试作者记得换写法。
 - **状态**：已修已回归。
 
+## ISSUE-048 · 抄 Token 统计时把 Octop 的上下文窗口环形图整个漏掉了
+
+- **发现**：用户实机反馈「不是，大哥，octop那么多图表之类的，都被你吃了？」。
+  触发点是用户让我「去看一下 octop 的界面」时，我**只查了
+  `Chat/trajectory` 一条线**（指标条），看到只有一排 chip 就收工，
+  并在结论里写「Octop 的 Token 统计就是这一排 chip」。
+- **这个结论是错的**。把 Octop 全仓扫一遍之后，真实情况是：
+  - Octop dashboard **没有引入任何图表库**。`recharts|echarts|chart.js|d3`
+    全仓只在 `slashIcons.ts` 命中了 lucide 的 `BarChart3` 图标名和 locale 字符串。
+  - 全仓只有 5 个文件含 `<svg|strokeDasharray|<circle`，其中
+    **`ContextWindowRing.tsx`（360 行）是唯一的真实数据图表**：
+    SVG 环形 + 点开后的分段堆叠构成条 + 图例 + popover 抽屉。
+  - 其余 4 个是装饰（`WelcomeQuickCards`/`Markdown`/`RailEdgeControl`）
+    或时间轴（`TrajectoryLedger`/`TrajectoryTimeline`/`TurnTimelineRail`），
+    `TodoProgressPanel` 是清单不是图表。
+  - 另一个同源参考项目 `vendor/openoctopus-frontend/` 同样没有图表库，
+    而我此前**从没看过它**。
+- **根本问题在调查方法，不是漏了某一个文件**：
+  我用「已知的组件名 → 定向 grep」代替了「全仓扫一遍」。
+  前者只会找到我**已经知道要找**的东西，于是
+  **「我查了 Octop 的 Token 统计」变成了「我查了我以为的 Octop 的 Token 统计」**。
+  这与本项目反复强调的另一条是同一类错误：
+  **「我没查到」不等于「它不存在」** —— 同一个陷阱的两面。
+- **修复**：
+  1. 补上 `ContextWindowRing` 这一整块能力：
+     - 后端 `session_metrics.rs` 新增纯函数
+       `context_segments()` / `tool_spec_chars()` / `context_used_percent()`；
+     - 新接口 `GET /api/sessions/{id}/context`；
+     - 前端 `usage/ContextWindowChart.tsx`（环形 + 构成环形）。
+  2. 口径照 Octop 的真实做法抄，不美化：Octop 自己给分段值加 `~` 前缀
+     （估算），而条宽由**实测 `used_tokens`** 决定
+     （源码注释：*"Provider input usage owns the total bar width.
+     Segment estimates contribute only their relative composition."*）。
+     quill 没有分词器，所以构成段用**字符数**并在响应里明写
+     `segment_unit: "chars"`、在图例里明写「按字符数，不是 token 数」——
+     **绝不把字符数当 token 数报出去**。
+  3. `context_used_percent()` 沿用 Octop 的口径：非零占用最少显示 1%，
+     真 0 才是 0%。
+- **验证**：`context_segments` 等 7 条新单测 + `session_metrics_http` 11 条 +
+  `ContextWindowChart.test.tsx` 4 条；真机交叉校验 ——
+  `/context` 返回的 `system_prompt` 段是 **242 字符**，
+  与 `GENERAL_INSTRUCTIONS` 常量的 242 字完全吻合。
+- **状态**：已修已回归，已真机确认。
+
+## ISSUE-049 · 测试环境没有 canvas，echarts 在 jsdom 里抛错会带走整棵测试树
+
+- **发现**：引入 echarts 之后跑 `npm test`，测试不是「部分失败」而是**大面积报错**：
+  `Cannot read properties of null (reading 'clearRect')`。
+- **根因**：jsdom 不实现 canvas，`HTMLCanvasElement.prototype.getContext`
+  默认返回 `null`。echarts 初始化时直接 `ctx.clearRect()`，
+  于是空指针。而 vitest 里一个未捕获的渲染期异常会让**整棵测试树**失败，
+  看起来像「所有测试都坏了」，实际只是缺一个环境桩。
+- **同类缺失**：`ResizeObserver` 在 jsdom 里也不存在，echarts 的
+  自适应逻辑会拿不到尺寸。
+- **修复**：`ui/web/src/test/setup.ts` 里补两处**最小桩**：
+  - `HTMLCanvasElement.prototype.getContext` 返回一个只提供
+    echarts 会用到的那几个空方法的 2D context；
+  - 全局 `ResizeObserver` 桩。
+- **刻意没做的事**：**没有**对绘制结果做像素断言。
+  那等于给一个「凑出来的假 context」拍快照，既测不出图表对不对，
+  还会让测试在换 echarts 版本时脆掉。
+  测的是**数据有没有正确进到 option**（断言 series 里的数值与轴标签），
+  视觉正确性仍然只靠真机看（ISSUE-045 的教训）。
+- **另一层防御**：`charts/EChart.tsx` 对 `init` 失败 `try/catch` 降级为
+  只有一个 `aria-label` 的占位。**图表是锦上添花，不该让整页白屏。**
+- **依赖与体积决策**（记在这里是因为它推翻了此前「依赖只增不减」的旧约束，
+  是用户明确指示「找成熟的库、不手搓」后的授权变更）：
+  - 选 **echarts 6** 而非 recharts：echarts 只有 2 个直接依赖
+    （`tslib` / `zrender`），recharts 会拖进 `redux`/`toolkit`/`immer`/
+    `victory-vendor` 共 11+ 个。
+  - 按需注册（Bar/Line/Pie/Grid/Legend/Tooltip/LabelLayout/CanvasRenderer），
+    不用全量 `echarts` 入口。
+  - 诚实记录体积代价：`dist/assets/index-*.js` 从 **933 kB / gzip 306 kB**
+    涨到 **1,511 kB / gzip 503 kB**。这是拿体积换图表能力，
+    **把它写下来，而不是等以后有人发现首页变重了还不知道是从哪来的**。
+- **状态**：已修已回归。
+
+## ISSUE-050 · echarts 的 canvas 不认 CSS 变量：「只用了 3%」的环被画成了一个全黑的圆
+
+- **发现时机**：浏览器实测 `/usage` 页（单元测试与 typecheck 全绿之后）。
+- **现象**：上下文占用环显示 3%，但**整圈是黑的**。一个几乎空着的
+  上下文窗口，画出来像占满了。**这是一张在说反话的图 —— 比没有图更糟。**
+- **根因**：`itemStyle: { color: 'var(--line)' }`。
+  echarts 画在 canvas 上，canvas 的 `fillStyle` 只认色值字符串，
+  **不解析 CSS 变量**；解析失败后它回退到一个深色默认色。
+  同一屏上的「上下文构成」环正常，正是因为它用的是具体 hex 值
+  （`#9ca3af` 等）—— **一屏之内两个环表现不一致，就是这个原因**。
+- **为什么测试完全测不到**：jsdom 里没有 canvas，图表只走到
+  `aria-label` 那条分支，颜色值从来没被解析过。
+  这跟 ISSUE-045 是同一课：**渲染结果的颜色这类事，断言是断言不出来的。**
+- **修复**：`EChart.tsx` 里加 `useCssVar(name, fallback)` ——
+  用 `getComputedStyle(document.documentElement)` 把变量读成真实色值，
+  并用 `MutationObserver` 盯 `html[data-theme]` 的变化。
+  **刻意不在 JS 里抄一份明暗两套色板**：抄一份就意味着以后改主题会漏改一处。
+  变量不存在时（jsdom 没加载 `index.css`）退回传入的 `fallback`，
+  绝不把空串交给 echarts。
+- **顺带修掉**：百分比 label 原来配在 series 上，**两段都会画一次**，
+  文字叠在文字上。改成只挂在「已占用」那一段，剩余那段 `show: false`。
+- **回归**：`EChart.test.tsx` 2 条（解析成真值 / 缺失时回退）。
+- **状态**：已修已回归，已真机确认（3% 的环现在是一小段绿 + 浅色轨道）。
+
+## ISSUE-051 · 图表轴标签上八根柱子全都叫「新对话」，而 aria-label 在念除法原始值
+
+- **发现时机**：同一轮浏览器实测。
+- **现象一**：三张图的 x 轴上，**八根柱子全都叫「新对话」**。
+  因为侧栏里这些会话一个标题都没起，兜底名一律是「新对话」。
+  图看得见，却分不出谁是谁 —— 一排同名标签的图，信息量约等于零。
+- **现象二**：`aria-label` 念出来是
+  `10.561850329222233 tok/s`。`tok_per_s` 是除法结果，直接插值就成了
+  一长串浮点。鼠标悬停的气泡同样如此。**aria-label 是要念给人听的。**
+- **根因**：
+  - 现象一是**照抄「同名兜底」这条正确规矩时忘了它的适用边界** ——
+    表格里同名没问题（有行顺序），图上同名就废了。
+  - 现象二是漏了格式化。缓存那张图当初写了 `Math.round(v * 100)`，
+    另外两张图就没写 —— **三张图各写各的，必然漏。**
+- **修复**：
+  1. 轴标签改成两行：`名称\nMM-DD HH:mm`。时间取的是
+     `/api/usage` **本来就返回**的 `last_active_at`（`ORDER BY` 用的也是它），
+     **没有新增字段、没有自己编一个序号称过去**。
+     表格同步加了「最后活动」列，图上每根柱子才真的对得回表里那一行。
+  2. `formatWhen()` 抽成独立模块，**图表与表格共用同一份格式化** ——
+     两处各写一份，同一个时刻就会显示成两个样子，那类漂移不报错、更隐蔽。
+  3. 速度图的 aria 与 tooltip 补 `.toFixed(1)`。
+- **顺带修掉**：`usage.css` 里「会话名与角色两列左对齐」用的是
+  `nth-child(2)`，插入新列后**序号会静默挪位**，角色列会悄悄变成右对齐。
+  已把三列一起纳入。**位置选择器遇上加列，测试照样全绿。**
+- **回归**：`formatWhen.test.ts` 2 条、`UsagePage` +1（断言行内带真实时间）。
+- **状态**：已修已回归，已真机确认。
+

@@ -397,7 +397,7 @@ async fn created_session_id_is_byte_identical_to_the_listed_one() {
 async fn every_contract_route_responds_and_is_never_a_false_success() {
     // 「已实现」清单必须跟着实现一起长，否则新接通的路由会因为不再返回 501
     // 而被判成「假成功」——这正是本测试要抓的东西，所以清单不能手懒。
-    const IMPLEMENTED: [(&str, &str); 42] = [
+    const IMPLEMENTED: [(&str, &str); 43] = [
         ("GET", "/api/version"),
         ("GET", "/api/auth/me"),
         ("GET", "/api/healthz"),
@@ -423,6 +423,7 @@ async fn every_contract_route_responds_and_is_never_a_false_success() {
         ("GET", "/api/sessions/{id}"),
         ("DELETE", "/api/sessions/{id}"),
         ("GET", "/api/sessions/{id}/metrics"),
+        ("GET", "/api/sessions/{id}/context"),
         ("GET", "/api/usage"),
         ("GET", "/api/teams"),
         ("POST", "/api/teams"),

@@ -97,6 +97,28 @@ describe('用量统计页', () => {
     expect(row.querySelector('[data-metric="tok_per_s"]')?.textContent).toBe('8.5')
   })
 
+  it('列表有「最后活动」列，图上的柱子才对得回表里这一行', async () => {
+    const when = new Date(2026, 9, 6, 9, 5).getTime()
+    renderPage(
+      report({
+        sessions: [
+          {
+            id: 'AAAA1111BBBB2222CCCC3333DDDD4444',
+            title: '',
+            expert_id: null,
+            last_active_at: when,
+            metrics: metrics(),
+          },
+        ],
+      }),
+    )
+    await waitFor(() => expect(screen.getByText('最后活动')).toBeInTheDocument())
+    const row = screen.getByText('新对话').closest('tr') as HTMLElement
+    // 侧栏里这些会话全都叫「新对话」，图上八根柱子同名就分不出谁是谁，
+    // 所以每行必须带着真实时间。
+    expect(row.querySelector('.usage-when')?.textContent).toBe('10-06 09:05')
+  })
+
   it('服务端报了 0 命中就显示 0%，与「没报」区分开', async () => {
     renderPage(
       report({

@@ -32,12 +32,22 @@
   white-space: nowrap;
 }
 
-/* 会话名与角色两列是文本，左对齐更好读。 */
+/* 会话名、最后活动、角色三列是文本，左对齐更好读。
+   注意 nth-child 是位置选择器：往表里加列，这里的序号必须跟着挪，
+   否则「角色」列会悄悄变成右对齐 —— 纯样式错误，测试照样全绿。 */
 .usage-table th[scope='col']:first-child,
 .usage-table td:first-child,
 .usage-table th:nth-child(2),
-.usage-table td:nth-child(2) {
+.usage-table td:nth-child(2),
+.usage-table th:nth-child(3),
+.usage-table td:nth-child(3) {
   text-align: left;
+}
+
+/* 时间戳列窄且是等宽内容，不换行免得行高忽高忽低。 */
+.usage-table .usage-when {
+  white-space: nowrap;
+  color: var(--muted);
 }
 
 .usage-table thead th {
@@ -54,6 +64,42 @@
 
 .usage-row a {
   color: inherit;
+}
+
+/* 图表区：窄容器里的两图并排，宽的图各占一行。 */
+.usage-chart-pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+}
+
+.usage-chart,
+.usage-chart-wide {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.usage-chart figcaption,
+.usage-chart-wide figcaption {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.usage-charts {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.usage-chart-note {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 0;
 }
 
 /* 会话名列在左边，给一个宽度上限并允许换行：超长标题不该把整张表撑变形。 */

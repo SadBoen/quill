@@ -166,6 +166,82 @@ fn sum_reported(values: impl Iterator<Item = i64>) -> Option<i64> {
     any.then_some(total)
 }
 
+// ---------------------------------------------------------------------------
+// 上下文窗口环形图
+// ---------------------------------------------------------------------------
+//
+// 抄 octop 的 `ContextWindowRing`。但有一处**必须不一样**，而且是硬规矩：
+//
+// - **环的总占用是实测的**：`used_tokens` 来自模型端真实上报的
+//   `input_tokens`，`max_tokens` 来自配置。Octop 的条宽也是这么来的
+//   （它自己的注释写着「Provider input usage owns the total bar width」）。
+// - **分段是字符数，不是 token 数。** quill 没有分词器，把字符数说成
+//   token 数就是凭空造数字。所以分段只表达**相对构成**（谁占得多），
+//   单位在界面上明写「字符」。Octop 那边给分段值加 `~` 前缀，
+//   是同一个诚实动作的另一种写法。
+
+/// 构成上下文的一段。`chars` 是**字符数**，见上面的说明。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContextSegment {
+    pub key: &'static str,
+    pub chars: usize,
+}
+
+/// 上下文构成（全部是字符数）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ContextBreakdown {
+    pub system_prompt: usize,
+    /// 内置工具的定义。
+    pub tool_definitions: usize,
+    pub skills: usize,
+    pub mcp: usize,
+    pub conversation: usize,
+}
+
+/// 一条工具定义的字符数。名字 + 描述 + 参数 JSON。
+///
+/// 参数 JSON 也算进去：它同样常驻在每一轮请求里，只算描述会低估。
+pub fn tool_spec_chars(spec: &quill_provider::ToolSpec) -> usize {
+    spec.name.chars().count()
+        + spec.description.chars().count()
+        + spec.parameters.to_string().chars().count()
+}
+
+/// 按 Octop 的配色键拆段。顺序与 Octop 的 `SEGMENT_COLORS` 一致。
+///
+/// 零值的段**保留**而不是剔除：界面上「技能 0 字符」是一条信息，
+/// 而把没挂技能这件事藏起来，用户只会以为没统计到。
+pub fn context_segments(b: &ContextBreakdown) -> Vec<ContextSegment> {
+    [
+        ("system_prompt", b.system_prompt),
+        ("tool_definitions", b.tool_definitions),
+        ("skills", b.skills),
+        ("mcp", b.mcp),
+        ("conversation", b.conversation),
+    ]
+    .into_iter()
+    .map(|(key, chars)| ContextSegment { key, chars })
+    .collect()
+}
+
+/// 上下文占用的百分比。
+///
+/// 抄 Octop 的 `contextUsedPercent`，包括那条反直觉但重要的规则：
+/// **真的占了非零就至少显示 1%**，不许因为四舍五入显示成 0%——
+/// 「0%」看着像「还没用」，实际已经占了 8000 token。
+/// 但**真的没用**（used <= 0）就是 0%，不抬成 1%。
+pub fn context_used_percent(used: i64, max: i64) -> u32 {
+    if max <= 0 || used <= 0 {
+        return 0;
+    }
+    let pct = ((used.min(max) as f64 / max as f64) * 100.0).round() as u32;
+    if pct == 0 {
+        1
+    } else {
+        pct
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -316,5 +392,62 @@ mod tests {
         let rows = vec![assistant(i64::MAX, 0, None, None), assistant(i64::MAX, 0, None, None)];
         let m = aggregate(&rows);
         assert_eq!(m.input_tokens, Some(i64::MAX), "回绕成负数比不显示更糟");
+    }
+
+    #[test]
+    fn a_nonzero_context_never_rounds_down_to_zero_percent() {
+        // 8000 / 32768 = 24%，无所谓。真正的坑是 1 / 32768 = 0.003%。
+        assert_eq!(context_used_percent(1, 32768), 1, "占着 1 token 却显示 0%，像没占");
+        assert_eq!(context_used_percent(8000, 32768), 24);
+    }
+
+    #[test]
+    fn an_actually_empty_context_stays_zero_percent() {
+        assert_eq!(context_used_percent(0, 32768), 0, "真没用就是 0%，不抬成 1%");
+        assert_eq!(context_used_percent(-5, 32768), 0);
+    }
+
+    #[test]
+    fn an_unknown_or_absurd_window_does_not_divide_by_zero() {
+        assert_eq!(context_used_percent(100, 0), 0);
+        assert_eq!(context_used_percent(100, -1), 0);
+    }
+
+    #[test]
+    fn a_full_context_cannot_exceed_one_hundred_percent() {
+        assert_eq!(context_used_percent(50000, 32768), 100);
+    }
+
+    #[test]
+    fn segments_keep_zero_valued_parts_because_zero_is_information() {
+        let segs = context_segments(&ContextBreakdown {
+            system_prompt: 242,
+            tool_definitions: 3100,
+            skills: 0,
+            mcp: 0,
+            conversation: 1800,
+        });
+        let keys: Vec<&str> = segs.iter().map(|s| s.key).collect();
+        assert_eq!(
+            keys,
+            vec!["system_prompt", "tool_definitions", "skills", "mcp", "conversation"]
+        );
+        // 「没挂技能」是一条要显示的信息，不能因为是 0 就把这一段藏掉。
+        let skills = segs.iter().find(|s| s.key == "skills").expect("skills 段必须在");
+        assert_eq!(skills.chars, 0);
+    }
+
+    #[test]
+    fn a_tool_spec_counts_name_description_and_parameters() {
+        let spec = quill_provider::ToolSpec::new(
+            "read_note",
+            "读一个笔记文件",
+        )
+        .with_parameters(serde_json::json!({"type": "object"}));
+        let chars = tool_spec_chars(&spec);
+        assert!(
+            chars > "read_note".chars().count() + "读一个笔记文件".chars().count(),
+            "参数 JSON 也是常驻开销，只算描述会低估：{chars}"
+        );
     }
 }
