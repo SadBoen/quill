@@ -1156,7 +1156,6 @@ dependencies = [
  "quill-adapters",
  "quill-domain",
  "quill-testkit",
- "quill-wiki",
 ]
 
 [[package]]
