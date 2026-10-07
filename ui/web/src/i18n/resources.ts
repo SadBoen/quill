@@ -235,7 +235,6 @@ export const en = {
       deleteConfirmTitle: 'Delete this chat?',
       deleteConfirmHint:
         'This is a soft delete: the chat disappears from the list, but its messages stay in the local database.',
-      disclaimer: 'AI-generated content — please verify it.',
       contextRing: {
         label: 'Context using {{used}} / {{max}} tokens ({{percent}}%). Click for the breakdown.',
         panel: 'Context composition',
@@ -1695,7 +1694,6 @@ export const zhCN = {
         '这个会话已经不在了（可能已在别处删除）。下一步：刷新左侧列表，或回列表重新选一个会话。',
       deleteConfirmTitle: '删除这个会话？',
       deleteConfirmHint: '这是软删除：会话会从列表里消失，消息记录仍保留在本机数据库中。',
-      disclaimer: 'AI 生成内容，请注意甄别。',
       contextRing: {
         label: '上下文已占用 {{used}} / {{max}} tokens（{{percent}}%），点开看构成',
         panel: '上下文构成',

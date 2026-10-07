@@ -423,15 +423,6 @@
   white-space: nowrap;
 }
 
-.chat-ai-disclaimer {
-  color: var(--faint);
-  font-size: 9px;
-  line-height: 1.4;
-  margin: 7px auto 0;
-  max-width: 920px;
-  text-align: center;
-}
-
 /* ---------- 窄屏：第二侧栏收起成抽屉 ---------- */
 @media (max-width: 1100px) {
   .chat-second-sidebar { flex-basis: 258px; width: 258px; }

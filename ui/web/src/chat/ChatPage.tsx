@@ -683,9 +683,6 @@ export function ChatPage(): ReactNode {
           {/* 会话级统计。放在输入框下面：它是会话整体的数据，不是「本次」的。
               没数据时组件自己返回 null，不占位置。 */}
           <SessionMetricsBar metrics={metrics.data ?? null} />
-          <p className="chat-ai-disclaimer">
-            {t('chat.disclaimer', { defaultValue: 'AI 生成内容，请注意甄别。' })}
-          </p>
         </div>
       </section>
     </div>
