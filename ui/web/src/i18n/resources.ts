@@ -236,6 +236,13 @@ export const en = {
       deleteConfirmHint:
         'This is a soft delete: the chat disappears from the list, but its messages stay in the local database.',
       disclaimer: 'AI-generated content — please verify it.',
+      contextRing: {
+        label: 'Context using {{used}} / {{max}} tokens ({{percent}}%). Click for the breakdown.',
+        panel: 'Context composition',
+        usedOf: 'Using {{used}} / {{max}} tokens ({{percent}}%)',
+        noSegments: 'The server returned no breakdown.',
+        charUnit: 'chars',
+      },
       sidebar: {
         label: 'Experts & chats',
         title: 'Experts & chats',
@@ -1689,6 +1696,13 @@ export const zhCN = {
       deleteConfirmTitle: '删除这个会话？',
       deleteConfirmHint: '这是软删除：会话会从列表里消失，消息记录仍保留在本机数据库中。',
       disclaimer: 'AI 生成内容，请注意甄别。',
+      contextRing: {
+        label: '上下文已占用 {{used}} / {{max}} tokens（{{percent}}%），点开看构成',
+        panel: '上下文构成',
+        usedOf: '已占用 {{used}} / {{max}} tokens（{{percent}}%）',
+        noSegments: '服务端没给出构成明细。',
+        charUnit: '字符',
+      },
       sidebar: {
         label: '角色与会话',
         title: '角色与会话',

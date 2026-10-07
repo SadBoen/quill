@@ -10,7 +10,8 @@ import { Popconfirm } from '../experts/ExpertsUi'
 import { loadSessions, createSession, loadHealth, loadMessageHistory, loadSessionMetrics, chatErrorMessage } from './chatApi'
 import { upsertMessage, type ChatMessage } from './model'
 import SessionMetricsBar from './SessionMetricsBar'
-import { ContextWindowChart } from '../usage/ContextWindowChart'
+import { ContextRing } from './ContextRing'
+import { useSessionContext } from '../usage/useSessionContext'
 import { ChatSidebar } from './ChatSidebar'
 import { ChatWelcome } from './ChatWelcome'
 import { useChatWelcome } from './welcomeContent'
@@ -69,6 +70,9 @@ export function ChatPage(): ReactNode {
     staleTime: 5_000,
     retry: false,
   })
+  // 输入框里那个上下文小环的数据源。用量统计页读的是同一个出口，
+  // 否则环和图会各自拉一次，出现「环 2%、图 3%」这种自相矛盾。
+  const sessionContext = useSessionContext(sessionId as string)
   const allExperts = experts.data ?? []
   const pickableExperts = allExperts.filter((expert) => expert.default_enabled)
   const hiddenExpertCount = allExperts.length - pickableExperts.length
@@ -102,6 +106,7 @@ export function ChatPage(): ReactNode {
    */
   const [live, setLive] = useState<{ started: boolean; text: string; reasoning: string; tools: LiveToolStep[] } | null>(null)
   const [toolsOpen, setToolsOpen] = useState(false)
+  const [contextOpen, setContextOpen] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const chatScroll = useRef<HTMLDivElement>(null)
   const composerInput = useRef<HTMLTextAreaElement>(null)
@@ -645,6 +650,15 @@ export function ChatPage(): ReactNode {
                 </span>
               </div>
               <div className="chat-input-dock-right">
+                {/* 上下文小环：32px，画在输入框里面、发送键旁边（位置与尺寸照 octop，
+              不是我们自己的判断）。明细点开才看。 */}
+                {sessionContext.data ? (
+                  <ContextRing
+                    context={sessionContext.data}
+                    open={contextOpen}
+                    onToggle={() => setContextOpen((v) => !v)}
+                  />
+                ) : null}
                 <span
                   className="chat-usage-label"
                   title={
@@ -669,11 +683,6 @@ export function ChatPage(): ReactNode {
           {/* 会话级统计。放在输入框下面：它是会话整体的数据，不是「本次」的。
               没数据时组件自己返回 null，不占位置。 */}
           <SessionMetricsBar metrics={metrics.data ?? null} />
-          {/* 上下文窗口图（抄 octop 的 ContextWindowRing）。
-              只在有实测值时出现 —— 没量过就整块不显示，不能画一个 0% 的空环。 */}
-          {sessionId && (metrics.data?.turns ?? 0) > 0 ? (
-            <ContextWindowChart sessionId={sessionId} context={null} />
-          ) : null}
           <p className="chat-ai-disclaimer">
             {t('chat.disclaimer', { defaultValue: 'AI 生成内容，请注意甄别。' })}
           </p>

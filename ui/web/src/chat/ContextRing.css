@@ -1,0 +1,100 @@
+/*
+ * 输入框里的上下文小环。
+ *
+ * 尺寸照 octop（chatInputCore.partial.less:465 的 `.contextRingSvg { 32px }`）。
+ * 环用 conic-gradient 而不是 canvas：一个单值比例环不值得为它起一个图表实例。
+ * 颜色走 index.css 里的语义色（--danger / --warning / --success），不抄 octop 的
+ * --fn-* —— 那些变量在 quill 里不存在，写上去等于每条属性静默失效。
+ */
+
+.chat-context-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.chat-context-ring {
+  align-items: center;
+  background: conic-gradient(var(--chat-ring-color, var(--success)) var(--chat-ring-deg, 0deg), var(--line) 0);
+  border: 0;
+  border-radius: 50%;
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  height: 32px;
+  justify-content: center;
+  padding: 0;
+  width: 32px;
+}
+
+.chat-context-ring.is-ok { --chat-ring-color: var(--success); }
+.chat-context-ring.is-warning { --chat-ring-color: var(--warning); }
+.chat-context-ring.is-danger { --chat-ring-color: var(--danger); }
+
+.chat-context-ring-inner {
+  align-items: center;
+  background: var(--panel);
+  border-radius: 50%;
+  display: inline-flex;
+  font-size: 9px;
+  height: 22px;
+  justify-content: center;
+  width: 22px;
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-context-ring:hover { background: conic-gradient(var(--chat-ring-color, var(--success)) var(--chat-ring-deg, 0deg), var(--line-strong, var(--line)) 0); }
+
+.chat-context-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  bottom: 40px;
+  box-shadow: 0 8px 22px rgb(23 32 51 / 14%);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 10px 12px;
+  position: absolute;
+  right: 0;
+  width: 250px;
+  z-index: 20;
+}
+
+.chat-context-panel-head { color: var(--ink); font-weight: 600; margin: 0 0 6px; }
+
+.chat-context-panel-empty { margin: 0; }
+
+.chat-context-panel-list {
+  display: grid;
+  gap: 3px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.chat-context-panel-list li {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+}
+
+.chat-context-panel-name { flex: 1; }
+
+.chat-context-panel-list b {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.chat-context-dot {
+  border-radius: 50%;
+  display: inline-block;
+  height: 8px;
+  width: 8px;
+}
+
+.chat-context-panel-note {
+  color: var(--faint);
+  font-size: 10px;
+  margin: 7px 0 0;
+}

@@ -1,10 +1,10 @@
-import { useQuery } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { ErrorNotice } from '../components/Page'
 import { EChart, useCssVar } from '../charts/EChart'
-import { loadSessionContext, type SessionContext } from './contextApi'
+import type { SessionContext } from './contextApi'
+import { useSessionContext } from './useSessionContext'
 
 /**
  * 上下文窗口图。抄 octop 的 `ContextWindowRing`，但用 echarts 而不是手搓 SVG。
@@ -69,14 +69,8 @@ export function ContextWindowChart({
   const cWarning = useCssVar('--warning', '#805a08')
   const cDanger = useCssVar('--danger', '#a43f48')
 
-  const query = useQuery({
-    queryKey: ['session-context', sessionId],
-    queryFn: () => loadSessionContext(sessionId),
-    enabled: Boolean(sessionId),
-    staleTime: 10_000,
-    retry: false,
-  })
-  const data = context ?? query.data ?? null
+  const query = useSessionContext(sessionId)
+  const data = context ?? query.data
 
   // 「没测到」和「没拉到」是两件不同的事，**两件都得说出来**。
   // 之前这里只有 `if (!data) return null`，于是 400/500/404 与「还没量过」
@@ -193,6 +187,13 @@ export function ContextWindowChart({
     )
     .join('，')
 
+  const ringAria = t('usage.contextRingAria', {
+    used: formatTokens(used),
+    max: formatTokens(data.max_tokens),
+    percent,
+    defaultValue: '上下文已占用 {{used}} / {{max}} tokens，占 {{percent}}%',
+  })
+
   return (
     <div className="usage-chart-pair">
       <figure className="usage-chart">
@@ -203,12 +204,7 @@ export function ContextWindowChart({
           // 环的文案藏在 formatter 闭包里，语言变了源码没变 —— 必须把语言交给
           // EChart，否则切语言后 tooltip 还是旧文案。
           updateKey={i18n.language}
-          ariaLabel={t('usage.contextRingAria', {
-            used: formatTokens(used),
-            max: formatTokens(data.max_tokens),
-            percent,
-            defaultValue: '上下文已占用 {{used}} / {{max}} tokens，占 {{percent}}%',
-          })}
+          ariaLabel={ringAria}
         />
       </figure>
       <figure className="usage-chart">

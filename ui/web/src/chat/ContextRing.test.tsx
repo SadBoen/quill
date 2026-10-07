@@ -1,0 +1,107 @@
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+import i18n from '../i18n'
+import type { SessionContext } from '../usage/contextApi'
+import { ContextRing } from './ContextRing'
+
+/**
+ * 输入框里那个上下文小环。
+ *
+ * 尺寸与位置是**照 octop**，不是照我们自己的判断：
+ * 32px、放在输入框里发送键旁边、点开才看明细
+ * （`.octop-ref/octop/dashboard/src/pages/Chat/chatInputCore.partial.less:465`、
+ * `components/ChatInputActionsRow.tsx:962-968`、`components/ContextWindowRing.tsx:348-358`）。
+ *
+ * 这组测试盯的是两件不能退化的：
+ * 1. **没量过就不画环。** 画一个 0% 的空环等于说「还有一大半没用」，
+ *    而真实情况是「完全没量过」。
+ * 2. **构成明细的单位是字符。** quill 没有分词器，说成 token 就是凭空造数字。
+ */
+
+function ctx(over: Partial<SessionContext> = {}): SessionContext {
+  return {
+    max_tokens: 32768,
+    used_tokens: 3042,
+    used_percent: 9,
+    segments: [
+      { key: 'system_prompt', chars: 242 },
+      { key: 'tool_definitions', chars: 3100 },
+      { key: 'skills', chars: 0 },
+      { key: 'mcp', chars: 0 },
+      { key: 'conversation', chars: 1800 },
+    ],
+    segment_unit: 'chars',
+    ...over,
+  }
+}
+
+function renderRing(context: SessionContext, open = false) {
+  const onToggle = vi.fn()
+  render(<ContextRing context={context} open={open} onToggle={onToggle} />)
+  return { onToggle }
+}
+
+beforeEach(async () => {
+  await i18n.changeLanguage('zh-CN')
+})
+
+describe('上下文小环', () => {
+  it('环上写的是实测占用，并带上上下限', () => {
+    renderRing(ctx())
+    const ring = screen.getByRole('button')
+    expect(ring).toHaveTextContent('9%')
+    expect(ring.getAttribute('aria-label')).toContain('3042')
+    expect(ring.getAttribute('aria-label')).toContain('32768')
+  })
+
+  it('没实测值时一个环都不画', () => {
+    renderRing(ctx({ used_tokens: null, used_percent: null }))
+    expect(screen.queryByRole('button')).toBeNull()
+  })
+
+  it('默认不展开：点开之前页面上没有构成明细', () => {
+    renderRing(ctx())
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('展开后逐项带「字符」，一个 0 字符的段不出现', () => {
+    renderRing(ctx(), true)
+    const panel = screen.getByRole('dialog')
+    const items = Array.from(panel.querySelectorAll('li')).map((li) => li.textContent?.replace(/\s+/g, ' ').trim())
+    // 名字与数字是两个元素，靠 flex gap 分开，所以按「一行一项」来对。
+    expect(items).toEqual([
+      '系统提示 242 字符',
+      '内置工具 3100 字符',
+      '对话历史 1800 字符',
+    ])
+    // 0 字符的段（技能 / MCP）不该占一行。
+    expect(panel).not.toHaveTextContent('技能')
+    // 单位那句也得留着。
+    expect(panel).toHaveTextContent('按字符数')
+  })
+
+  it('服务端没给构成时明说没有，而不是画一个空环', () => {
+    renderRing(ctx({ segments: [] }), true)
+    expect(screen.getByRole('dialog')).toHaveTextContent('服务端没给出构成明细')
+  })
+
+  it('阈值变色与 octop 一致：≥80% 危险色、≥50% 警告色', () => {
+    const { unmount } = render(<ContextRing context={ctx({ used_percent: 85 })} open={false} onToggle={() => {}} />)
+    expect(screen.getByRole('button').className).toContain('is-danger')
+    unmount()
+
+    renderRing(ctx({ used_percent: 60 }))
+    expect(screen.getByRole('button').className).toContain('is-warning')
+    cleanup()
+    renderRing(ctx({ used_percent: 10 }))
+    expect(screen.getByRole('button').className).toContain('is-ok')
+  })
+
+  it('点一下就切换展开状态', () => {
+    const onToggle = vi.fn()
+    render(<ContextRing context={ctx()} open={false} onToggle={onToggle} />)
+    fireEvent.click(screen.getByRole('button'))
+    expect(onToggle).toHaveBeenCalledTimes(1)
+  })
+})
