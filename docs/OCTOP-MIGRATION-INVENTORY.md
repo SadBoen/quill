@@ -371,6 +371,10 @@ quill-testkit   ← 仅 dev-dependency
 
 ## 附录
 
-- `docs/octop-endpoints.csv` —— 470 条端点逐行（序号/文件/方法/路径/用途/分类/接核心/quill现状/备注）
+- `docs/octop-endpoints.csv` —— 470 条端点逐行（序号/文件/方法/路径/用途/分类/接核心/quill现状/备注）。
+  **文件尾部有两段便于一眼看进度的汇总**：
+  - `—— 小计 ——`：按分类 / 按是否接 goose 核心 / 按 quill 现状 / 合计，以及**生成时间**与上游提交；
+  - `—— quill 侧已实现 ——`：逐条列出已实现的能力域与其落点文件（判断，非测量）。
 - 生成器：`scripts/gen-octop-inventory.py`（只读上游、不联网）
-- 复现命令：`python scripts/gen-octop-inventory.py`
+- 复现命令：`python scripts/gen-octop-inventory.py`（重跑会刷新小计与生成时间；
+  「分类 / quill 现状」写在生成器的 `FILE_MAP` 里，是人工判断，改它再重跑即可）

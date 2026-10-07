@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""从 .octop-ref/octop 的 FastAPI 路由源码生成「迁移功能清单」原始 CSV。
+"""从 .octop-ref/octop 的 FastAPI 路由源码生成「迁移功能清单」CSV。
 
-产出的 CSV 是**机器生成的原始事实**（哪个文件有哪些端点），
-分类与 quill 完成度由同目录的 FILE_MAP 决定，人可以改 FILE_MAP 再重跑。
-不联网、只读上游源码。
+产出的 CSV：表头 → 逐端点数据 → **小计** → **quill 侧已实现清单**。
+小计与清单都是机器拼出来的；但「分类 / quill 现状」来自下面的 FILE_MAP，
+那是**判断**不是测量，随实现推进手工更新（改了重跑即可）。不联网、只读上游源码。
 """
 import csv
 import os
 import re
 import sys
+import time
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(ROOT, ".."))
 ROUTERS = os.path.join(REPO, ".octop-ref", "octop", "src", "octop", "api", "routers")
-OUT = os.path.join(REPO, ".scratch", "octop-endpoints.csv")
+OUT = os.path.join(REPO, "docs", "octop-endpoints.csv")
 
 # 文件 → (分类, 是否接 goose 核心, quill 现状)
 # 分类：前端效果 / goose核心 / 平台 / 外部依赖 / 数据
@@ -85,6 +86,28 @@ SUB_MAP = {
     "__init__.py": ("平台", False, "—", "聚合，无端点"),
 }
 
+# quill 侧**已实现**的能力域。这是判断不是测量 —— 随实现推进手工往下加，
+# 每次加都要能指出对应的 .rs / 迁移文件（否则就是自吹）。
+IMPLEMENTED = [
+    "认证与首管引导 — api_auth.rs（/api/setup/*、/api/auth/{login,refresh,logout,me}）",
+    "专家 CRUD — api_experts.rs（+ general_expert.rs：每用户恰一份「通用专家」）",
+    "专家团 CRUD — api_teams.rs（契约字段冻结；两个 Octop 错误码有意不实现）",
+    "派工**真执行** — member_executor.rs（ProviderMemberExecutor）+ POST /api/teams/{id}/dispatch/run  ← 2026-10-08 新",
+    "会话与消息 + SSE 流式 — api_chat.rs / api_chat_stream.rs（共用 run_turn）",
+    "MCP 协议层 — mcp_client.rs（rmcp 真拉 stdio 子进程、真握手、tools/list、tools/call）",
+    "SKILL 库 + SkillHub 市场 — api_extensions.rs / skills_repo.rs / skillhub*.rs",
+    "专家市场 — api_expert_market.rs（上游同 SkillHub skillsets）",
+    "多供应商 admin — api_providers.rs / llm_providers.rs（真探测 /models）",
+    "MBTI 人格 — mbti/*.rs + 0010_mbti.sql",
+    "微信通道 — channels/{store,weixin}.rs + 0009_channels.sql（未真机扫码）",
+    "备份导出 / 校验 — api_backup.rs + quill-backup（restore 需停服走 CLI）",
+    "Token 用量统计 — session_metrics.rs + GET /api/usage",
+    "用户管理（读 + 启停）— api_users.rs（POST/DELETE 有意保持 501）",
+    "实例配置 — api_admin.rs（admin-only；PUT 后热替换 provider）",
+    "健康检查 — GET /healthz",
+    "资料库（只读）— api_wiki.rs 四端点 + quill-wiki",
+]
+
 DEC = re.compile(r'@router\.(get|post|put|patch|delete)\(')
 STRLIT = re.compile(r'"([^"]*)"')
 
@@ -135,20 +158,43 @@ def main():
             n += 1
             rows.append([n, rel, method, route, summary, cat, "是" if core else "否", status, note])
 
+    from collections import Counter
+    c_cat = Counter(r[5] for r in rows)
+    c_core = Counter(r[6] for r in rows)
+    c_st = Counter(r[7] for r in rows)
+    total = len(rows)
+    generated = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+
+    # —— 小计段：列布局与正文一致，人和脚本都能读 ——
+    foot = [["—— 小计 ——", "", "", "", "", "", "", "", ""]]
+    for k, v in c_cat.most_common():
+        foot.append(["小计", "按分类", k, "", "", "", "", str(v), "端点"])
+    for k, v in c_core.most_common():
+        foot.append(["小计", "接 goose 核心", k, "", "", "", "", str(v), "端点"])
+    for k, v in sorted(c_st.items(), key=lambda kv: -kv[1]):
+        foot.append(["小计", "quill 现状", k, "", "", "", "", str(v), "端点"])
+    foot.append(["小计", "合计", "全部", "", "", "", "", str(total), "端点"])
+    foot.append([
+        "生成时间", generated, "数据源", ".octop-ref/octop", "",
+        "提交", "eb28011249c02cafd389b2d424294c6c1b9cf422", "1.0.2b6", "",
+    ])
+    # —— quill 侧已实现清单：一眼看到「在推进」，而不是只看数字 ——
+    foot.append(["—— quill 侧已实现（判断，非测量）——", "", "", "", "", "", "", "", ""])
+    for i, item in enumerate(IMPLEMENTED, 1):
+        foot.append(["已实现", str(i), item, "", "", "", "", "", ""])
+
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with open(OUT, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
         w.writerow(["序号", "octop文件", "方法", "路径", "用途", "分类", "接goose核心", "quill现状", "备注"])
         w.writerows(rows)
-    print(f"写出 {len(rows)} 行 → {OUT}")
-    # 统计
-    from collections import Counter
-    c_cat = Counter(r[5] for r in rows)
-    c_core = Counter(r[6] for r in rows)
-    c_st = Counter(r[7] for r in rows)
+        w.writerows(foot)
+
+    print(f"写出 {total} 条端点 + 小计 + 已实现清单 {len(IMPLEMENTED)} 条 → {OUT}")
     print("分类:", dict(c_cat))
     print("接核心:", dict(c_core))
     print("quill现状:", dict(c_st))
+    print("生成时间:", generated)
 
 
 if __name__ == "__main__":

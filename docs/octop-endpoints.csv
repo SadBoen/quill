@@ -469,3 +469,35 @@
 449,workspace.py,GET,/agents/{agent_id}/workspace/grep,,数据,否,未做,运行中 agent 工作区读写
 450,workspace.py,GET,/agents/{agent_id}/workspace/archive,Download workspace as zip,数据,否,未做,运行中 agent 工作区读写
 451,workspace.py,POST,/agents/{agent_id}/workspace/archive,Import workspace zip,数据,否,未做,运行中 agent 工作区读写
+—— 小计 ——,,,,,,,,
+小计,按分类,goose核心,,,,,198,端点
+小计,按分类,平台,,,,,121,端点
+小计,按分类,外部依赖,,,,,100,端点
+小计,按分类,数据,,,,,51,端点
+小计,接 goose 核心,否,,,,,272,端点
+小计,接 goose 核心,是,,,,,198,端点
+小计,quill 现状,未做,,,,,238,端点
+小计,quill 现状,部分,,,,,193,端点
+小计,quill 现状,桩(501),,,,,20,端点
+小计,quill 现状,已实现,,,,,18,端点
+小计,quill 现状,—,,,,,1,端点
+小计,合计,全部,,,,,470,端点
+生成时间,2026-10-08T06:27:12+0800,数据源,.octop-ref/octop,,提交,eb28011249c02cafd389b2d424294c6c1b9cf422,1.0.2b6,
+—— quill 侧已实现（判断，非测量）——,,,,,,,,
+已实现,1,"认证与首管引导 — api_auth.rs（/api/setup/*、/api/auth/{login,refresh,logout,me}）",,,,,,
+已实现,2,专家 CRUD — api_experts.rs（+ general_expert.rs：每用户恰一份「通用专家」）,,,,,,
+已实现,3,专家团 CRUD — api_teams.rs（契约字段冻结；两个 Octop 错误码有意不实现）,,,,,,
+已实现,4,派工**真执行** — member_executor.rs（ProviderMemberExecutor）+ POST /api/teams/{id}/dispatch/run  ← 2026-10-08 新,,,,,,
+已实现,5,会话与消息 + SSE 流式 — api_chat.rs / api_chat_stream.rs（共用 run_turn）,,,,,,
+已实现,6,MCP 协议层 — mcp_client.rs（rmcp 真拉 stdio 子进程、真握手、tools/list、tools/call）,,,,,,
+已实现,7,SKILL 库 + SkillHub 市场 — api_extensions.rs / skills_repo.rs / skillhub*.rs,,,,,,
+已实现,8,专家市场 — api_expert_market.rs（上游同 SkillHub skillsets）,,,,,,
+已实现,9,多供应商 admin — api_providers.rs / llm_providers.rs（真探测 /models）,,,,,,
+已实现,10,MBTI 人格 — mbti/*.rs + 0010_mbti.sql,,,,,,
+已实现,11,"微信通道 — channels/{store,weixin}.rs + 0009_channels.sql（未真机扫码）",,,,,,
+已实现,12,备份导出 / 校验 — api_backup.rs + quill-backup（restore 需停服走 CLI）,,,,,,
+已实现,13,Token 用量统计 — session_metrics.rs + GET /api/usage,,,,,,
+已实现,14,用户管理（读 + 启停）— api_users.rs（POST/DELETE 有意保持 501）,,,,,,
+已实现,15,实例配置 — api_admin.rs（admin-only；PUT 后热替换 provider）,,,,,,
+已实现,16,健康检查 — GET /healthz,,,,,,
+已实现,17,资料库（只读）— api_wiki.rs 四端点 + quill-wiki,,,,,,
