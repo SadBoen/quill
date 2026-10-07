@@ -49,12 +49,7 @@ impl UuidBytes {
     }
 
     pub fn to_compact_hex(&self) -> String {
-        let mut s = String::with_capacity(32);
-        for b in &self.0 {
-            s.push(char::from(HEX_DIGITS[(b >> 4) as usize]));
-            s.push(char::from(HEX_DIGITS[(b & 0x0f) as usize]));
-        }
-        s
+        to_hex_lower(&self.0)
     }
 
     pub fn to_hyphenated(&self) -> String {
@@ -72,6 +67,36 @@ impl UuidBytes {
 
 const HYPHEN_POSITIONS: [usize; 4] = [8, 13, 18, 23];
 const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
+const HEX_DIGITS_UPPER: &[u8; 16] = b"0123456789ABCDEF";
+
+/// 小写十六进制。**全项目唯一的 lower-hex 出口** —— 谁再手写
+/// `.map(|x| format!("{x:02x}"))` 都是重复。
+///
+/// 查表而不是逐字节 `format!`：`format!` 每个字节要分配一次 `String`，
+/// 对一个 16 字节 id 就是 16 次分配，而这些函数在请求路径上被高频调用。
+/// 输出与 `format!("{x:02x}")` 逐个字符相同。
+pub fn to_hex_lower(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push(char::from(HEX_DIGITS[(b >> 4) as usize]));
+        s.push(char::from(HEX_DIGITS[(b & 0x0f) as usize]));
+    }
+    s
+}
+
+/// 大写十六进制。**全项目唯一的 upper-hex 出口**。
+///
+/// 为什么需要大写这一份：SQLite 的 `hex(id)` 输出是**大写**，读路径直接把它
+/// 当字符串用；写路径若输出小写，同一个 id 在 POST 响应与 GET 列表里会是两种
+/// 字符串，前端按 id 去重/匹配会全部失配。所以两者都保留，但都收在这一个模块。
+pub fn to_hex_upper(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push(char::from(HEX_DIGITS_UPPER[(b >> 4) as usize]));
+        s.push(char::from(HEX_DIGITS_UPPER[(b & 0x0f) as usize]));
+    }
+    s
+}
 
 const fn hex_val(b: u8) -> Option<u8> {
     match b {
@@ -558,6 +583,44 @@ mod tests {
         let parsed = UserId::parse(HEX32).expect("应合法");
         let raw: [u8; 16] = *parsed.as_bytes();
         assert_eq!(UserId::from_bytes(raw), parsed, "两种构造入口须一致");
+    }
+
+    #[test]
+    fn hex_helpers_match_the_format_macro_reference() {
+        // 反向验证：查表实现必须与 `format!("{:02x}")` 逐字符相同。全 256 个字节值，
+        // 任何右移/掩码写错都会在某个值上露出来（尤其 0x0f / 0x10 / 0xf0 边界）。
+        let bytes: Vec<u8> = (0u16..=255).map(|b| b as u8).collect();
+        let want_lower: String = bytes.iter().map(|x| format!("{x:02x}")).collect();
+        let want_upper: String = bytes.iter().map(|x| format!("{x:02X}")).collect();
+        assert_eq!(
+            to_hex_lower(&bytes),
+            want_lower,
+            "小写查表实现与 format! 不符"
+        );
+        assert_eq!(
+            to_hex_upper(&bytes),
+            want_upper,
+            "大写查表实现与 format! 不符"
+        );
+    }
+
+    #[test]
+    fn compact_hex_is_exactly_the_lowercase_form() {
+        // 收口后的不变量：`UuidBytes::to_compact_hex` 必须就是 `to_hex_lower`。
+        let id = UserId::parse(HEX32).expect("应合法");
+        assert_eq!(id.to_compact_hex(), to_hex_lower(id.as_bytes()));
+        assert_eq!(id.to_compact_hex(), HEX32, "紧凑形态必须是小写");
+        assert_eq!(
+            to_hex_upper(id.as_bytes()),
+            HEX32.to_ascii_uppercase(),
+            "大写形态供读库路径对齐 SQLite 的 hex()"
+        );
+    }
+
+    #[test]
+    fn hex_helpers_are_empty_safe() {
+        assert_eq!(to_hex_lower(&[]), "");
+        assert_eq!(to_hex_upper(&[]), "");
     }
 
     #[test]

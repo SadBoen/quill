@@ -65,7 +65,9 @@ pub async fn create(
     let roster = roster_of(&state, user.0.user_id)?;
 
     let domain = build_domain(team_id.clone(), &name, &leader, &members, &roster)?;
-    domain.validate().map_err(|e| team_error_to_api("创建团队", e))?;
+    domain
+        .validate()
+        .map_err(|e| team_error_to_api("创建团队", e))?;
 
     let db = state.db()?;
     if map_agent_error(
@@ -84,14 +86,26 @@ pub async fn create(
         .iter()
         .map(|m| m.as_str().to_string())
         .collect::<Vec<String>>();
-    let row = TeamRow::new(slug.clone(), name.clone(), description.clone(), leader_name, member_names);
+    let row = TeamRow::new(
+        slug.clone(),
+        name.clone(),
+        description.clone(),
+        leader_name,
+        member_names,
+    );
 
     let team_uuid = new_uuid()?;
     let ids = NewTeamRow {
         team_uuid,
         leader_session: new_uuid()?,
-        room_id: format!("room-{}", &hex_lower(&team_uuid)[..12]),
-        workspace_path: format!("ws/{}", &hex_lower(&team_uuid)[..12]),
+        room_id: format!(
+            "room-{}",
+            &quill_adapters::ids::to_hex_lower(&team_uuid)[..12]
+        ),
+        workspace_path: format!(
+            "ws/{}",
+            &quill_adapters::ids::to_hex_lower(&team_uuid)[..12]
+        ),
         provider_id: "local".to_string(),
         model: state
             .llm_config
@@ -102,7 +116,10 @@ pub async fn create(
     };
 
     let db = state.db()?;
-    map_agent_error("建团队", teams_repo::create(db, user.0.user_id, &row, &ids).await)?;
+    map_agent_error(
+        "建团队",
+        teams_repo::create(db, user.0.user_id, &row, &ids).await,
+    )?;
 
     // 落库后回读一次再返回：回包必须是库里的样子，而不是请求体的复述。
     let stored = map_agent_error(
@@ -116,11 +133,7 @@ pub async fn create(
         ))
     })?;
 
-    Ok((
-        StatusCode::CREATED,
-        Json(team_json(&stored)),
-    )
-        .into_response())
+    Ok((StatusCode::CREATED, Json(team_json(&stored))).into_response())
 }
 
 pub async fn get_one(
@@ -199,7 +212,9 @@ pub async fn patch(
         )));
     }
     let domain = build_domain(team_id.clone(), &name, &leader, &members, &roster)?;
-    domain.validate().map_err(|e| team_error_to_api("修改团队", e))?;
+    domain
+        .validate()
+        .map_err(|e| team_error_to_api("修改团队", e))?;
 
     let row = TeamRow {
         team_id: team_id.as_str().to_string(),
@@ -213,7 +228,10 @@ pub async fn patch(
         created_at: current.created_at,
         updated_at: crate::db::now_ms(),
     };
-    map_agent_error("改团队", teams_repo::update(db, owner, &row, leader_changed).await)?;
+    map_agent_error(
+        "改团队",
+        teams_repo::update(db, owner, &row, leader_changed).await,
+    )?;
 
     let stored = map_agent_error(
         "读取改后的团队",
@@ -449,10 +467,6 @@ fn new_uuid() -> Result<[u8; 16], ApiError> {
     Ok(b)
 }
 
-fn hex_lower(b: &[u8; 16]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
-}
-
 #[allow(unused_imports)]
 use crate::api_experts::only_keys as _only_keys_reexport;
 
@@ -510,7 +524,11 @@ mod tests {
         ];
         for (e, wants) in cases {
             let err = team_error_to_api("建团队", e);
-            assert_eq!(err.status(), StatusCode::BAD_REQUEST, "团队规则错误必须是 400");
+            assert_eq!(
+                err.status(),
+                StatusCode::BAD_REQUEST,
+                "团队规则错误必须是 400"
+            );
             let text = format!("{}{}", err.detail(), err.next_step());
             for w in wants {
                 assert!(text.contains(w), "错误文案必须含 {w:?}：{text}");
@@ -565,6 +583,9 @@ mod tests {
             },
         );
         let text = format!("{}{}", err.detail(), err.next_step());
-        assert!(!text.contains("no such column"), "内部 SQL 串泄漏了：{text}");
+        assert!(
+            !text.contains("no such column"),
+            "内部 SQL 串泄漏了：{text}"
+        );
     }
 }

@@ -3,8 +3,8 @@ pub mod knowledge;
 pub mod member;
 
 pub use ids::{
-    validate_slug, ExpertId, MemberId, ParseIdError, ParseSlugError, ProviderId, SessionId, UserId,
-    UuidBytes, MAX_SLUG_LEN,
+    to_hex_lower, to_hex_upper, validate_slug, ExpertId, MemberId, ParseIdError, ParseSlugError,
+    ProviderId, SessionId, UserId, UuidBytes, MAX_SLUG_LEN,
 };
 pub use knowledge::{
     IndexDoc, IndexReceipt, IngestContext, KnowledgeBackend, KnowledgePage, KnowledgeSource,

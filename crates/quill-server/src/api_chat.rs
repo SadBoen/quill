@@ -6,16 +6,17 @@ use axum::Json;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use sqlx::Row;
 use quill_provider::{
     ChatRequest, ChatResponse, Message, SharedProvider, StreamDelta, TokenUsage, ToolCall, ToolSpec,
 };
+use sqlx::Row;
 
 use crate::auth::AuthUser;
 use crate::body::JsonBody;
 use crate::db::now_ms;
 use crate::error::ApiError;
 use crate::state::AppState;
+use quill_adapters::ids::{to_hex_lower, to_hex_upper};
 
 pub const MAX_CONTENT_LEN: usize = 32_000;
 pub const HISTORY_LIMIT: i64 = 40;
@@ -167,7 +168,9 @@ fn provider_failure(e: quill_provider::ProviderError) -> ApiError {
         | ProviderError::ModelNotFound { .. }
         | ProviderError::NotConfigured { .. } => ApiError::service_unavailable(detail),
         // 回过话了。端点是活的，建议必须关于「它说了什么」而不是「怎么连上」。
-        ProviderError::Status { .. } => ApiError::provider_rejected(detail, ADVICE_REJECTED_BY_STATUS),
+        ProviderError::Status { .. } => {
+            ApiError::provider_rejected(detail, ADVICE_REJECTED_BY_STATUS)
+        }
         other => ApiError::provider_rejected(detail, advice_for_unusable_reply(&other)),
     }
 }
@@ -202,7 +205,10 @@ fn s(row: &sqlx::sqlite::SqliteRow, name: &str) -> String {
 }
 
 fn n(row: &sqlx::sqlite::SqliteRow, name: &str) -> i64 {
-    sqlx::Row::try_get::<Option<i64>, _>(row, name).ok().flatten().unwrap_or(0)
+    sqlx::Row::try_get::<Option<i64>, _>(row, name)
+        .ok()
+        .flatten()
+        .unwrap_or(0)
 }
 
 pub async fn create(
@@ -232,8 +238,8 @@ pub async fn create(
 
     let id = new_id()?;
     let now = now_ms();
-    let room = format!("room-{}", &hex_lower(&id)[..12]);
-    let workspace = format!("ws/{}", &hex_lower(&id)[..12]);
+    let room = format!("room-{}", &to_hex_lower(&id)[..12]);
+    let workspace = format!("ws/{}", &to_hex_lower(&id)[..12]);
     let model = state
         .llm_config
         .read()
@@ -244,7 +250,7 @@ pub async fn create(
     let room_out = room.clone();
     let title_out = title.clone();
     let model_out = model.clone();
-    let hex_id = hex(&id);
+    let hex_id = to_hex_upper(&id);
     let expert_for_write = expert_id.clone();
 
     db.call(move |pool, _rt| {
@@ -306,21 +312,16 @@ pub async fn create(
     .into_response())
 }
 
-// 读路径走 SQLite 的 hex(id)，输出大写；写路径必须一致，否则同一个 id 在
-// POST 响应和 GET 列表里是两种字符串，前端按 id 去重/匹配会全部失配。
-fn hex(b: &[u8; 16]) -> String {
-    b.iter().map(|x| format!("{x:02X}")).collect()
-}
-
-fn hex_lower(b: &[u8; 16]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
-}
+// id → hex 的转换统一在 `quill_adapters::ids::{to_hex_upper, to_hex_lower}`：
+// 大写对应 SQLite 的 `hex()`（读路径走它，写路径必须一致）；小写用于
+// room / workspace 短标识。**不再各写一份** —— 两处口径漂了，同一个 id 会在
+// POST 响应与 GET 列表里变成两种字符串，前端按 id 去重/匹配会全部失配。
 
 /// 读库拿回来的 id 是 `Vec<u8>`（长度未必 16）。长度不对就返回空串 ——
 /// 长度不对的 id 本来就拼不出合法会话路由，与其编一个 id 不如空着。
 fn hex16(b: &[u8]) -> String {
     match <[u8; 16]>::try_from(b) {
-        Ok(arr) => hex(&arr),
+        Ok(arr) => to_hex_upper(&arr),
         Err(_) => String::new(),
     }
 }
@@ -732,75 +733,72 @@ pub async fn usage(
         .call(move |pool, _rt| {
             Box::pin(async move {
                 let r: Result<UsageRows, quill_agent::AgentError> = async {
-                        let listed = sqlx::query(
-                            "SELECT id, title, expert_id, last_active_at FROM sessions \
+                    let listed = sqlx::query(
+                        "SELECT id, title, expert_id, last_active_at FROM sessions \
                              WHERE user_id = ? AND deleted_at IS NULL \
                              ORDER BY last_active_at DESC LIMIT ?",
-                        )
-                        .bind(uid.as_bytes().to_vec())
-                        .bind(USAGE_SESSIONS_LIMIT + 1)
-                        .fetch_all(&pool)
-                        .await
-                        .map_err(|e| crate::db::storage_error("列会话", e))?;
+                    )
+                    .bind(uid.as_bytes().to_vec())
+                    .bind(USAGE_SESSIONS_LIMIT + 1)
+                    .fetch_all(&pool)
+                    .await
+                    .map_err(|e| crate::db::storage_error("列会话", e))?;
 
-                        let sessions: Vec<SessionRow> = listed
-                            .iter()
-                            .map(|row| SessionRow {
-                                id: row
-                                    .try_get::<Vec<u8>, _>("id")
-                                    .unwrap_or_default(),
-                                title: s(row, "title"),
-                                expert_id: {
-                                    let v = s(row, "expert_id");
-                                    if v.is_empty() {
-                                        None
-                                    } else {
-                                        Some(v)
-                                    }
-                                },
-                                last_active_at: n(row, "last_active_at"),
-                            })
-                            .collect();
+                    let sessions: Vec<SessionRow> = listed
+                        .iter()
+                        .map(|row| SessionRow {
+                            id: row.try_get::<Vec<u8>, _>("id").unwrap_or_default(),
+                            title: s(row, "title"),
+                            expert_id: {
+                                let v = s(row, "expert_id");
+                                if v.is_empty() {
+                                    None
+                                } else {
+                                    Some(v)
+                                }
+                            },
+                            last_active_at: n(row, "last_active_at"),
+                        })
+                        .collect();
 
-                        let rows = if sessions.is_empty() {
-                            Vec::new()
-                        } else {
-                            let sql = format!(
-                                "SELECT session_id, role, input_tokens, output_tokens, \
+                    let rows = if sessions.is_empty() {
+                        Vec::new()
+                    } else {
+                        let sql = format!(
+                            "SELECT session_id, role, input_tokens, output_tokens, \
                                  turn_ms, cache_read_tokens FROM messages \
                                  WHERE user_id = ? AND session_id IN ({}) ORDER BY seq",
-                                vec!["?"; sessions.len()].join(",")
-                            );
-                            let mut q = sqlx::query(&sql).bind(uid.as_bytes().to_vec());
-                            for row in &sessions {
-                                q = q.bind(row.id.clone());
-                            }
-                            q.fetch_all(&pool)
-                                .await
-                                .map_err(|e| crate::db::storage_error("读用量", e))?
-                                .into_iter()
-                                .map(|row| {
-                                    let role = s(&row, "role");
-                                    let sid = row
-                                        .try_get::<Vec<u8>, _>("session_id")
-                                        .unwrap_or_default();
-                                    (
-                                        sid,
-                                        crate::session_metrics::MessageUsage {
-                                            is_user: role == "user",
-                                            is_assistant: role == "assistant",
-                                            input_tokens: n(&row, "input_tokens"),
-                                            output_tokens: n(&row, "output_tokens"),
-                                            turn_ms: nullable_n(&row, "turn_ms"),
-                                            cache_read_tokens: nullable_n(&row, "cache_read_tokens"),
-                                        },
-                                    )
-                                })
-                                .collect()
-                        };
-                        Ok((sessions, rows))
-                    }
-                    .await;
+                            vec!["?"; sessions.len()].join(",")
+                        );
+                        let mut q = sqlx::query(&sql).bind(uid.as_bytes().to_vec());
+                        for row in &sessions {
+                            q = q.bind(row.id.clone());
+                        }
+                        q.fetch_all(&pool)
+                            .await
+                            .map_err(|e| crate::db::storage_error("读用量", e))?
+                            .into_iter()
+                            .map(|row| {
+                                let role = s(&row, "role");
+                                let sid =
+                                    row.try_get::<Vec<u8>, _>("session_id").unwrap_or_default();
+                                (
+                                    sid,
+                                    crate::session_metrics::MessageUsage {
+                                        is_user: role == "user",
+                                        is_assistant: role == "assistant",
+                                        input_tokens: n(&row, "input_tokens"),
+                                        output_tokens: n(&row, "output_tokens"),
+                                        turn_ms: nullable_n(&row, "turn_ms"),
+                                        cache_read_tokens: nullable_n(&row, "cache_read_tokens"),
+                                    },
+                                )
+                            })
+                            .collect()
+                    };
+                    Ok((sessions, rows))
+                }
+                .await;
                 r
             })
         })
@@ -814,8 +812,10 @@ pub async fn usage(
     }
 
     // 按会话分组。同一个纯函数，各组各调一次；总计跑一遍全量。
-    let mut per_session: std::collections::HashMap<Vec<u8>, Vec<crate::session_metrics::MessageUsage>> =
-        std::collections::HashMap::new();
+    let mut per_session: std::collections::HashMap<
+        Vec<u8>,
+        Vec<crate::session_metrics::MessageUsage>,
+    > = std::collections::HashMap::new();
     let mut all_rows: Vec<crate::session_metrics::MessageUsage> = Vec::new();
     for (sid, usage) in &rows {
         per_session.entry(sid.clone()).or_default().push(*usage);
@@ -881,7 +881,7 @@ fn parse_id(raw: &str) -> Result<[u8; 16], ApiError> {
 /// 会话 hex id。通道侧要拿着它给 `prepare_turn`，所以出口必须是**大写** ——
 /// 与 GET 列表读路径一致（见本文件 `hex` 的注释：两边口径不同会让前端失配）。
 pub(crate) fn session_hex(id: &[u8; 16]) -> String {
-    hex(id)
+    to_hex_upper(id)
 }
 
 /// `parse_id` 的通道侧出口。**报错文案不同**：通道侧拿到非法 id 时的处置是
@@ -940,7 +940,7 @@ pub(crate) async fn create_session_for_channel(
 ) -> Result<[u8; 16], ApiError> {
     let id = new_id()?;
     let now = now_ms();
-    let short = &hex_lower(&id)[..12];
+    let short = &to_hex_lower(&id)[..12];
     let room = format!("room-{short}");
     let workspace = format!("ws/{short}");
     let title = title.chars().take(64).collect::<String>();
@@ -1453,7 +1453,7 @@ pub(crate) async fn run_turn(
 /// 覆盖一次，两份要是各拼各的，字段早晚会对不上。
 pub(crate) fn user_message_json(prep: &TurnPrep) -> Value {
     json!({
-        "id": hex(&prep.user_id),
+        "id": to_hex_upper(&prep.user_id),
         "seq": prep.seq_user,
         "content": prep.content,
         "created_at": prep.user_created_at,
@@ -1464,10 +1464,7 @@ pub(crate) fn user_message_json(prep: &TurnPrep) -> Value {
 ///
 /// 一次性路由把它包成 JSON，SSE 路由**原样**放进 `done` 事件 —— 两处看到的
 /// 内容必然是同一份，不会出现「流式那条少几个字段」。
-pub(crate) async fn finish_turn(
-    prep: &TurnPrep,
-    outcome: TurnOutcome,
-) -> Result<Value, ApiError> {
+pub(crate) async fn finish_turn(prep: &TurnPrep, outcome: TurnOutcome) -> Result<Value, ApiError> {
     let TurnOutcome {
         reply,
         usage,
@@ -1551,7 +1548,7 @@ pub(crate) async fn finish_turn(
         "reply": text,
         "reasoning": reasoning,
         "message": {
-            "id": hex(&assistant_id),
+            "id": to_hex_upper(&assistant_id),
             "seq": seq_assistant,
             "content": text,
             "created_at": assistant_created_at,
@@ -1612,18 +1609,16 @@ async fn resolve_persona(
         .call(move |pool, _rt| {
             Box::pin(async move {
                 let r: Result<Option<String>, quill_agent::AgentError> = async {
-                    Ok(
-                        sqlx::query_scalar(
-                            "SELECT expert_id FROM sessions \
+                    Ok(sqlx::query_scalar(
+                        "SELECT expert_id FROM sessions \
                              WHERE user_id = ? AND id = ? AND deleted_at IS NULL",
-                        )
-                        .bind(uid.as_bytes().to_vec())
-                        .bind(sid.to_vec())
-                        .fetch_optional(&pool)
-                        .await
-                        .map_err(|e| crate::db::storage_error("读会话绑定的专家", e))?
-                        .flatten(),
                     )
+                    .bind(uid.as_bytes().to_vec())
+                    .bind(sid.to_vec())
+                    .fetch_optional(&pool)
+                    .await
+                    .map_err(|e| crate::db::storage_error("读会话绑定的专家", e))?
+                    .flatten())
                 }
                 .await;
                 r
@@ -1666,13 +1661,12 @@ async fn resolve_persona(
                             .await
                             .map_err(|e| crate::db::storage_error("读专家人格", e))?;
                             Ok(row.map(|r| {
-                                let instructions: String =
-                                    sqlx::Row::get(&r, "instructions");
+                                let instructions: String = sqlx::Row::get(&r, "instructions");
                                 let model: Option<String> = sqlx::Row::get(&r, "model");
                                 (instructions, model)
                             }))
                         }
-                    .await;
+                        .await;
                     r
                 })
             }
@@ -1913,7 +1907,8 @@ async fn ensure_session(
         return Ok(());
     }
     Err(ApiError::entity_not_found(
-        "会话不存在，或不属于当前用户。下一步：先 POST /api/sessions 建一个，再发消息。".to_string(),
+        "会话不存在，或不属于当前用户。下一步：先 POST /api/sessions 建一个，再发消息。"
+            .to_string(),
     ))
 }
 
@@ -1929,8 +1924,7 @@ mod tests {
     fn status_error() -> ApiError {
         provider_failure(quill_provider::ProviderError::Status {
             code: 400,
-            body: r#"{"error":{"type":"exceed_context_size_error","n_prompt_tokens":8525}}"#
-                .into(),
+            body: r#"{"error":{"type":"exceed_context_size_error","n_prompt_tokens":8525}}"#.into(),
         })
     }
 

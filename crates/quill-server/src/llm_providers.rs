@@ -92,18 +92,21 @@ impl LlmProvider {
     /// 写路径必须逐字节相同，否则前端按 id 去重会全部失配）。
     pub fn new_id() -> Result<String, ApiError> {
         let mut b = [0u8; 16];
-        getrandom::fill(&mut b)
-            .map_err(|e| ApiError::internal(format!("生成供应商标识失败（系统随机源不可用）：{e}")))?;
+        getrandom::fill(&mut b).map_err(|e| {
+            ApiError::internal(format!("生成供应商标识失败（系统随机源不可用）：{e}"))
+        })?;
         if b == [0u8; 16] {
             b[0] = 1;
         }
-        Ok(hex_upper(&b))
+        Ok(quill_adapters::ids::to_hex_upper(&b))
     }
 
     /// 服务端语义校验。数据库侧的 CHECK 承担同样的边界，这里负责「说人话」。
     pub fn validate(&self) -> Result<(), String> {
         if self.name.trim().is_empty() {
-            return Err("name 不能为空。下一步：给它起一个能区分的显示名，例如「本地 llama.cpp」。".into());
+            return Err(
+                "name 不能为空。下一步：给它起一个能区分的显示名，例如「本地 llama.cpp」。".into(),
+            );
         }
         if self.preset_id.trim().is_empty() {
             return Err("preset_id 不能为空。下一步：自定义端点填 custom；\
@@ -111,9 +114,11 @@ impl LlmProvider {
                 .into());
         }
         if self.base_url.trim().is_empty() {
-            return Err("base_url 不能为空。下一步：填完整的接口地址（含协议与版本前缀 /v1），\
+            return Err(
+                "base_url 不能为空。下一步：填完整的接口地址（含协议与版本前缀 /v1），\
                         例如 http://127.0.0.1:18080/v1。"
-                .into());
+                    .into(),
+            );
         }
         if self.base_url.len() > 512 {
             return Err(format!(
@@ -123,8 +128,7 @@ impl LlmProvider {
         }
         if self.model.len() > 256 {
             return Err(format!(
-                "model 太长（{} 字符，上限 256）。下一步：填 /models 列表里的原始模型 ID。"
-                    ,
+                "model 太长（{} 字符，上限 256）。下一步：填 /models 列表里的原始模型 ID。",
                 self.model.len()
             ));
         }
@@ -226,10 +230,6 @@ fn admin_config_of(p: &LlmProvider) -> AdminConfig {
     }
 }
 
-pub fn hex_upper(b: &[u8; 16]) -> String {
-    b.iter().map(|x| format!("{x:02X}")).collect()
-}
-
 // ---------------------------------------------------------------------------
 // 探测
 // ---------------------------------------------------------------------------
@@ -316,7 +316,13 @@ fn first_positive_u32(v: &Value, keys: &[&str]) -> Option<u32> {
 const CONTEXT_KEYS: [&str; 3] = ["n_ctx", "context_length", "max_model_len"];
 
 const TEXT_HINTS: [&str; 7] = [
-    "text", "completion", "completions", "chat", "generate", "inference", "llm",
+    "text",
+    "completion",
+    "completions",
+    "chat",
+    "generate",
+    "inference",
+    "llm",
 ];
 
 fn capability_tokens(v: &Value, out: &mut Vec<String>) {
@@ -491,8 +497,8 @@ fn row_to_provider(row: &sqlx::sqlite::SqliteRow) -> Result<LlmProvider, quill_a
         ))
     })?;
     let protocol_raw = s("protocol")?;
-    let protocol = LlmProvider::parse_protocol(&protocol_raw)
-        .map_err(crate::db::invariant_broken)?;
+    let protocol =
+        LlmProvider::parse_protocol(&protocol_raw).map_err(crate::db::invariant_broken)?;
 
     let u32_of = |v: i64, name: &str| -> Result<u32, quill_agent::AgentError> {
         if v < 0 || v > i64::from(u32::MAX) {
@@ -714,11 +720,13 @@ pub fn set_default(state: &crate::state::AppState, id: &str) -> Result<(), ApiEr
     db.call(move |pool, _rt| {
         Box::pin(async move {
             let r: Result<(), quill_agent::AgentError> = async {
-                sqlx::query("UPDATE llm_providers SET is_default = 0 WHERE is_default = 1 AND id <> ?")
-                    .bind(&id)
-                    .execute(&pool)
-                    .await
-                    .map_err(|e| storage_error("清默认标记", e))?;
+                sqlx::query(
+                    "UPDATE llm_providers SET is_default = 0 WHERE is_default = 1 AND id <> ?",
+                )
+                .bind(&id)
+                .execute(&pool)
+                .await
+                .map_err(|e| storage_error("清默认标记", e))?;
                 sqlx::query("UPDATE llm_providers SET is_default = 1, updated_at = ? WHERE id = ?")
                     .bind(now_ms())
                     .bind(&id)
@@ -825,11 +833,14 @@ mod tests {
             Some(262144),
             "拿 n_ctx_train 会把上限报大 32 倍"
         );
-        assert_eq!(got[1].context_window, Some(8192), "meta 里只有 n_ctx 时就用它");
+        assert_eq!(
+            got[1].context_window,
+            Some(8192),
+            "meta 里只有 n_ctx 时就用它"
+        );
         assert_eq!(got[2].context_window, Some(131072));
         assert_eq!(
-            got[3].context_window,
-            None,
+            got[3].context_window, None,
             "只报了训练窗口就该说「不知道」，不能拿它顶包"
         );
         assert_eq!(got[0].owned_by.as_deref(), Some("llamacpp"));
@@ -851,7 +862,10 @@ mod tests {
             ]
         });
         let got = parse_models_payload(&payload).expect("合法响应必须解析");
-        assert_eq!(got[0].modality, "text", "同一响应里 models[].capabilities 是证据");
+        assert_eq!(
+            got[0].modality, "text",
+            "同一响应里 models[].capabilities 是证据"
+        );
         assert_eq!(got[1].modality, "text");
         assert_eq!(got[2].modality, "unknown", "embedding 不能猜成 text");
         assert_eq!(got[3].modality, "unknown", "没有任何字段就不许瞎猜");
@@ -879,7 +893,8 @@ mod tests {
         let id = LlmProvider::new_id().expect("随机源可用");
         assert_eq!(id.len(), 32, "必须是 32 位 hex：{id}");
         assert!(
-            id.chars().all(|c| c.is_ascii_hexdigit() && !c.is_lowercase()),
+            id.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_lowercase()),
             "必须全是大写 hex（SQLite hex() 读出来是大写）：{id}"
         );
     }
