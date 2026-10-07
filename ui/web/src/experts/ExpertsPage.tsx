@@ -6,6 +6,7 @@ import { useSearchParams } from 'react-router-dom'
 import { chatErrorMessage } from '../chat/chatApi'
 import { expertInitial, expertTone } from '../chat/expertAvatar'
 import { Card, PageHeader, StatusBadge } from '../components/Page'
+import { ViewToggle, useViewMode } from '../components/collection'
 import {
   EXPERTS_KEY,
   EXPERTS_ROUTE,
@@ -25,8 +26,6 @@ import {
   IconCheck,
   IconClose,
   IconCopy,
-  IconLayoutGrid,
-  IconList,
   IconPencil,
   IconPlus,
   IconRefresh,
@@ -40,25 +39,6 @@ import './experts.css'
 
 const TABS = ['mine', 'team', 'library', 'market'] as const
 type ExpertsTab = typeof TABS[number]
-
-type ViewMode = 'card' | 'table'
-
-/** 视图记忆沿用 Octop 的 key（Experts/index.tsx:70），切换时写回 localStorage。 */
-const VIEW_STORAGE_KEY = 'octop:experts-view'
-
-function loadViewMode(): ViewMode {
-  return localStorage.getItem(VIEW_STORAGE_KEY) === 'table' ? 'table' : 'card'
-}
-
-/** Octop 的 useCardTableView 只是 useState + showCardView，这里去掉它用不上的 isMobile。 */
-function useCardTableView(defaultMode: ViewMode): {
-  viewMode: ViewMode
-  setViewMode: (mode: ViewMode) => void
-  showCardView: boolean
-} {
-  const [viewMode, setViewMode] = useState(defaultMode)
-  return { viewMode, setViewMode, showCardView: viewMode === 'card' }
-}
 
 function textMatchesQuery(query: string, ...parts: Array<string | null | undefined>): boolean {
   if (!query) return true
@@ -127,7 +107,7 @@ function MyExperts({ onGoToLibrary }: { onGoToLibrary: () => void }): ReactNode 
   const { t } = useTranslation()
   const client = useQueryClient()
   const experts = useQuery({ queryKey: EXPERTS_KEY, queryFn: listExperts, retry: false })
-  const { viewMode, setViewMode, showCardView } = useCardTableView(loadViewMode())
+  const { viewMode, setViewMode, showCardView } = useViewMode('experts')
   const [searchQuery, setSearchQuery] = useState('')
   const [refreshing, setRefreshing] = useState(false)
   const [creating, setCreating] = useState(false)
@@ -185,11 +165,6 @@ function MyExperts({ onGoToLibrary }: { onGoToLibrary: () => void }): ReactNode 
     expert.description,
     expert.source_template,
   ))
-
-  const onViewChange = (mode: ViewMode): void => {
-    setViewMode(mode)
-    localStorage.setItem(VIEW_STORAGE_KEY, mode)
-  }
 
   const handleRefresh = async (): Promise<void> => {
     setRefreshing(true)
@@ -269,30 +244,15 @@ function MyExperts({ onGoToLibrary }: { onGoToLibrary: () => void }): ReactNode 
                     </button>
                   ) : null}
                 </span>
-                <span className="experts-view-mode" role="group">
-                  <button
-                    type="button"
-                    aria-pressed={viewMode === 'card'}
-                    className="experts-view-mode-item"
-                    onClick={() => onViewChange('card')}
-                  >
-                    <span className="experts-view-mode-label">
-                      <IconLayoutGrid />
-                      {t('experts.viewCard', { defaultValue: '卡片' })}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    aria-pressed={viewMode === 'table'}
-                    className="experts-view-mode-item"
-                    onClick={() => onViewChange('table')}
-                  >
-                    <span className="experts-view-mode-label">
-                      <IconList />
-                      {t('experts.viewTable', { defaultValue: '表格' })}
-                    </span>
-                  </button>
-                </span>
+                {/* 切换器用公共层。专家页原本自己写了两份几乎逐行重复的按钮，
+                    而且市场页借用了同一个 CSS 类名 —— 同一个控件五页五种样子。
+                    这里不再带图标：公共层是纯文字的，五个页面一致。 */}
+                <ViewToggle
+                  viewMode={viewMode}
+                  onChange={setViewMode}
+                  listLabel={t('experts.viewTable', { defaultValue: '表格' })}
+                  testIdPrefix="experts-view"
+                />
                 <button
                   type="button"
                   className="experts-toolbar-icon-btn"

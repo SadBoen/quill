@@ -146,7 +146,10 @@ it('表格视图七列齐全，状态列只显示默认启用与否', async () =
   for (const header of ['名称', '专家 ID', '状态', '描述', '模型', '人格', '操作']) {
     expect(screen.getByRole('columnheader', { name: header })).toBeInTheDocument()
   }
-  expect(localStorage.getItem('octop:experts-view')).toBe('table')
+  // 键是 `quill:experts:view` 而不是老的 `octop:experts-view`：存储键由公共层
+  // 按页名生成，老键里记的 'table' 也已经是 'list' 了。老用户的选择会丢，
+  // 那属于迁移，要单独做 —— 这里是断言「键跟着公共层走」这条契约。
+  expect(localStorage.getItem('quill:experts:view')).toBe('list')
   expect(screen.getByText('默认启用')).toBeInTheDocument()
   expect(screen.getByText('未启用')).toBeInTheDocument()
   // 徽标照 Octop：内置 / 来自模板；空值一律破折号
