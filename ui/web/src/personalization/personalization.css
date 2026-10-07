@@ -1,50 +1,96 @@
-/* 个性化聚合页。栅格与卡片等高都走公共层的口径，这里只管间距与排版。 */
+/* 个性化页：一行页签 + 一块内容区。
+ *
+ * 2026-10-08 从「七张大卡片铺两排」改成现在这样 —— 用户对着 Octop 指出
+ * 「是一行页签导航，不是大框框」。对齐的是
+ * .octop-ref/octop/dashboard/src/pages/Agent/Personalization/index.tsx:30-49
+ * （页签表）与 :140（display 切换 panel）。
+ */
 
-.personalization-page .personalization-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 12px;
-  margin-top: 16px;
+/* ---- 顶部那行页签（放在 PageHeader 的 actions 槽里，也就是右上角） ---- */
+
+.personalization-page .personalization-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
 }
 
-.personalization-page .personalization-card {
+.personalization-page .personalization-tab {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  padding: 5px 9px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* 选中态不靠背景色单独承担：边框 + 字重一起变，
+   灰度打印或色觉差异下也分得出来。 */
+.personalization-page .personalization-tab:hover {
+  color: var(--ink);
+  border-color: var(--line);
+}
+
+.personalization-page .personalization-tab[aria-selected='true'] {
+  color: var(--accent-strong);
+  border-color: color-mix(in srgb, var(--accent), var(--line) 55%);
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+
+.personalization-page .personalization-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.personalization-page .personalization-tab-icon {
+  font-size: 11px;
+  font-weight: 700;
+  opacity: 0.65;
+}
+
+/* ---- 内容区 ---- */
+
+.personalization-page .personalization-panel {
+  margin-top: 18px;
+}
+
+.personalization-page .personalization-brief {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 14px;
-  border: 1px solid var(--border, currentColor);
-  border-radius: 8px;
-  text-decoration: none;
-  color: inherit;
-  background: var(--surface, transparent);
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
 }
 
-/* 悬停反馈用「边框变化」而不是位移：卡片是网格单元，位移会让相邻的
-   跟着抖动，读起来像是加载中。 */
-.personalization-page .personalization-card:hover {
-  border-color: var(--accent, currentColor);
-}
-
-.personalization-page .personalization-card h2 {
+.personalization-page .personalization-brief-desc {
   margin: 0;
-  font-size: 1rem;
+  line-height: 1.7;
+  max-width: 68ch;
 }
 
-.personalization-page .personalization-card p {
+.personalization-page .personalization-brief-note {
   margin: 0;
-  color: var(--text-muted, inherit);
+  color: var(--muted);
+  font-size: 11px;
   line-height: 1.6;
 }
 
-/* 「还没做」那一块：单独成节并留出上边距，
-   免得它跟上面能点的卡片看起来是同一类东西。 */
-.personalization-page .personalization-missing {
-  margin-top: 24px;
-  padding-top: 16px;
-  border-top: 1px dashed var(--border, currentColor);
+/* 页签里内嵌的人格页：让它撑满可用宽度，别被当成窄卡片。 */
+.personalization-page .mbti-page-embedded {
+  padding: 0;
+  background: none;
+  border: none;
 }
 
-.personalization-page .personalization-missing h2 {
-  margin: 0 0 6px;
-  font-size: 1rem;
+.personalization-page .mbti-page-embedded .mbti-stack {
+  max-width: 900px;
 }

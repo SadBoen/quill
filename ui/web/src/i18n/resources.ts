@@ -408,6 +408,9 @@ export const en = {
       mbti: 'Persona',
       mbtiDesc:
         '28 questions produce a personality type. See the four-axis spectrum, then pick an expert to write that speaking style into its persona text.',
+      openHere: 'Open "{{name}}"',
+      elsewhereNote:
+        "This tab's implementation lives on its own page. A second copy here would drift from the original.",
     },
     mbti: {
       title: 'Persona',
@@ -1360,6 +1363,9 @@ export const zhCN = {
       channelsDesc: '把智能体接到浏览器之外。在微信上给它发消息，它在那边回你。',
       mbti: '人格',
       mbtiDesc: '28 道题算出一个人格类型。看完四维光谱，选一个专家就能把这套说话风格写进它的人格正文。',
+      openHere: '打开「{{name}}」',
+      elsewhereNote:
+        '这一签的实现住在独立页面，不在索引页里再抄一份 —— 抄一份就会两边各改各的。',
     },
     mbti: {
       title: '人格',

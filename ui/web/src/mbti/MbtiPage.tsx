@@ -32,7 +32,7 @@ function langOf(i18nLanguage: string): MbtiLang {
   return i18nLanguage.startsWith('en') ? 'en' : 'zh'
 }
 
-export function MbtiPage(): ReactNode {
+export function MbtiPage({ embedded = false }: { embedded?: boolean }): ReactNode {
   const { t, i18n } = useTranslation()
   const lang = langOf(i18n.language)
   const qc = useQueryClient()
@@ -76,14 +76,19 @@ export function MbtiPage(): ReactNode {
   }
 
   return (
-    <div className="page-scroll mbti-page">
-      <PageHeader
-        title={t('mbti.title', { defaultValue: '人格' })}
-        description={t('mbti.description', {
-          defaultValue:
-            '28 道题、四个维度，算出一个人格类型。选一个专家，就能把这套说话风格写进它的人格正文。',
-        })}
-      />
+    // 嵌在个性化页的页签里时不带自己的页头 —— 上面已经有「个性化 / 人格」了，
+    // 同一个页面上出现两个标题会让人以为进了两个地方。
+    // 也不套 page-scroll：外层已经滚了，套两层会出现两条滚动条。
+    <div className={embedded ? 'mbti-page mbti-page-embedded' : 'page-scroll mbti-page'}>
+      {embedded ? null : (
+        <PageHeader
+          title={t('mbti.title', { defaultValue: '人格' })}
+          description={t('mbti.description', {
+            defaultValue:
+              '28 道题、四个维度，算出一个人格类型。选一个专家，就能把这套说话风格写进它的人格正文。',
+          })}
+        />
+      )}
 
       {history.isPending ? (
         <p className="page-status">{t('common.loading', { defaultValue: '加载中…' })}</p>
