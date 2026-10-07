@@ -34,7 +34,7 @@ llama.cpp旧了你就更新成最新版本，也可以换其他运行环境，�
 
 quill —— 个人 / 家庭 / 小团队自用的 Agent 平台。
 
-**最高指示（四条同级，全部来自用户原话）：**
+**最高指示（五条同级）：第 1–4 条是用户原话；第 5 条是工程管理方案（由用户采纳）。**
 
 1. 以 **Rust** 为实现语言（前端 TS 属壳，不受此限）；
 2. 以腾讯 **octop** 为产品外壳；
@@ -44,6 +44,17 @@ quill —— 个人 / 家庭 / 小团队自用的 Agent 平台。
    唯一例外是**可调用的 API 服务**（进程外服务）—— goose 是 Rust 库、octop 后端是 Python，
    两者都不是这种，所以两者只能抄、不能依赖。删掉 `vendor/goose` 与 `.octop-ref/octop`
    后 `cargo build` 必须照常成功。
+5. **工程管理方案：门禁驱动的持续交付**（Gate-Driven Continuous Delivery）。
+   本项目是 **Rust 后端 + Web 前端** 的前后端工程，**两侧进同一条流水线、受同一把门禁**：
+   - Rust 侧：`cargo build` / `cargo test` / `cargo clippy -D warnings` / `cargo fmt --check`
+     / `cargo deny` / `cargo semver-checks`
+   - Web 侧：`npm run typecheck` / `npm run lint` / `npx vitest run` / `npm run build`
+
+   理论根：**部署流水线**（Deployment Pipeline，Humble & Farley《Continuous Delivery》）
+   ＋ **适应度函数**（Fitness Functions，Ford/Parsons/Kua《Building Evolutionary
+   Architectures》）＋ **ADR**（Architecture Decision Records，Nygard）
+   ＋ **DORA 四指标**（变更前置时间 / 部署频率 / 变更失败率 / 恢复时长）。
+   一句话：**「能不能交付」由门禁回答，不由人说。**
 
 代码在 `D:\96_CoderWorld\quill`（WSL 路径 `/mnt/d/96_CoderWorld/quill`）。
 

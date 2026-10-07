@@ -39,6 +39,24 @@ grep -rnE '^\s*(goose|octop)' crates/*/Cargo.toml Cargo.toml          # → 空
   这些是**产品外壳**，参照 octop 在 Rust + TS 里重写。
 - **C3 前端只连真后端**：`ui/web` 是 TS，可以照搬 octop 的界面，但不许画假开关。
 
+### 0.3 工程管理方案（最高指示第 5 条）
+
+**门禁驱动的持续交付**（Gate-Driven Continuous Delivery）。本项目是 **Rust 后端 + Web 前端**
+的前后端工程，**两侧进同一条流水线、受同一把门禁**：
+
+| 侧 | 门禁 |
+|---|---|
+| Rust | `cargo build` / `cargo test` / `cargo clippy -D warnings` / `cargo fmt --check` / `cargo deny` / `cargo semver-checks` |
+| Web | `npm run typecheck` / `npm run lint` / `npx vitest run` / `npm run build` |
+
+理论根：**部署流水线**（Deployment Pipeline，Humble & Farley《Continuous Delivery》）
+＋ **适应度函数**（Fitness Functions，Ford/Parsons/Kua《Building Evolutionary
+Architectures》）＋ **ADR**（Nygard）＋ **DORA 四指标**。
+一句话：**「能不能交付」由门禁回答，不由人说。**
+
+现状缺口（实测，见 §1）：**无 `rust-toolchain.toml`（未固定 Rust 版本）**、
+**无 `deny.toml`（无供应链门禁）**、**`clippy`/`fmt` 刻意没进 CI**、**无 DORA 度量**。
+
 ---
 
 ## 1. 现状架构（As-Is）
