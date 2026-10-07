@@ -401,12 +401,24 @@ export const ITEMS = [
     // 判据：channels_http 14 条 + store 5 条 + weixin 11 条 + api_channels 11 条
     //      + 前端 8 条；变异验证 6 个变异全被抓住。
     //
-    // 仍缺：**没做过真机扫码**。微信那套三步与长轮询全是照公开协议写的，
-    // 判据只覆盖了请求体校验与凭据不外泄，真跑一次才算数。
-    // 另外「个性化」页里的 MBTI / 子智能体 / 启动仪式 / 心跳等页签还没做。
+    // 仍缺两件，都已如实标在界面上：
+    // 1. **没做过真机扫码**。微信那套三步与长轮询全是照公开协议写的，
+    //    判据只覆盖了请求体校验与凭据不外泄，真跑一次才算数。
+    // 2. **MBTI**。要四维光谱表 + 28 题测评结果的存储，动数据结构。
+    //
+    // 顺带核清一件先前记错的事：「八张人格卡」不存在。Octop 那个页面的
+    // 页签只有七个（skills/subagents/tools/plugins/mbti/memory/channels），
+    // 每一签都是复用别处的面板；IDENTITY.md / SOUL.md / HEARTBEAT.md 那些
+    // 是专家库里的文件，不是页签，agent_files.py 也不读它们。
+    // 而 quill 的人格注入本来就是通的（experts.instructions 一列 →
+    // resolve_persona → system prompt），library/*/SOUL.md 只是移植史料 ——
+    // 把它们接进 prompt 反而会让用户改史料以为改了行为，所以没做。
+    //
+    // 已完成：ui/web/src/personalization/ 聚合页（6 条判据 + 变异验证），
+    // 两处「不许粉饰」：MBTI 明说没做、子智能体明说派工不执行（B2-2）。
     verify: {
       kind: 'manual',
-      how: '用微信扫一次真账号，能收到消息并收到回复；界面点一遍通道页',
+      how: '用微信扫一次真账号，能收到消息并收到回复；界面点一遍个性化页各入口',
     },
     blocks: [],
   },

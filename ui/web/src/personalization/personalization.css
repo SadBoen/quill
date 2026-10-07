@@ -1,0 +1,50 @@
+/* 个性化聚合页。栅格与卡片等高都走公共层的口径，这里只管间距与排版。 */
+
+.personalization-page .personalization-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.personalization-page .personalization-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid var(--border, currentColor);
+  border-radius: 8px;
+  text-decoration: none;
+  color: inherit;
+  background: var(--surface, transparent);
+}
+
+/* 悬停反馈用「边框变化」而不是位移：卡片是网格单元，位移会让相邻的
+   跟着抖动，读起来像是加载中。 */
+.personalization-page .personalization-card:hover {
+  border-color: var(--accent, currentColor);
+}
+
+.personalization-page .personalization-card h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.personalization-page .personalization-card p {
+  margin: 0;
+  color: var(--text-muted, inherit);
+  line-height: 1.6;
+}
+
+/* 「还没做」那一块：单独成节并留出上边距，
+   免得它跟上面能点的卡片看起来是同一类东西。 */
+.personalization-page .personalization-missing {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--border, currentColor);
+}
+
+.personalization-page .personalization-missing h2 {
+  margin: 0 0 6px;
+  font-size: 1rem;
+}

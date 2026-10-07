@@ -25,6 +25,9 @@ const NAV_ITEMS = [
   // 通道：把智能体接到浏览器之外。图标用 H（channel）而不是 W ——
   // W 已经是「工作区」了，两个一样的单字母在侧栏里分不清。
   { to: '/channels', icon: 'H', labelKey: 'nav.channels', fallback: '通道' },
+  // 个性化：技能 / 工具 / 子智能体 / 插件 / 记忆 / 通道的索引页。
+  // 位置紧跟通道，因为它就是这些页面的总入口 —— 放散了在侧栏里看不出关系。
+  { to: '/personalization', icon: 'P', labelKey: 'nav.personalization', fallback: '个性化' },
 ] as const
 
 const ADMIN_NAV_ITEMS = [

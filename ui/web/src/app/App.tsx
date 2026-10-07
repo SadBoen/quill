@@ -5,6 +5,7 @@ import { AccountPage } from '../account/Account'
 import { AdminInstancePage, AdminUsersPage } from '../admin/Admin'
 import { AdminBackupPage } from '../admin/AdminBackup'
 import { ChannelsPage } from '../channels/Channels'
+import { PersonalizationPage } from '../personalization/PersonalizationPage'
 import { AutomationsPage } from '../automations/Automations'
 import { AuthPage, RequireAdmin, RequireAuth } from '../auth/auth'
 import { ChatPage } from '../chat'
@@ -41,6 +42,7 @@ export function AppRoutes(): ReactNode {
             <Route path="/skills" element={<SkillsPage />} />
             <Route path="/automations" element={<AutomationsPage />} />
             <Route path="/channels" element={<ChannelsPage />} />
+            <Route path="/personalization" element={<PersonalizationPage />} />
             <Route path="/account" element={<AccountPage />} />
             <Route element={<RequireAdmin />}>
               <Route path="/admin/models" element={<ModelsPage />} />

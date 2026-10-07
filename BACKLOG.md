@@ -911,6 +911,53 @@ octop 的稀疏检出里也没有 `pages/Control` 与 `src/octop/infra/skills`�
 （`_safe_profile_directory` 见 `channels.py:352`、`_pkill_chrome_profile` 见 `:387`）。
 本项目没有浏览器依赖，微信走纯 HTTP，不受影响。
 
+#### 「八张人格卡」是个误会，Octop 那边是七页签聚合（2026-10-08 核清）
+
+先前记的「个性化页面有八张人格卡（identity/soul/profile/agents/tools/
+bootstrap/heartbeat）」**不成立**。逐行核过真身
+（`.octop-ref/octop/dashboard/src/pages/Agent/Personalization/index.tsx:30-49`）：
+
+- 那个页面的页签只有七个：`skills` / `subagents` / `tools` / `plugins` /
+  `mbti` / `memory` / `channels`；
+- 每一签都是**复用别处的面板**（`SkillsTabs`、`ToolsTabs`、`SubagentManager`、
+  `MemoryPanel`、`ChannelsPanel`），不是新写的；
+- `IDENTITY.md` / `SOUL.md` / `HEARTBEAT.md` / `BOOTSTRAP.md` / `AGENTS.md` /
+  `MEMORY.md` 这些是**专家库里的文件**（全仓分别 9 / 19 / 5 / 3 / … 个），
+  不是这个页面的页签，而且 `api/routers/agent_files.py` **不读它们** ——
+  那个路由管的是心跳配置与每日记忆。人格文件由 agent 运行时读，不在这条线上。
+
+**quill 这边的结论也纠了一个**：人格注入**是通的**
+（`experts.instructions` 一列 → `resolve_persona` → system prompt），
+而 `ui/web/src/experts/library/*/SOUL.md` 那批文件是**移植时留下的史料**，
+`library.ts` 的文件头写明了「只抽取 preset 元数据 + 风格正文」。
+所以「把这些 md 接进 prompt」这件事**不成立** —— 它们本来就不该生效，
+接上去反而会让用户改史料以为改了行为。
+
+于是这一批真正该做的是**聚合页**（把六个已有页面索引到一处），
+外加两处「不许粉饰」：
+- **MBTI 那一签明说没做**。Octop 有（`components/MBTISelector.tsx`），
+  但那要一张四维光谱表 + 28 题测评结果的存储，本项目没有。画个点不动的
+  选择器比不画更糟。
+- **子智能体那张卡写明「派工只记账不执行」**（见 B2-2：`MemberExecutor`
+  只有测试里的实现）。这是全页唯一一个「承诺会落空」的地方。
+
+**这一轮又踩了一个判据歧义**：`screen.getByText(/还没做/)` 在给子智能体卡
+也写上「还没做」之后命中两处，报错与被测行为无关。**判据自己有歧义，
+报错就是假警报** —— 与 M3 那次「没抓到」同一类，只是方向相反。
+
+**还有一个伪变异，值得单独记**：`t('key', { defaultValue: 'X' })` 里
+**改 `defaultValue` 不改渲染** —— 只要语言包里有那个 key，界面上就是译文。
+于是「把 MBTI 标题的 defaultValue 改掉」这种变异跑出来全绿，看起来像
+「判据没覆盖」，其实是**变异本身无效**。
+
+它还牵出一件事：`.i18n-check.mjs` **只校验占位符一致，不校验词条存在**
+（见本文件更早处记的盲区）。所以「改了 defaultValue 以为改了界面」
+这件事很可能已经发生过而不自知 —— 改一次发现没反应，多半是被翻译盖住了，
+不是代码没走到。
+
+**判断一个变异是否有效，问的是「门禁观察到的东西变了吗」**，
+不是「我改的代码变了吗」。
+
 **已完成**：迁移 `0009_channels.sql`、`channels/{store,weixin}.rs`、`api_channels.rs`
 （REST 线 + 微信扫码三步 + 长轮询后台任务）、`ui/web/src/channels/`（页面 + 判据）。
 
