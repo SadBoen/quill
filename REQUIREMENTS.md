@@ -1,5 +1,6 @@
-> **这份文件是需求的唯一来源，下面「用户原话」一节不要改写。**
-> 里程碑与验收判据在 `MILESTONES.md`，操作准则与决策权限在 `WORKING.md`，
+> **下面「用户原话」一节是需求的来源，不要改写。**
+> **约束的唯一来源是 [`最高指示.md`](最高指示.md)（五条）—— 那份优先于本文件。**
+> 里程碑与验收判据在 `MILESTONES.md`，怎么干活在 `WORKING.md`，
 > 待办「为什么」在 `BACKLOG.md`，上游基线在 `UPSTREAM.md`。
 > **代码事实**在 [`docs/CODE-TRUTH.md`](docs/CODE-TRUTH.md) ——
 > 这里不写任何会过期的状态或环境快照。
@@ -26,35 +27,20 @@ WSL可以提供linux编译环境，也可以直接在wsl里面写程序，看你
 MVP状态要有最基本的人机交互界面，如web，如TUI美化过的CLI
 MVP未达成之前，不向github提交推送。
 
+> **注（2026-10-08，不改动上面的原话）**：这一条已被用户后续指令取代 ——
+> 「阶段性提交一次 github，网络不通就暂时存在本地 git 也可以」。
+> 见 [`最高指示.md`](最高指示.md) 作废清单。
+
 llama.cpp旧了你就更新成最新版本，也可以换其他运行环境，你自已查嘛，不要什么都我提醒你
 
 ---
 
-## 项目定位（最高指示，不是需求）
+## 项目定位
 
 quill —— 个人 / 家庭 / 小团队自用的 Agent 平台。
 
-**最高指示（五条同级）：第 1–4 条是用户原话；第 5 条是工程管理方案（由用户采纳）。**
-
-1. 以 **Rust** 为实现语言（前端 TS 属壳，不受此限）；
-2. 以腾讯 **octop** 为产品外壳；
-3. 以 **goose** 为 Agent 内核；
-4. **最终产物只打包 quill 一个项目**（2026-10-08 补充）：goose 与 octop 是**参考源**，
-   允许把它们的代码**抄进来**，但**不许把整个项目当依赖**加进 `Cargo.toml`。
-   唯一例外是**可调用的 API 服务**（进程外服务）—— goose 是 Rust 库、octop 后端是 Python，
-   两者都不是这种，所以两者只能抄、不能依赖。删掉 `vendor/goose` 与 `.octop-ref/octop`
-   后 `cargo build` 必须照常成功。
-5. **工程管理方案：门禁驱动的持续交付**（Gate-Driven Continuous Delivery）。
-   本项目是 **Rust 后端 + Web 前端** 的前后端工程，**两侧进同一条流水线、受同一把门禁**：
-   - Rust 侧：`cargo build` / `cargo test` / `cargo clippy -D warnings` / `cargo fmt --check`
-     / `cargo deny` / `cargo semver-checks`
-   - Web 侧：`npm run typecheck` / `npm run lint` / `npx vitest run` / `npm run build`
-
-   理论根：**部署流水线**（Deployment Pipeline，Humble & Farley《Continuous Delivery》）
-   ＋ **适应度函数**（Fitness Functions，Ford/Parsons/Kua《Building Evolutionary
-   Architectures》）＋ **ADR**（Architecture Decision Records，Nygard）
-   ＋ **DORA 四指标**（变更前置时间 / 部署频率 / 变更失败率 / 恢复时长）。
-   一句话：**「能不能交付」由门禁回答，不由人说。**
+**约束与定位见 [`最高指示.md`](最高指示.md)（唯一来源，五条）。**
+本文件不再复述那五条，以免与之漂移。
 
 代码在 `D:\96_CoderWorld\quill`（WSL 路径 `/mnt/d/96_CoderWorld/quill`）。
 

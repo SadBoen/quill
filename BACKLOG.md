@@ -1,6 +1,6 @@
 # BACKLOG —— 还差什么，按里程碑分组
 
-> **重建说明**：本文件曾由上一批人维护，内容不可信。现以代码为准重写。
+> **本文件只从 [`最高指示.md`](最高指示.md) 推导**，不夹带独立约束。
 > 本文件**只讲为什么**（背景、依赖）；**状态跑 `node scripts/status.mjs` 看**，不写在这里。
 > 判据声明在 [`project/items.mjs`](project/items.mjs)。事实总账见 [`docs/CODE-TRUTH.md`](docs/CODE-TRUTH.md)。
 

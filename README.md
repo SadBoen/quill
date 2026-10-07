@@ -1,22 +1,21 @@
 # quill
 
 个人 / 家庭 / 小团队自用的 Agent 平台。
-**以 Rust 为实现语言、以腾讯 octop 为产品外壳、以 goose 为 Agent 内核。**
 
-> **关于文档**：本仓库的管理文档（含本文件的历史版本、`MILESTONES.md`、`BACKLOG.md`、
-> `WORKING.md`、`UPSTREAM.md`、`UPSTREAM-USAGE.md`、`project/items.mjs`、`docs/adr/`）
-> 曾由上一批人维护，**内容一律不可信**。
-> 现在以代码为准重建，事实总账在 **[`docs/CODE-TRUTH.md`](docs/CODE-TRUTH.md)** ——
-> 每条事实都带复现命令，对不上就以你跑出来的为准。
+> **约束的唯一来源是 [`最高指示.md`](最高指示.md)（五条）。**
+> 2026-10-08 起，除这五条外，以前所有约束一律作废。
+> 其余文档只能从最高指示推导；事实一律以代码为准。
 
 ## 先读哪一份
 
 | 文件 | 回答什么 |
 |---|---|
-| [`docs/CODE-TRUTH.md`](docs/CODE-TRUTH.md) | **以代码为准的事实总账**：crate、路由、迁移、前端、测试、上游接法 |
+| [`最高指示.md`](最高指示.md) | **唯一的约束来源**：五条指示 + 推出的规程 + 作废清单 |
+| [`docs/CODE-TRUTH.md`](docs/CODE-TRUTH.md) | **以代码为准的事实总账**（每条都带复现命令） |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | 架构现状、目标分层、防冗余的模块归属表、优先级路线图 |
 | [`docs/OCTOP-MIGRATION-INVENTORY.md`](docs/OCTOP-MIGRATION-INVENTORY.md) | octop 还有哪些能力没迁过来（470 条端点逐条，配套 `docs/octop-endpoints.csv`） |
-| [`REQUIREMENTS.md`](REQUIREMENTS.md) | 用户原话（最高指示 + 原始需求，改之前先问） |
-| [`WORKING.md`](WORKING.md) | 怎么干活、哪些事该自己定 |
+| [`REQUIREMENTS.md`](REQUIREMENTS.md) | 用户原话（原始需求） |
+| [`WORKING.md`](WORKING.md) | 怎么干活（命令 / 格式 / 流程） |
 | [`MILESTONES.md`](MILESTONES.md) | 目标与验收判据 |
 | [`BACKLOG.md`](BACKLOG.md) | 还差什么（为什么，不讲状态） |
 | [`UPSTREAM.md`](UPSTREAM.md) | 跟的 goose / octop 是哪一版 |
