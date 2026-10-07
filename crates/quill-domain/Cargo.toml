@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "领域模型（领域实体 / 聚合；身份类型自 quill-adapters re-export）"
 license = "Apache-2.0"
+publish = false
 
 [dependencies]
 

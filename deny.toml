@@ -1,0 +1,61 @@
+# 依赖与许可证门禁（cargo-deny）—— 最高指示第 5 条「门禁驱动的持续交付」。
+#
+# 为什么有它：本项目只打包 quill 本身（最高指示第 4 条），但会带进一整棵第三方
+# 依赖树。树里出现「已知漏洞 / 不接受的开源协议 / 意外的 git 源 / 通配版本」时，
+# 必须在门禁处拦下，而不是等发布后才发现。
+#
+# 跑法：cargo deny check
+# 前置：cargo install cargo-deny --locked（本机已装 v0.20.2）
+
+[graph]
+# 不限 target：本项目要出 windows / macos / linux 三端，所有平台的依赖都要过检。
+targets = []
+
+[advisories]
+version = 2
+# 有漏洞直接失败。确需临时忽略某条公告时，在 ignore 里写清 id 与理由，
+# 并在提交信息里说明 —— 不要整节关掉。
+ignore = []
+
+[licenses]
+version = 2
+# 只放行宽松协议。新增依赖若用了别的协议，先想清楚再往这里加。
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "MPL-2.0",
+    "CC0-1.0",
+    "Unlicense",
+    # webpki-roots（Mozilla 根证书包，经 reqwest → rustls 带进来）用的是
+    # CDLA-Permissive-2.0 —— 一个宽松的数据许可。不放进来的话整条 HTTPS 栈过不了。
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.9
+# 允许清单里暂时没用到的条目只提示、不报警 —— 那些是给未来依赖预留的位置，
+# 每次依赖一动就冒一堆 warning，会训练人忽略告警。
+unused-allowed-license = "allow"
+
+[bans]
+# 同一 crate 出现多个版本通常意味着依赖树在膨胀；先 warn，不一上来就 deny。
+multiple-versions = "warn"
+# 通配版本依赖（"*"）会让构建不可复现 —— 直接拒。
+wildcards = "deny"
+# **但路径依赖是例外**：`quill-*` 之间用 `{ path = "../quill-xxx" }` 互相引用，
+# 它们都在同一个 workspace 里一起编译，永远不会被发布出去，没有版本约束是正常的。
+# 不开这个开关，`cargo deny check` 会对每个内部依赖报一条 wildcard 错误（全是误报）。
+allow-wildcard-paths = true
+# 明确不允许出现的 crate 写这里（当前为空）。
+deny = []
+
+[sources]
+# 只允许 crates.io。任何 git 源 / 私有 registry 都必须显式登记 —— 这是供应链边界，
+# 本项目只做本地自用，默认收紧。
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

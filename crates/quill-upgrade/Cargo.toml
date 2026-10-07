@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "手动受控升级（升级前强制备份 + 回滚）"
 license = "Apache-2.0"
+publish = false
 
 [dependencies]
 quill-adapters = { path = "../quill-adapters" }

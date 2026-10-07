@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "备份与恢复（WAL 安全一致性）"
 license = "Apache-2.0"
+publish = false
 
 [dependencies]
 
