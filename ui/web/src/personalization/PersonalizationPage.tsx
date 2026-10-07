@@ -15,6 +15,13 @@ import './personalization.css'
  * （`index.tsx:140` 用 `display: none` 切 panel），标题拼成「个性化 / 技能」
  * （`index.tsx:92`）。
  *
+ * 那行页签在桌面端落在标题行右侧、移动端全宽放到内容区上方，是
+ * `PageShell` 的 `pathTabs` 槽渲染的，而它用的是 **antd 的 `Segmented`**
+ * （`layouts/PageShell.tsx:52-73`）—— 一个带边框的容器把各项包在里面、
+ * 选中项在容器内高亮，**不是** antd 的 `Tabs`。这个区别是结构性的：
+ * 一排各自带边框的独立按钮看着像 segmented，其实不是。
+ * 桌面/移动两种摆法见 `layouts/PageShell.module.less` 的 `.pathTabsMobile*`。
+ *
  * 2026-10-08 改过一次形态：最早这里是七张大卡片铺成两排。**那是照着想象画的**，
  * 用户看完 Octop 后指出「是一行页签导航，不是大框框」。改法见下面的顺序表 ——
  * 连页签顺序都照 Octop 的来（skills → subagents → tools → plugins → mbti →
@@ -124,7 +131,7 @@ export function PersonalizationPage(): ReactNode {
           defaultValue: '配置当前智能体的技能、工具、插件、子智能体、通道与记忆。',
         })}
         actions={
-          <div className="personalization-tabs" role="tablist">
+          <div className="personalization-tabs" role="tablist" data-segmented="true">
             {TABS.map((s) => (
               <button
                 key={s.key}

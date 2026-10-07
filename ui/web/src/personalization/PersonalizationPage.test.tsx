@@ -90,9 +90,42 @@ describe('个性化页', () => {
     const row = document.querySelector('.personalization-tabs')
     expect(row, '页签行容器必须在').not.toBeNull()
     expect(row!.querySelectorAll('a'), '页签里不能有链接').toHaveLength(0)
+    // 七项必须都是容器的**直接子元素** —— 一旦中间又套一层，
+    // 「一个容器包住七项」的结构就没了。
+    expect(row!.children).toHaveLength(7)
     // 旧形态的卡片网格必须已经不在了
     expect(document.querySelector('.personalization-grid')).toBeNull()
     expect(document.querySelectorAll('.personalization-card')).toHaveLength(0)
+  })
+
+  it('页签是一个整体容器（Octop 用的是 antd Segmented，不是 Tabs）', async () => {
+    // 上游 layouts/PageShell.tsx:52-73 渲染的是 Segmented：一个带边框的容器
+    // 把各项包住，选中项在容器内高亮。第一版写成「七项各自一个带边框的按钮」，
+    // 看着像 segmented，其实结构不是 —— 这条就是钉那个差别。
+    //
+    // vitest 不注入 CSS（css: false），所以 computed style 拿不到真值。
+    // 于是读样式表原文断言关键声明 —— 至少能抓住「容器没边框」
+    // 与「每项又各自带边框」这两种回退。
+    stubFetch()
+    mount()
+    const row = document.querySelector('.personalization-tabs')
+    expect(row?.getAttribute('data-segmented')).toBe('true')
+
+    const css = await import('./personalization.css?raw')
+    const block = (sel: string): string => {
+      const i = css.default.indexOf(sel + ' {')
+      if (i < 0) return ''
+      return css.default.slice(i, css.default.indexOf('}', i))
+    }
+    const container = block('.personalization-page .personalization-tabs')
+    expect(container, '找不到页签容器的样式块').not.toBe('')
+    expect(container).toMatch(/border:\s*1px solid/)
+    expect(container).toMatch(/border-radius:/)
+
+    const item = block('.personalization-page .personalization-tab')
+    expect(item, '找不到单个页签的样式块').not.toBe('')
+    expect(item, '单个页签不该再自带边框 —— 边框属于容器').not.toMatch(/(^|[\s;])border:\s*1px/)
+    expect(item).toMatch(/font-size:\s*13px/)
   })
 
   it('页签顺序与 Octop 一致', () => {

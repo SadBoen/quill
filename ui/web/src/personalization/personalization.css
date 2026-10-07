@@ -6,41 +6,57 @@
  * （页签表）与 :140（display 切换 panel）。
  */
 
-/* ---- 顶部那行页签（放在 PageHeader 的 actions 槽里，也就是右上角） ---- */
+/* ---- 顶部那行页签（放在 PageHeader 的 actions 槽里，也就是右上角） ----
+ *
+ * 形态对齐 Octop 的 `PathTabsSegmented`
+ * （.octop-ref/octop/dashboard/src/layouts/PageShell.tsx:52-73）——
+ * 它用的是 antd 的 **Segmented**，不是 Tabs。差别是结构性的：
+ * **一个带边框的容器把各项包在里面，选中项在容器内部高亮**，
+ * 而不是我先前写的那种「每项各自一个带边框的独立按钮」。
+ * antd 的名字 segmented 就是这个意思，一眼能看出区别。
+ *
+ * 数值按 antd Segmented 的中号来：项内间距 4px 12px、圆角 6px、
+ * 容器内边距 2px、字号 13px、图标与文字间距 6px
+ * （后者照上游 `.pathTabLabel { gap: 6px }`）。
+ */
 
 .personalization-page .personalization-tabs {
-  display: flex;
+  display: inline-flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 2px;
   align-items: center;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
 }
 
 .personalization-page .personalization-tab {
   display: inline-flex;
   gap: 6px;
   align-items: center;
-  padding: 5px 9px;
-  border: 1px solid transparent;
+  padding: 4px 12px;
+  border: 0;
   border-radius: 6px;
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: 12px;
+  font-size: 13px;
+  line-height: 1.6;
   cursor: pointer;
   white-space: nowrap;
 }
 
-/* 选中态不靠背景色单独承担：边框 + 字重一起变，
-   灰度打印或色觉差异下也分得出来。 */
 .personalization-page .personalization-tab:hover {
   color: var(--ink);
-  border-color: var(--line);
 }
 
+/* 选中态：容器内的一块高亮，不是换一套边框。
+   字重一起变，灰度或色觉差异下也分得出来。 */
 .personalization-page .personalization-tab[aria-selected='true'] {
   color: var(--accent-strong);
-  border-color: color-mix(in srgb, var(--accent), var(--line) 55%);
-  background: var(--accent-soft);
+  background: var(--panel);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
   font-weight: 600;
 }
 
@@ -53,6 +69,21 @@
   font-size: 11px;
   font-weight: 700;
   opacity: 0.65;
+}
+
+/* 窄屏：上游在移动端把整行页签放到内容区上方并撑满宽度
+ * （PageShell.module.less 的 .pathTabsMobileSegmented），因为挤在标题行里
+ * 会压到字。这里同样让它换行独占，不硬挤。 */
+@media (max-width: 767px) {
+  .personalization-page .personalization-tabs {
+    display: flex;
+    width: 100%;
+    margin-top: 10px;
+  }
+
+  .personalization-page .personalization-tab {
+    padding: 4px 10px;
+  }
 }
 
 /* ---- 内容区 ---- */
