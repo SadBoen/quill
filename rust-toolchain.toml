@@ -1,0 +1,17 @@
+# 固定工具链 —— 本项目是**应用**（不是库），按最高指示第 5 条「门禁驱动的持续交付」，
+# 交付结果必须可复现：不同的人、不同的机器编出来的东西要一致。
+#
+# 版本取「本机实测通过全量测试的那一个」：rustc 1.99.0 (b940084d7 2026-09-28)、
+# cargo 1.99.0 (5f94df478 2026-08-27)。
+#
+# 升级工具链是一个**独立决定**：改这里 → 跑一遍门禁（cargo test --workspace /
+# cargo clippy --workspace --all-targets）→ 单独一个提交。别顺手升。
+#
+# components 带上 rustfmt 与 clippy：最高指示第 5 条把 `cargo fmt --check` 与
+# `cargo clippy -D warnings` 列为门禁的一部分（见 project/queue.md Q003–Q005）。
+# 现在 CI（.github/workflows/gates.yml:51）刻意**没装**这两个组件 —— 等 Q004/Q005
+# 把它们接进门禁时，CI 也要改成读本文件，否则本地与 CI 会跑在不同版本上。
+[toolchain]
+channel = "1.99.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
