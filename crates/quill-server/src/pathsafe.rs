@@ -335,11 +335,11 @@ mod tests {
         std::fs::create_dir_all(tmp.path().join("sub")).expect("建 sub");
 
         assert!(
-            is_within(&skills, &skills.join("code-review.md").parent().unwrap()),
+            is_within(&skills, skills.join("code-review.md").parent().unwrap()),
             "存在的 root 判自己的子目录必须为真"
         );
         assert!(
-            is_within(&spelled, &spelled.join("code-review.md").parent().unwrap()),
+            is_within(&spelled, spelled.join("code-review.md").parent().unwrap()),
             "同一目录的不同拼法必须判出同一个结果（Windows 的 \\\\?\\ 前缀陷阱）"
         );
         assert!(
@@ -355,7 +355,7 @@ mod tests {
         let skills = tmp.sub("skills");
         let evil = tmp.sub("skills-evil");
         assert!(!is_within(&skills, &evil));
-        assert!(!is_within(&skills, &evil.join("x.md").parent().unwrap()));
+        assert!(!is_within(&skills, evil.join("x.md").parent().unwrap()));
     }
 
     /// **缺陷本身**：root 存在、candidate 不存在。

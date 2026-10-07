@@ -344,7 +344,7 @@ impl CompositeTokenResolver {
                     quill_control::Pbkdf2Params::production(),
                 );
                 let outcome = match cp.authz_of(&user_id).await {
-                    Ok(Some((role, status))) if status == quill_control::UserStatus::Active => {
+                    Ok(Some((role, quill_control::UserStatus::Active))) => {
                         Ok(AuthContext {
                             user_id,
                             is_admin: role == quill_control::UserRole::Owner,

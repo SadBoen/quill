@@ -58,7 +58,7 @@ pub fn strip(existing: &str) -> (String, Option<String>) {
                 let rest = l.trim().strip_prefix("**MBTI")?;
                 let v = rest
                     .trim()
-                    .trim_start_matches(|c: char| c == ' ' || c == ':' || c == '*')
+                    .trim_start_matches([' ', ':', '*'])
                     .trim_end_matches('*')
                     .trim();
                 // 行是 `**MBTI: INTJ · 建筑师**`，取头一个词就是 code。

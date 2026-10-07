@@ -291,7 +291,7 @@ pub async fn create(
     // （用户可能只是想聊天），但必须在响应里明说「你选的专家没生效」，
     // 不能等发消息时才让用户自己发现。
     // 没指定的那些已经在 `resolve_for_session` 里换成通用专家了，所以这里恒有值。
-    let persona = resolve_persona(&db, uid, id).await?;
+    let persona = resolve_persona(db, uid, id).await?;
 
     Ok(Json(json!({
         "id": hex_id,
@@ -383,14 +383,14 @@ pub async fn delete(
         .call(move |pool, _rt| {
             Box::pin(async move {
                 let r: Result<Option<Option<i64>>, quill_agent::AgentError> = async {
-                    Ok(sqlx::query_scalar(
+                    sqlx::query_scalar(
                         "SELECT deleted_at FROM sessions WHERE user_id = ? AND id = ?",
                     )
                     .bind(uid.as_bytes().to_vec())
                     .bind(sid.to_vec())
                     .fetch_optional(&pool)
                     .await
-                    .map_err(|e| crate::db::storage_error("查会话", e))?)
+                    .map_err(|e| crate::db::storage_error("查会话", e))
                 }
                 .await;
                 r
@@ -557,7 +557,7 @@ pub async fn context(
         .map_err(|_| ApiError::internal("llm_config 锁被毒化"))?
         .max_context_tokens
         .into();
-    let persona = resolve_persona(&db, uid, sid).await?;
+    let persona = resolve_persona(db, uid, sid).await?;
     let skill_root = crate::api_extensions::skill_dir(&state.config);
     let role_already_picked = persona.expert_id.is_some();
     let registry = crate::tools::ToolRegistry::builtin_with_expert_tools(
@@ -598,7 +598,7 @@ pub async fn context(
         tool_definitions: sum_chars(&builtin_specs),
         skills: sum_chars(&skill_specs[n_builtin..]),
         mcp: sum_chars(&all_specs[n_skills..]),
-        conversation: load_history_chars(&db, uid, sid).await?,
+        conversation: load_history_chars(db, uid, sid).await?,
     };
 
     let segments: Vec<Value> = crate::session_metrics::context_segments(&breakdown)

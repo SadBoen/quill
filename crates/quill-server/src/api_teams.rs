@@ -341,7 +341,7 @@ fn team_error_to_api(op: &str, e: TeamError) -> ApiError {
             "团队标识非法：{e}。\
              下一步：team_id 只接受小写字母、数字与连字符组成的 kebab-case，最长 64 个字符。"
         ),
-        TeamError::EmptyName => format!("团队名称为空。下一步：name 传一个非空字符串。"),
+        TeamError::EmptyName => "团队名称为空。下一步：name 传一个非空字符串。".to_string(),
     };
     eprintln!("[teams] {op} 失败：{e}");
     ApiError::bad_request(detail)

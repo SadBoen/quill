@@ -452,7 +452,7 @@ mod tests {
         assert_eq!(j["tool_name"], json!("code-review"));
         assert_eq!(j["slug"], json!("code-review"));
         assert_eq!(j["kind"], json!("workspace"));
-        assert_eq!(to_json(&row("x")).get("tool_name").is_some(), true);
+        assert!(to_json(&row("x")).get("tool_name").is_some());
     }
 
     #[test]

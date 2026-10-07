@@ -225,7 +225,7 @@ pub async fn get_by_kind(
             })
         })
         .map_err(storage)?;
-    Ok(found.as_ref().map(|r| from_row(r)))
+    Ok(found.as_ref().map(from_row))
 }
 
 /// 建或更新一条通道。

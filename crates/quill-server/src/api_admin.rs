@@ -91,10 +91,10 @@ pub async fn put(
     let new_provider = match crate::llm::build(&llm_cfg) {
         Ok(p) => Some(p),
         Err(detail) => {
-            return Err(ApiError::bad_request(String::from(format!(
+            return Err(ApiError::bad_request(format!(
                 "校验通过了，但构造 provider 失败：{detail}。\
                  下一步：检查 base_url / api_key / 模型名是否正确；表里的旧值未改动。"
-            ))));
+            )));
         }
     };
 
@@ -129,18 +129,18 @@ fn admin_config_to_json(cfg: &AdminConfig) -> Value {
 fn parse_admin_config(body: &Value) -> Result<AdminConfig, ApiError> {
     fn pick<'a>(body: &'a Value, key: &str) -> Result<&'a str, ApiError> {
         body.get(key).and_then(Value::as_str).ok_or_else(|| {
-            ApiError::bad_request(String::from(format!(
+            ApiError::bad_request(format!(
                 "字段 {key:?} 必须是字符串。下一步：检查请求体里是否漏了字段，或用了数字 / null。"
-            )))
+            ))
         })
     }
 
     let protocol_raw = pick(body, "protocol")?;
     let protocol = Protocol::parse(protocol_raw).ok_or_else(|| {
-        ApiError::bad_request(String::from(format!(
+        ApiError::bad_request(format!(
             "protocol {protocol_raw:?} 不在枚举里（必须是 openai / anthropic / openrouter）。\
              下一步：改成这三个值中的一个再重试。"
-        )))
+        ))
     })?;
 
     let base_url = pick(body, "base_url")?.trim().to_string();
@@ -179,9 +179,9 @@ fn parse_admin_config(body: &Value) -> Result<AdminConfig, ApiError> {
 
 fn pick_positive(body: &Value, key: &str) -> Result<u32, ApiError> {
     let v = body.get(key).ok_or_else(|| {
-        ApiError::bad_request(String::from(format!(
+        ApiError::bad_request(format!(
             "字段 {key:?} 缺失。下一步：补一个正整数（token 数），参考默认值 32768 / 8000 / 4096。"
-        )))
+        ))
     })?;
     let n = match v {
         Value::Number(n) => n.as_i64().or_else(|| n.as_u64().map(|u| u as i64)),
@@ -189,20 +189,20 @@ fn pick_positive(body: &Value, key: &str) -> Result<u32, ApiError> {
         _ => None,
     }
     .ok_or_else(|| {
-        ApiError::bad_request(String::from(format!(
+        ApiError::bad_request(format!(
             "字段 {key:?} 必须是正整数（实际 {v}）。下一步：去掉引号或写成纯数字。"
-        )))
+        ))
     })?;
     if n <= 0 {
-        return Err(ApiError::bad_request(String::from(format!(
+        return Err(ApiError::bad_request(format!(
             "字段 {key:?}={n} 不合法（必须 > 0）。下一步：把它改成正整数。"
-        ))));
+        )));
     }
     if n > i64::from(u32::MAX) {
-        return Err(ApiError::bad_request(String::from(format!(
+        return Err(ApiError::bad_request(format!(
             "字段 {key:?}={n} 超过 u32 上限（{}）。下一步：调小到合理范围。",
             u32::MAX
-        ))));
+        )));
     }
     Ok(n as u32)
 }

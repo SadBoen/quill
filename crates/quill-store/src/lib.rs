@@ -562,7 +562,7 @@ mod tests {
         // 期望值从 MIGRATIONS 推导，不要手写版本号列表 ——
         // 加一条迁移时手写的那份一定会忘改，然后这个测试变成噪音。
         // 台账里存的是 i64，所以这里转一下。
-        let all: Vec<i64> = MIGRATIONS.iter().map(|m| m.version as i64).collect();
+        let all: Vec<i64> = MIGRATIONS.iter().map(|m| m.version).collect();
 
         let first = migrate(&pool).await.expect("首次迁移");
         assert_eq!(first.applied, all, "首次必须应用全部迁移");

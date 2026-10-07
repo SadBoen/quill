@@ -457,7 +457,7 @@ fn pick_one_body(
     Ok(Unpacked {
         files: vec![(base_of(&picked.file), picked.body.clone())],
         compressed_bytes,
-        uncompressed_bytes: uncompressed_bytes,
+        uncompressed_bytes,
         skipped_other,
     })
 }

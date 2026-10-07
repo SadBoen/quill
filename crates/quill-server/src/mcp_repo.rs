@@ -192,7 +192,7 @@ pub async fn replace_all(
 
             // 1) 本次没提到的 → 软删。软删而不是物理删：name 是主键的一部分，
             //    物理删会让「同名重建」丢历史；软删后同名可复用。
-            for (name, _) in existing.iter() {
+            for name in existing.keys() {
                 if !keep.contains(&name.as_str()) {
                     sqlx::query(
                         "UPDATE mcp_servers SET deleted_at = ?, updated_at = ? \

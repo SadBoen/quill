@@ -1342,7 +1342,7 @@ pub async fn skill_hub_install(
 /// 退回正文开头，模型照样看得见。而这里编一句摘要，只会让用户看到一句
 /// 我们自己造的说明。
 pub(crate) fn hub_description(body: &str) -> String {
-    let head = body.splitn(3, "---").nth(1).unwrap_or("");
+    let head = body.split("---").nth(1).unwrap_or("");
     for line in head.lines() {
         if let Some(rest) = line.trim().strip_prefix("description:") {
             return rest

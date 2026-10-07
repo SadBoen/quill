@@ -77,7 +77,7 @@ mod tests {
     async fn deltas_are_accumulated_into_one_reply_and_forwarded_in_order() {
         let mut seen: Vec<StreamDelta> = Vec::new();
         let mut sink = |d: StreamDelta| seen.push(d);
-        let mut s = stream_of(vec![
+        let s = stream_of(vec![
             Ok(StreamDelta::Reasoning("先想".into())),
             Ok(StreamDelta::Text("你好".into())),
             Ok(StreamDelta::Text("，世界".into())),

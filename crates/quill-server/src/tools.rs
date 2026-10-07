@@ -334,7 +334,6 @@ impl ToolRegistry {
     /// 界面上显示的工具数就会与模型实际拿到的对不上，而那种不一致没法从界面上看出来。
     /// 代价是每条消息都要把用户配的进程拉起来一遍 —— 这笔账记在 STATUS.md 的
     /// 「已知代价」里，真到扛不住时再上带 TTL 的缓存，并且**界面上要显示缓存年龄**。
-
     pub async fn with_mcp_tools(
         mut self,
         db: &crate::db::DbBridge,

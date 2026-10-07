@@ -201,7 +201,7 @@ fn session_json(s: &quill_control::AuthSession) -> Value {
 pub async fn setup_status(State(state): State<AppState>) -> Result<Response, ApiError> {
     let db = state.db()?.clone();
     let count = with_control(&db, state.pbkdf2, |cp| {
-        Box::pin(async move { Ok(cp.user_count().await?) })
+        Box::pin(async move { cp.user_count().await })
     })
     .await
     .map_err(|e| control_err("查询是否需要首管引导", e))?;

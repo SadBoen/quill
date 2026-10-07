@@ -177,17 +177,13 @@ pub async fn discover(row: &McpServerRow) -> Discovery {
             // 「服务器没这个能力」是**正常状态**，不是失败：`connected` 仍然是
             // true。区别由 `error` 这一栏说清，别把它混进连接失败里。
             if blocked_by_local {
-                probe.error = Some(format!(
-                    "本地 enabled_capabilities 里没有 tools，所以一个工具都不给模型。\
-                     下一步：在设备页把 tools 加进能力列表，或清空该列表表示全开。"
-                ));
+                probe.error = Some("本地 enabled_capabilities 里没有 tools，所以一个工具都不给模型。\
+                     下一步：在设备页把 tools 加进能力列表，或清空该列表表示全开。".to_string());
             } else if blocked_by_server {
-                probe.error = Some(format!(
-                    "服务器在 initialize 里自报的能力里**没有 tools** —— 它自己说它不提供工具，\
+                probe.error = Some("服务器在 initialize 里自报的能力里**没有 tools** —— 它自己说它不提供工具，\
                      所以工具数按 0 报（即使它的 tools/list 回了内容）。\
                      下一步：确认这台服务器是否该提供工具；若它本该提供，那是它 initialize 的问题，\
-                     把它的协议版本与实现名连同这段现象反馈给它。"
-                ));
+                     把它的协议版本与实现名连同这段现象反馈给它。".to_string());
             }
             Discovery { probe, tools }
         }
@@ -748,7 +744,7 @@ pub fn call_tool_blocking(
     let (tx, rx) = std::sync::mpsc::channel();
     // 错误文案里要用的两样东西，**在 `row` 被 move 进闭包之前**取好。
     let line = command_line(&row);
-    let wait = Duration::from_millis(row.timeout_ms.max(1_000).min(CALL_BUDGET_CEILING_MS) as u64)
+    let wait = Duration::from_millis(row.timeout_ms.clamp(1_000, CALL_BUDGET_CEILING_MS) as u64)
         + GATE_SLACK;
 
     let worker = std::thread::Builder::new()
@@ -827,14 +823,11 @@ impl StderrTail {
     /// 最多等 300 毫秒看一眼。为多打几个字把 HTTP 请求的延迟再拖长不值得，
     /// 所以排空任务还在跑的话就算了 —— 那台服务器本来就已经连不上了。
     async fn snapshot(&self) -> String {
-        match tokio::time::timeout(Duration::from_millis(300), async {
+        tokio::time::timeout(Duration::from_millis(300), async {
             self.text.lock().await.clone()
         })
         .await
-        {
-            Ok(s) => s,
-            Err(_) => String::new(),
-        }
+        .unwrap_or_default()
     }
 }
 
