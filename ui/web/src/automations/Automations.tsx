@@ -18,6 +18,7 @@ import {
   type CronWrite,
 } from './api'
 import { DREAM_ROUTE, listDream, type DreamItem } from './dreamApi'
+import { pickVisibleError, routeMissing } from './capability'
 
 const HEARTBEAT_PATH = 'HEARTBEAT.md'
 const HEARTBEAT_TEMPLATE = `# Heartbeat
@@ -93,6 +94,11 @@ export function AutomationsPage(): ReactNode {
   const jobs = cron.data?.pages.flatMap((page) => page.items) ?? []
   const dreamItems: DreamItem[] = dream.data?.pages.flatMap((page) => page.items) ?? []
 
+  // 这台实例有没有定时任务这个能力。**没有就别画那个表单** ——
+  // 理由见 capability.ts：能填能提交但必然 404 的表单，比没有这个功能更糟，
+  // 因为用户会以为它建成了。下方那句「下一步：实现 /api/cron…」已经说清了缺什么。
+  const cronUnavailable = routeMissing(cron.error)
+
   return (
     <div className="page-scroll">
       <PageHeader
@@ -100,12 +106,12 @@ export function AutomationsPage(): ReactNode {
         title={t('automations.title', { defaultValue: '自动化' })}
         description={t('automations.description', { defaultValue: '定时任务与心跳。' })}
       />
-      <ErrorNotice error={actionError ?? cron.error ?? saveCron.error ?? removeCron.error ?? dream.error} />
+      <ErrorNotice error={pickVisibleError(actionError, saveCron.error, removeCron.error, cron.error, dream.error)} />
       <div className="settings-stack automations-stack">
         <Card
           title={t('automations.cronTitle', { defaultValue: '定时任务' })}
           description={t('automations.cronDescription', { defaultValue: '按固定间隔、cron 表达式或指定时刻投递一条消息。' })}
-          actions={draft ? null : (
+          actions={draft || cronUnavailable ? null : (
             <button
               type="button"
               className="primary-button"
@@ -118,7 +124,7 @@ export function AutomationsPage(): ReactNode {
             </button>
           )}
         >
-          {draft ? (
+          {draft && !cronUnavailable ? (
             <CronForm
               draft={draft}
               pending={saveCron.isPending}
@@ -129,7 +135,7 @@ export function AutomationsPage(): ReactNode {
           ) : null}
 
           {cron.isPending ? <p className="page-status">{t('automations.loadingCron', { defaultValue: '正在加载定时任务…' })}</p> : null}
-          {cron.isError ? (
+          {cronUnavailable ? (
             <p className="field-help" role="status">
               {t('automations.cronNotWired', {
                 defaultValue: 'quill 后端没有定时任务能力：{{route}} 未在本实例登记，所以这里没有任何任务，也不会显示示例数据。下一步：实现 {{route}}（列表）与 {{job}}（增删改），本卡片会自动接上。',
@@ -138,7 +144,7 @@ export function AutomationsPage(): ReactNode {
               })}
             </p>
           ) : null}
-          {!cron.isPending && !cron.isError && !jobs.length ? <p className="empty-card-copy">{t('automations.noCron', { defaultValue: '还没有定时任务。' })}</p> : null}
+          {!cron.isPending && !cronUnavailable && !jobs.length ? <p className="empty-card-copy">{t('automations.noCron', { defaultValue: '还没有定时任务。' })}</p> : null}
           {jobs.length ? (
             <div className="automation-list">
               {jobs.map((job) => (
