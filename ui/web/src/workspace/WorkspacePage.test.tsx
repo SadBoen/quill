@@ -81,6 +81,9 @@ function renderPage(handlers: Record<string, () => Promise<Response>>): {
 
 const EXPORT_URL = '/api/backup/export'
 const VERIFY_URL = '/api/backup/verify'
+const UPGRADE_CHECK_URL = '/api/upgrade/check'
+const UPGRADE_PREPARE_URL = '/api/upgrade/prepare'
+const UPGRADE_HISTORY_URL = '/api/upgrade/history'
 
 /**
  * 页面默认的备份名，跟 `WorkspacePage.tsx` 的 `defaultBackupName()` 同一套算法。
@@ -174,8 +177,10 @@ describe('失败时说清楚是哪一种失败', () => {
 
     const notice = await screen.findByTestId('backup-error-invalid-name')
     expect(notice).toHaveTextContent('改成一个纯名字')
-    // 服务端原文也要留着。
-    expect(await screen.findByRole('alert')).toHaveTextContent('备份名不合法。')
+    // 服务端原文也要留着。页面上现在有不止一个 role="alert"（升级那张卡自己也有一个），
+    // 所以这里问的是「有没有哪一条在说这句原文」，而不是「恰好只有一个」。
+    const alerts = await screen.findAllByRole('alert')
+    expect(alerts.some((a) => a.textContent?.includes('备份名不合法。'))).toBe(true)
   })
 
   it('409：目标已存在且非空 → 让用户换个名字，和 400 的话不一样', async () => {
@@ -214,7 +219,7 @@ describe('失败时说清楚是哪一种失败', () => {
 
     clickExport()
 
-    await screen.findByRole('alert')
+    await screen.findByTestId('backup-error-source-unavailable')
     expect(screen.queryByTestId('backup-export-result')).toBeNull()
     expect(screen.queryByText('导出完成')).toBeNull()
     expect(screen.queryByTestId('backup-files')).toBeNull()
@@ -313,5 +318,109 @@ describe('还原：只有说明，没有按钮', () => {
     expect(screen.getByRole('button', { name: '校验备份' })).toBeDisabled()
     expect(requests.filter((r) => r.url === EXPORT_URL)).toHaveLength(0)
     expect(screen.queryByTestId('backup-export-result')).toBeNull()
+  })
+})
+
+/**
+ * 升级卡片：2026-10-08 逐页实点时抓到的**第二个**假按钮。
+ *
+ * `/api/upgrade/*` 在服务端是 501 桩（`crates/quill-server/src/routes.rs` 里
+ * 那三个 `not_implemented`），但页面照样画了一个能点的「准备升级」。点下去
+ * POST /api/upgrade/prepare 回 501，界面**一个字提示都没有**——
+ * `prepare.error` 从来没被端出来过：备份卡片那条 ErrorNotice 的错误链是
+ * `backup.error ?? verify.error ?? upgrade.error ?? history.error`，里面没有它。
+ */
+describe('升级：桩路由上不画能点的按钮', () => {
+  it('三条路由都 501 → 不画「准备升级」，也不画「刷新」', async () => {
+    const { requests } = renderPage({})
+
+    await screen.findByTestId('upgrade-unavailable')
+    expect(screen.queryByRole('button', { name: '准备升级' })).toBeNull()
+    // 刷新也没用：它只是把同一个 501 桩再请一遍。
+    expect(screen.queryByRole('button', { name: '刷新' })).toBeNull()
+    // 一个点了必然失败的请求都不该发出去。
+    expect(requests.filter((r) => r.url === UPGRADE_PREPARE_URL)).toHaveLength(0)
+  })
+
+  it('说清楚是「还没实现」，而不是让用户以为可以升级', async () => {
+    renderPage({})
+
+    const note = await screen.findByTestId('upgrade-unavailable')
+    expect(note).toHaveTextContent('501')
+    // 「等真做出来」这句是承诺：桩一去掉按钮就自动回来。
+    expect(note).toHaveTextContent('这两个按钮会自动出现')
+  })
+
+  it('版本号取不到时显示「—」，不是编一个版本号出来', async () => {
+    renderPage({})
+
+    await screen.findByTestId('upgrade-unavailable')
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(2)
+    expect(screen.queryByText(/当前版本.*\d+\.\d+\.\d+/)).toBeNull()
+  })
+
+  it('别的失败不算「没实现」，按钮要留着（不能把能用的功能藏起来）', async () => {
+    // 500 是服务端出毛病，不是能力缺失：这时候藏掉按钮，用户连试的机会都没有。
+    renderPage({
+      [UPGRADE_CHECK_URL]: () => Promise.resolve(serverError(500, 'internal', '数据库锁住了。', '稍后重试。')),
+      [UPGRADE_HISTORY_URL]: () => Promise.resolve(json({ entries: [] })),
+    })
+
+    await screen.findByRole('alert')
+    expect(screen.queryByTestId('upgrade-unavailable')).toBeNull()
+    expect(screen.getByRole('button', { name: '准备升级' })).toBeEnabled()
+  })
+
+  it('点了之后失败必须看得见（修掉的正是这条静默失败）', async () => {
+    // 这条必须让 check / history 都成功、只有 prepare 失败：
+    // 否则「尚未实现」那段文案会先把问题说出来，这条断言就成了摆设 ——
+    // 变异验证时把 prepare.error 从 ErrorNotice 里删掉，它照样全绿。
+    // 用 500 而不是 501，是为了绕开能力缺失那一支，专盯「错误有没有被端出来」。
+    renderPage({
+      [UPGRADE_CHECK_URL]: () => Promise.resolve(json({ current_version: '1.2.3', latest_version: '1.2.3' })),
+      [UPGRADE_HISTORY_URL]: () => Promise.resolve(json({ entries: [] })),
+      [UPGRADE_PREPARE_URL]: () =>
+        Promise.resolve(serverError(500, 'internal', '解压新版本失败：磁盘满了。', '清点磁盘空间后重试。')),
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: '准备升级' }))
+
+    // 服务端原文与下一步都必须出现在**升级这张卡里**。
+    const alert = await screen.findByText(/解压新版本失败：磁盘满了。/)
+    expect(alert).toBeInTheDocument()
+    expect(alert.closest('.card')).toHaveTextContent('清点磁盘空间后重试。')
+    // 而且失败之后不能出现任何像成功的东西。
+    expect(screen.queryByText(/升级成功|正在升级|已开始升级/)).toBeNull()
+  })
+
+  it('prepare 是 501 桩时如实说明「还没实现」，而不是让人以为升级开始了', async () => {
+    renderPage({
+      [UPGRADE_CHECK_URL]: () => Promise.resolve(json({ current_version: '1.2.3', latest_version: '1.2.3' })),
+      [UPGRADE_HISTORY_URL]: () => Promise.resolve(json({ entries: [] })),
+      [UPGRADE_PREPARE_URL]: () =>
+        Promise.resolve(serverError(501, 'not_implemented', '/api/upgrade/prepare 尚未实现。', '等后端实现。')),
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: '准备升级' }))
+
+    const note = await screen.findByTestId('upgrade-unavailable')
+    expect(note).toHaveTextContent('尚未实现')
+    expect(screen.queryByText(/升级成功|正在升级|已开始升级/)).toBeNull()
+  })
+
+  it('能力真的接上时：显示版本号、按钮在、说明不再是「尚未实现」', async () => {
+    renderPage({
+      [UPGRADE_CHECK_URL]: () => Promise.resolve(json({ current_version: '1.2.3', latest_version: '1.3.0' })),
+      [UPGRADE_HISTORY_URL]: () => Promise.resolve(json({ entries: [] })),
+    })
+
+    await screen.findByText('1.3.0')
+    expect(screen.getByRole('button', { name: '准备升级' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '刷新' })).toBeEnabled()
+    expect(screen.queryByTestId('upgrade-unavailable')).toBeNull()
+    // 说明文字不能永远写死「尚未实现」——能力接上后它就成了谎话，
+    // 而用户正是靠它判断能不能点。
+    expect(screen.queryByText(/都已登记但尚未实现/)).toBeNull()
+    expect(screen.getByText(/版本号取自/)).toBeInTheDocument()
   })
 })

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { ApiError } from '../api/client'
-import { pickVisibleError, routeMissing } from './capability'
+import { pickVisibleError, routeMissing, routeNotImplemented } from './capability'
+import { ApiError } from './client'
 
 function apiError(status: number, code: string): ApiError {
   // 参数顺序跟着 ApiError 的构造函数：`(status, code, message, nextStep?)`。
@@ -41,6 +41,36 @@ describe('routeMissing：判「这台实例没这个能力」', () => {
     const alwaysMissing = () => true
     expect(alwaysMissing()).toBe(true) // 恒真
     expect(routeMissing(apiError(500, 'internal'))).toBe(false) // 但真实现不是
+  })
+})
+
+describe('routeNotImplemented：判「路由登记了但是 501 桩」', () => {
+  it('501 + not_implemented → 没实现（工作区页据此不画「准备升级」）', () => {
+    expect(routeNotImplemented(apiError(501, 'not_implemented'))).toBe(true)
+  })
+
+  it('501 但错误码不是 not_implemented → 不算桩', () => {
+    expect(routeNotImplemented(apiError(501, 'upstream_unavailable'))).toBe(false)
+  })
+
+  it('404 缺失不能被当成 501 桩（两种缺失的下一步不同）', () => {
+    // 404 是「压根没进路由表」，501 是「表里有、还没写」。
+    // 合并成一个判据，页面就会对没做的接口说错话。
+    expect(routeNotImplemented(apiError(404, 'not_found'))).toBe(false)
+    expect(routeMissing(apiError(501, 'not_implemented'))).toBe(false)
+  })
+
+  it('别的状态码 → 不算桩', () => {
+    expect(routeNotImplemented(apiError(500, 'internal'))).toBe(false)
+    expect(routeNotImplemented(apiError(503, 'storage_unavailable'))).toBe(false)
+    expect(routeNotImplemented(null)).toBe(false)
+    expect(routeNotImplemented(new Error('Failed to fetch'))).toBe(false)
+  })
+
+  it('反向钉死：恒真的实现会被上面两条抓住', () => {
+    const alwaysStub = () => true
+    expect(alwaysStub()).toBe(true)
+    expect(routeNotImplemented(apiError(500, 'internal'))).toBe(false)
   })
 })
 

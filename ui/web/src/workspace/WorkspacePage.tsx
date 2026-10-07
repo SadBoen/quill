@@ -3,6 +3,7 @@ import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Card, ErrorNotice, StatusBadge } from '../components/Page'
+import { pickVisibleError, routeNotImplemented } from '../api/capability'
 import {
   BACKUP_EXPORT_ROUTE,
   BACKUP_RESTORE_ROUTE,
@@ -137,6 +138,14 @@ export function WorkspacePage(): ReactNode {
   const exportUnreadable = backup.isSuccess && backup.data !== undefined && !exportResult
   const verifyUnreadable = verify.isSuccess && verify.data !== undefined && !verifyResult
 
+  // 这三条升级路由在服务端是 501 桩（routes.rs 里那三个 `not_implemented`）。
+  // 桩上画按钮 = 画一个点了必然失败、还不出错的按钮：实点时 POST /api/upgrade/prepare
+  // 回 501，界面零提示，用户以为升级在跑了。所以没实现就不画按钮。
+  const upgradeUnavailable =
+    routeNotImplemented(upgrade.error) ||
+    routeNotImplemented(history.error) ||
+    routeNotImplemented(prepare.error)
+
   return (
     <>
       <header className="workspace-header">
@@ -254,7 +263,7 @@ export function WorkspacePage(): ReactNode {
                 })}
               </p>
             ) : null}
-            <ErrorNotice error={backup.error ?? verify.error ?? upgrade.error ?? history.error} />
+            <ErrorNotice error={pickVisibleError(backup.error, verify.error)} />
             {exportResult ? <BackupResult result={exportResult} /> : null}
             {verifyResult ? <VerifyResult result={verifyResult} /> : null}
 
@@ -283,31 +292,55 @@ export function WorkspacePage(): ReactNode {
                 <dd>{upgrade.data?.latest_version ?? '—'}</dd>
               </div>
             </dl>
-            <div className="form-actions">
-              <button
-                className="primary-button"
-                type="button"
-                disabled={prepare.isPending}
-                onClick={() => prepare.mutate()}
-              >
-                {t('workspace.prepareUpgrade', { defaultValue: '准备升级' })}
-              </button>
-              <button
-                className="secondary-button"
-                type="button"
-                disabled={upgrade.isFetching}
-                onClick={() => void upgrade.refetch()}
-              >
-                {t('common.refresh', { defaultValue: '刷新' })}
-              </button>
-            </div>
+            {upgradeUnavailable ? (
+              <p className="oo-workspace-failure" data-testid="upgrade-unavailable">
+                <StatusBadge tone="warning">
+                  {t('workspace.upgradeUnavailableBadge', { defaultValue: '尚未实现' })}
+                </StatusBadge>{' '}
+                {t('workspace.upgradeUnavailable', {
+                  defaultValue:
+                    '服务端把升级这几条路由留成了 501 桩，所以这里没有「准备升级」和「刷新」：点下去只会拿到 501，且点了不会发生任何升级。等真做出来之后按下面的说明接上，这两个按钮会自动出现。',
+                })}
+              </p>
+            ) : (
+              <div className="form-actions">
+                <button
+                  className="primary-button"
+                  type="button"
+                  disabled={prepare.isPending}
+                  onClick={() => prepare.mutate()}
+                >
+                  {t('workspace.prepareUpgrade', { defaultValue: '准备升级' })}
+                </button>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  disabled={upgrade.isFetching}
+                  onClick={() => void upgrade.refetch()}
+                >
+                  {t('common.refresh', { defaultValue: '刷新' })}
+                </button>
+              </div>
+            )}
+            {/* 升级的错误端在这一张卡里，不端去备份卡：端过去它会被备份那两条
+                错误按 `??` 顺序挡掉，用户在升级这块点了东西却看不到任何提示。 */}
+            <ErrorNotice error={pickVisibleError(prepare.error, upgrade.error, history.error)} />
             <p className="field-help full-row">
-              {t('workspace.upgradeNotWired', {
-                defaultValue: '升级走 {{check}}、{{prepare}}、{{history}}：都已登记但尚未实现，所以版本号取不到（显示为「—」，不是占位版本号）。',
-                check: UPGRADE_CHECK_ROUTE,
-                prepare: UPGRADE_PREPARE_ROUTE,
-                history: UPGRADE_HISTORY_ROUTE,
-              })}
+              {upgradeUnavailable
+                ? t('workspace.upgradeNotWired', {
+                    defaultValue: '升级走 {{check}}、{{prepare}}、{{history}}：都已登记但尚未实现，所以版本号取不到（显示为「—」，不是占位版本号）。',
+                    check: UPGRADE_CHECK_ROUTE,
+                    prepare: UPGRADE_PREPARE_ROUTE,
+                    history: UPGRADE_HISTORY_ROUTE,
+                  })
+                : // 这句不能永远写死「尚未实现」：能力接上之后它就成了一句谎话，
+                  // 而用户正是靠它判断能不能点那两个按钮。
+                  t('workspace.upgradeRoutes', {
+                    defaultValue: '版本号取自 {{check}}，准备升级走 {{prepare}}，升级历史走 {{history}}。',
+                    check: UPGRADE_CHECK_ROUTE,
+                    prepare: UPGRADE_PREPARE_ROUTE,
+                    history: UPGRADE_HISTORY_ROUTE,
+                  })}
             </p>
           </Card>
         </div>

@@ -1317,6 +1317,9 @@ export const zhCN = {
       latestVersion: '最新版本',
       prepareUpgrade: '准备升级',
       upgradeNotWired: '升级走 {{check}}、{{prepare}}、{{history}}：都已登记但尚未实现，所以版本号取不到（显示为「—」，不是占位版本号）。',
+      upgradeUnavailableBadge: '尚未实现',
+      upgradeUnavailable: '服务端把升级这几条路由留成了 501 桩，所以这里没有「准备升级」和「刷新」：点下去只会拿到 501，且点了不会发生任何升级。等真做出来之后按下面的说明接上，这两个按钮会自动出现。',
+      upgradeRoutes: '版本号取自 {{check}}，准备升级走 {{prepare}}，升级历史走 {{history}}。',
     },
     models: {
       title: '模型管理',

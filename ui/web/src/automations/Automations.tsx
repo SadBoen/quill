@@ -18,7 +18,7 @@ import {
   type CronWrite,
 } from './api'
 import { DREAM_ROUTE, listDream, type DreamItem } from './dreamApi'
-import { pickVisibleError, routeMissing } from './capability'
+import { pickVisibleError, routeMissing } from '../api/capability'
 
 const HEARTBEAT_PATH = 'HEARTBEAT.md'
 const HEARTBEAT_TEMPLATE = `# Heartbeat
@@ -95,7 +95,7 @@ export function AutomationsPage(): ReactNode {
   const dreamItems: DreamItem[] = dream.data?.pages.flatMap((page) => page.items) ?? []
 
   // 这台实例有没有定时任务这个能力。**没有就别画那个表单** ——
-  // 理由见 capability.ts：能填能提交但必然 404 的表单，比没有这个功能更糟，
+  // 理由见 api/capability.ts：能填能提交但必然 404 的表单，比没有这个功能更糟，
   // 因为用户会以为它建成了。下方那句「下一步：实现 /api/cron…」已经说清了缺什么。
   const cronUnavailable = routeMissing(cron.error)
 
