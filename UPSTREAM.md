@@ -137,6 +137,18 @@ git diff HEAD FETCH_HEAD --stat        # 改了哪些文件
 
 **注意**：Octop ≠ OpenOctopus，是两个不同项目。前者是设计参考，后者是 CSS 移植基准。
 
+### MCP transport 枚举：参考命名，不是照抄
+
+`0007_mcp_transport_alignment.sql` 把 `mcp_servers.transport` 对齐成前端发的那套值。
+**这套枚举不是从 Octop 逐字抄的**：Octop 只有 `'stdio' | 'streamable_http'` 两个值
+（`.octop-ref/octop/dashboard/src/api/modules/connectors.ts:128`），
+我们多了 `'sse'` 与 `'builtin'`。所以是「参考它的命名，我们自己做的选择」。
+
+这条更正**刻意没有写回那条迁移文件**：凡是应用过 0007 的库都记着那个文件的字节摘要，
+就地改它（哪怕只改注释）会让这些库一律判成漂移，整条迁移链就此停住 ——
+2026-10-07 就这么把 `0008` 卡住过，用量统计页与聊天页一起报 `no such column`。
+事实记在这里，迁移文件保持与当初被应用的字节完全一致。
+
 ---
 
 ## 改动这份文件时

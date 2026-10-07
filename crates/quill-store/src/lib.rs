@@ -239,10 +239,101 @@ pub const MIGRATIONS: &[Migration] = &[
     },
 ];
 
+/// 迁移台账里存的那个摘要。
+///
+/// **为什么摘要只看结构、不看注释**（2026-10-07 在本机踩到的真事故）：
+/// 提交 `1ad40f8` 只改了 `0007_mcp_transport_alignment.sql` 头部的注释 ——
+/// 把一句不准确的说法纠正成事实。按字节算摘要时这一条就不成立了，
+/// `migrate()` 于是对每一个「已应用过 0007」的库返回 `Drift` 并**整条链停住**，
+/// 排在它后面的 `0008_token_metrics` 永远不会被应用。后果是用量统计页
+/// 报 `no such column: cache_read_tokens`，专家与派工路由一律 503，
+/// 而服务器照常启动 —— 只有翻启动日志才看得见。
+///
+/// 注释不是结构。去掉注释与空行之后仍然逐字相同的两条迁移，建出来的库
+/// 完全一样，用摘要判它们「漂移了」是在报一件不存在的事。
+/// 真正要拦的是**改了 SQL 本身**，那种改动仍然会被判成漂移。
 fn checksum(sql: &str) -> Vec<u8> {
+    use sha2::{Digest, Sha256};
+    let d = Sha256::digest(structural(sql).as_bytes());
+    d[..16].to_vec()
+}
+
+/// 旧版口径的摘要：直接对整个文件字节取哈希。
+///
+/// 只在**读**已存在的台账时用来兜底，见 `migrate()`。
+/// 新的台账一律写 `checksum()` 的结果。
+fn raw_checksum(sql: &str) -> Vec<u8> {
     use sha2::{Digest, Sha256};
     let d = Sha256::digest(sql.as_bytes());
     d[..16].to_vec()
+}
+
+/// 去掉 SQL 注释与空白，只留结构。
+///
+/// `--` 行注释、`/* */` 块注释都去掉；单引号字符串字面量原样保留
+/// （否则 `'a--b'` 这种内容会被从中间截断）。剩下的行去掉首尾空白，
+/// 空行丢掉。引号不成对的残缺输入按「整段当注释」处理 ——
+/// 迁移文件是我们自己写的，真出现这种输入时宁可少算结构，也不能算错。
+fn structural(sql: &str) -> String {
+    let mut out = String::with_capacity(sql.len());
+    let mut line = String::with_capacity(sql.len());
+    let mut chars = sql.chars().peekable();
+    let mut in_block = false;
+
+    while let Some(c) = chars.next() {
+        if in_block {
+            if c == '*' && chars.peek() == Some(&'/') {
+                chars.next();
+                in_block = false;
+            }
+            continue;
+        }
+        match c {
+            '-' if chars.peek() == Some(&'-') => {
+                // 行注释：丢到行尾。
+                for c in chars.by_ref() {
+                    if c == '\n' {
+                        break;
+                    }
+                }
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                in_block = true;
+            }
+            '\'' => {
+                // 字符串字面量：连引号一起原样搬过去。
+                line.push('\'');
+                let mut closed = false;
+                for c in chars.by_ref() {
+                    line.push(c);
+                    if c == '\'' {
+                        closed = true;
+                        break;
+                    }
+                }
+                if !closed {
+                    // 引号没闭上：把已经攒下的当普通字符，不擅自丢弃。
+                    break;
+                }
+            }
+            '\n' => {
+                let t = line.trim();
+                if !t.is_empty() {
+                    out.push_str(t);
+                    out.push('\n');
+                }
+                line.clear();
+            }
+            _ => line.push(c),
+        }
+    }
+    let t = line.trim();
+    if !t.is_empty() {
+        out.push_str(t);
+        out.push('\n');
+    }
+    out
 }
 
 async fn ledger_exists(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
@@ -279,10 +370,12 @@ impl std::fmt::Display for MigrateError {
             Self::Ledger(e) => write!(f, "读写迁移台账失败：{e}"),
             Self::Drift { version, name } => write!(
                 f,
-                "迁移 {version}（{name}）的内容与已应用的记录不一致：\
-                 该迁移文件在首次应用后被改动过。\
-                 下一步：确认改动是否有意；数据库结构可能与代码预期不符，\
-                 请改用新建库或补一条新的迁移，不要就地改旧迁移。"
+                "迁移 {version}（{name}）的 SQL 与已应用的记录不一致：\
+                 这条迁移文件在首次应用后被改过结构。\
+                 下一步：别改旧迁移 —— 补一条新的迁移来做这个改动。\
+                 只改注释不受影响（摘要只看结构），\
+                 但也别顺手改：注释一改，别人读这份文件时看到的就是新说法，\
+                 而已经建好的库里跑的是旧写法。"
             ),
             Self::Apply { version, name, source } => {
                 write!(f, "应用迁移 {version}（{name}）失败：{source}")
@@ -314,7 +407,11 @@ pub async fn migrate(pool: &SqlitePool) -> Result<MigrationReport, MigrateError>
         };
 
         if let Some(prev) = prior {
-            if prev != sum {
+            // 台账里可能是旧口径的摘要（按整个文件字节算的）。
+            // 两种都认，是为了别把已经跑起来的库判成坏库 ——
+            // 判成坏库的后果是**整条迁移链停住**，比摘要口径不一致严重得多。
+            let legacy = raw_checksum(m.sql);
+            if prev != sum && prev != legacy {
                 return Err(MigrateError::Drift {
                     version: m.version,
                     name: m.name.to_string(),
@@ -1224,5 +1321,73 @@ mod tests {
     fn checksum_is_stable_and_label_sensitive() {
         assert_eq!(checksum("CREATE TABLE a(x);"), checksum("CREATE TABLE a(x);"));
         assert_ne!(checksum("CREATE TABLE a(x);"), checksum("CREATE TABLE a(y);"));
+    }
+
+    #[test]
+    fn comment_only_edits_do_not_count_as_drift() {
+        // 这正是 2026-10-07 踩到的事故：提交 1ad40f8 只改了 0007 头部的注释。
+        // 按字节算摘要时，已应用过 0007 的库会被判成漂移，整条链停住，
+        // 排在后面的 0008 永远不应用 —— 用量统计页报 no such column。
+        let applied = "-- 0007：抄 octop 的 transport 枚举。\nCREATE TABLE a(x);\n";
+        let edited = "-- 0007：把 mcp_servers 的契约对齐前端。\n--\n-- 写法上借了 Octop 的枚举命名。\nCREATE TABLE a(x);\n";
+        assert_eq!(
+            checksum(applied),
+            checksum(edited),
+            "只改注释必须算出同一个摘要"
+        );
+        assert_ne!(
+            checksum(applied),
+            raw_checksum(edited),
+            "按字节算就分道扬镳了 —— 这就是出事的那个口径"
+        );
+    }
+
+    #[test]
+    fn structural_change_is_still_drift() {
+        // 摘要不看注释，但不能连结构一起不看。
+        assert_ne!(checksum("CREATE TABLE a(x);"), checksum("CREATE TABLE a(x, y);"));
+        // 顺序也算结构。
+        assert_ne!(
+            checksum("CREATE TABLE a(x); CREATE TABLE b(y);"),
+            checksum("CREATE TABLE b(y); CREATE TABLE a(x);")
+        );
+    }
+
+    #[test]
+    fn structural_keeps_string_literals_intact() {
+        // 字符串里的 '--' 不是注释，不能从中间截断。
+        let sql = "INSERT INTO t(v) VALUES('a--b');";
+        assert_eq!(structural(sql), format!("{sql}\n"));
+        assert_ne!(structural(sql), structural("INSERT INTO t(v) VALUES('ab');"));
+    }
+
+    #[test]
+    fn structural_strips_line_and_block_comments_and_blank_lines() {
+        let sql = "-- 头\n\n/* 块\n注释 */\nCREATE TABLE a(x);   \n\n";
+        assert_eq!(structural(sql), "CREATE TABLE a(x);\n");
+    }
+
+    #[tokio::test]
+    async fn a_ledger_written_by_the_old_byte_checksum_is_not_drift() {
+        // 老库里的台账是按字节写的。换口径不能让这些库变成坏库：
+        // 判成坏库的后果是整条迁移链停住。
+        let pool = in_memory().await.expect("内存库");
+        for m in MIGRATIONS.iter() {
+            run_migration(&pool, m.sql).await.expect("迁移");
+            sqlx::query(
+                "INSERT INTO schema_version(version,name,checksum,applied_at,exec_ms,app_version,note) \
+                 VALUES(?,?,?,0,0,'test','')",
+            )
+            .bind(m.version)
+            .bind(m.name)
+            .bind(raw_checksum(m.sql))
+            .execute(&pool)
+            .await
+            .expect("写台账");
+        }
+
+        let report = migrate(&pool).await.expect("旧口径台账必须被接受");
+        assert!(report.applied.is_empty(), "不该重复应用");
+        assert_eq!(report.already_current.len(), MIGRATIONS.len());
     }
 }
