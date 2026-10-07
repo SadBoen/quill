@@ -126,9 +126,8 @@
 .models-vendor-head strong { font-size: 14px; }
 .models-vendor-head .models-count { margin-left: 0; }
 
-/* auto-fill 而不是 auto-fit：auto-fit 会把空轨道折叠掉，导致只有一个 preset 的
-   厂商组（阿里云往后的每一组）那张卡撑满整行，看起来像「排版坏了」。 */
-.models-preset-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); }
+/* 栅格与行距由 components/collection/collection.css 提供（那里同样是
+   auto-fill，所以只有一个 preset 的厂商组不会撑满整行）。 */
 .models-preset-card {
   background: var(--panel);
   border: 1px solid var(--line);

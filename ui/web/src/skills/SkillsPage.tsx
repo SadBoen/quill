@@ -3,6 +3,7 @@ import { type ReactNode, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Card, ErrorNotice, PageHeader, StatusBadge } from '../components/Page'
+import { CollectionView, ViewToggle, useViewMode } from '../components/collection'
 import { chatErrorMessage } from '../chat/chatApi'
 import { HubList } from './HubList'
 import {
@@ -15,6 +16,7 @@ import {
   type Skill,
 } from './skillsApi'
 import './skills.css'
+import './skills-card.css'
 
 /**
  * 技能包页。
@@ -94,49 +96,165 @@ function DeleteSkill({ skill }: { skill: Skill }): ReactNode {
   )
 }
 
-function SkillRow({ skill }: { skill: Skill }): ReactNode {
+/**
+ * 卡片形态。**常显只有 slug、状态、开关**，「模型能看到什么」和
+ * 「为什么没挂上」收进可展开区。
+ *
+ * 这么切是因为技能包比其他页面的条目多两块诊断文字，直接铺开的话卡片会被
+ * 那段话撑到比其他页面高一倍 —— 而这个页面的统一外壳正是靠等高成立的。
+ * 诊断信息在列表视图里仍然是常显的：列表本来就竖着长，多几行不影响扫视。
+ */
+function SkillCard({ skill }: { skill: Skill }): ReactNode {
   const { t } = useTranslation()
-  const client = useQueryClient()
+  const modelSees = skill.model_sees_summary ?? ''
 
+  return (
+    <article className="skill-card" data-slug={skill.slug} data-enabled={String(skill.enabled)}>
+      <div className="skill-card-head">
+        <code className="skills-slug">{skill.slug}</code>
+        <SkillBadges skill={skill} />
+      </div>
+
+      <p className="field-help skills-meta">
+        {t('skills.meta', {
+          chars: skill.content_chars ?? 0,
+          kind: skill.kind === 'builtin'
+            ? t('skills.kindBuiltin', { defaultValue: '内置' })
+            : t('skills.kindWorkspace', { defaultValue: '工作区' }),
+          version: skill.version,
+          defaultValue: '正文 {{chars}} 字符 · {{kind}} · v{{version}}',
+        })}
+      </p>
+
+      {/* 折叠区只装摘要本身 —— 那段占地方，但不影响用户做什么。
+          两句警告都留在外面常显：「打开开关也没用」和「为什么没挂上」
+          都会改变用户的下一步动作，而它们各自都是唯一的提示，
+          折起来等于把这两句话删了。 */}
+        {!modelSees ? (
+          <p className="field-help skill-card-warning">
+            {t('skills.noSummary', {
+              defaultValue:
+                '模型这一轮看不到这个技能的任何说明：既没有摘要，磁盘上也没有正文。打开开关也不会让模型知道它是干什么的。',
+            })}
+          </p>
+        ) : (
+          <details className="skill-card-detail">
+            <summary>{t('skills.cardDetail', { defaultValue: '模型这一轮看到什么' })}</summary>
+            <p className="skills-desc">{modelSees}</p>
+          </details>
+        )}
+        <SkillWhyNotMounted skill={skill} />
+
+      <SkillActions skill={skill} />
+    </article>
+  )
+}
+
+/** 「为什么没挂上」那两段。只在开关开着而模型看不见时才可能出现。 */
+function SkillWhyNotMounted({ skill }: { skill: Skill }): ReactNode {
+  const { t } = useTranslation()
+  if (!skill.enabled || skill.model_can_see) return null
+  return (
+    <>
+      {skill.not_mounted_reason ? (
+        <p className="skills-why" role="note">
+          {t('skills.whyHidden', {
+            why: skill.not_mounted_reason,
+            defaultValue: '开关是开的，但模型这一轮调不到它：{{why}}',
+          })}
+        </p>
+      ) : null}
+      {skill.content_missing ? (
+        <p className="skills-why" role="note">
+          {t('skills.whyContentMissing', {
+            defaultValue: '开关是开的，但磁盘上找不到正文文件，所以工具表里没有它。',
+          })}
+        </p>
+      ) : null}
+    </>
+  )
+}
+
+/** 状态徽标。两个视图共用 —— 同一件事不该在两处写成两套措辞。 */
+function SkillBadges({ skill }: { skill: Skill }): ReactNode {
+  const { t } = useTranslation()
+  const canSee = skill.model_can_see
+  return (
+    <span className="skill-badges">
+      {skill.enabled ? (
+        <StatusBadge tone="success">
+          {t('skills.badgeEnabled', { defaultValue: '已启用' })}
+        </StatusBadge>
+      ) : (
+        <StatusBadge tone="neutral">
+          {t('skills.badgeDisabled', { defaultValue: '未启用' })}
+        </StatusBadge>
+      )}
+      {skill.enabled && canSee ? (
+        <StatusBadge tone="success">
+          {t('skills.badgeModelSees', { defaultValue: '模型这一轮看得见' })}
+        </StatusBadge>
+      ) : null}
+      {skill.enabled && !canSee ? (
+        <StatusBadge tone="warning">
+          {t('skills.badgeEnabledButHidden', { defaultValue: '已启用 · 模型看不见' })}
+        </StatusBadge>
+      ) : null}
+      {skill.content_missing ? (
+        <StatusBadge tone="danger">
+          {t('skills.badgeContentMissing', { defaultValue: '正文文件不在了' })}
+        </StatusBadge>
+      ) : null}
+    </span>
+  )
+}
+
+/** 开关 + 删除。两个视图共用。 */
+function SkillActions({ skill }: { skill: Skill }): ReactNode {
+  const client = useQueryClient()
+  const { t } = useTranslation()
   const toggle = useMutation({
     mutationFn: (next: boolean) => setSkillEnabled(skill.slug, next),
     onSuccess: () => void client.invalidateQueries({ queryKey: SKILLS_KEY }),
   })
+  return (
+    <div className="skills-actions">
+      <label className="skills-switch">
+        <input
+          type="checkbox"
+          data-testid={`skills-toggle-${skill.slug}`}
+          checked={skill.enabled}
+          disabled={toggle.isPending}
+          onChange={(e) => toggle.mutate(e.target.checked)}
+        />
+        <span className="field-help">
+          {t('skills.toggleLabel', { defaultValue: '挂进对话工具表' })}
+        </span>
+      </label>
+      {toggle.isError ? (
+        <p className="form-error" role="alert">
+          {chatErrorMessage(toggle.error, t('skills.toggleFailed', { defaultValue: '切换失败。' }))}
+        </p>
+      ) : null}
+      <DeleteSkill skill={skill} />
+    </div>
+  )
+}
 
-  // 开关点亮后，界面上的「模型看得见」必须等服务端重新算过才更新，
-  // 所以这里用的是重新拉回来的列表，而不是本地乐观改写。
-  const canSee = skill.model_can_see
+/**
+ * 列表形态。诊断文字在这里是**常显**的：列表本来就竖着长，多几行不影响
+ * 扫视，而卡片里要收进可展开区正是为了等高。
+ */
+function SkillRow({ skill }: { skill: Skill }): ReactNode {
+  const { t } = useTranslation()
   const modelSees = skill.model_sees_summary ?? ''
 
   return (
-    <li className="skills-row" data-slug={skill.slug} data-enabled={String(skill.enabled)}>
+    <article className="skills-row" data-slug={skill.slug} data-enabled={String(skill.enabled)}>
       <div className="skills-row-main">
         <div className="skills-row-head">
           <code className="skills-slug">{skill.slug}</code>
-          {skill.enabled ? (
-            <StatusBadge tone="success">
-              {t('skills.badgeEnabled', { defaultValue: '已启用' })}
-            </StatusBadge>
-          ) : (
-            <StatusBadge tone="neutral">
-              {t('skills.badgeDisabled', { defaultValue: '未启用' })}
-            </StatusBadge>
-          )}
-          {skill.enabled && canSee ? (
-            <StatusBadge tone="success">
-              {t('skills.badgeModelSees', { defaultValue: '模型这一轮看得见' })}
-            </StatusBadge>
-          ) : null}
-          {skill.enabled && !canSee ? (
-            <StatusBadge tone="warning">
-              {t('skills.badgeEnabledButHidden', { defaultValue: '已启用 · 模型看不见' })}
-            </StatusBadge>
-          ) : null}
-          {skill.content_missing ? (
-            <StatusBadge tone="danger">
-              {t('skills.badgeContentMissing', { defaultValue: '正文文件不在了' })}
-            </StatusBadge>
-          ) : null}
+          <SkillBadges skill={skill} />
         </div>
 
         {/* 这里显示的是**模型这一轮真正看到的那段字**，不是库里的 description 列。
@@ -164,44 +282,11 @@ function SkillRow({ skill }: { skill: Skill }): ReactNode {
           })}
         </p>
 
-        {skill.enabled && !canSee && skill.not_mounted_reason ? (
-          <p className="skills-why" role="note">
-            {t('skills.whyHidden', {
-              why: skill.not_mounted_reason,
-              defaultValue: '开关是开的，但模型这一轮调不到它：{{why}}',
-            })}
-          </p>
-        ) : null}
-        {skill.enabled && !canSee && skill.content_missing ? (
-          <p className="skills-why" role="note">
-            {t('skills.whyContentMissing', {
-              defaultValue: '开关是开的，但磁盘上找不到正文文件，所以工具表里没有它。',
-            })}
-          </p>
-        ) : null}
+        <SkillWhyNotMounted skill={skill} />
       </div>
 
-      <div className="skills-row-actions">
-        <label className="skills-switch">
-          <input
-            type="checkbox"
-            data-testid={`skills-toggle-${skill.slug}`}
-            checked={skill.enabled}
-            disabled={toggle.isPending}
-            onChange={(e) => toggle.mutate(e.target.checked)}
-          />
-          <span className="field-help">
-            {t('skills.toggleLabel', { defaultValue: '挂进对话工具表' })}
-          </span>
-        </label>
-        {toggle.isError ? (
-          <p className="form-error" role="alert">
-            {chatErrorMessage(toggle.error, t('skills.toggleFailed', { defaultValue: '切换失败。' }))}
-          </p>
-        ) : null}
-        <DeleteSkill skill={skill} />
-      </div>
-    </li>
+      <SkillActions skill={skill} />
+    </article>
   )
 }
 
@@ -255,6 +340,7 @@ function InstalledSkills(): ReactNode {
   const enabled = skills.filter((s) => s.enabled)
   const visible = skills.filter((s) => s.model_can_see)
   const summaryChars = enabledSummaryChars(skills)
+  const { viewMode, setViewMode } = useViewMode('skills')
 
   return (
     <div className="settings-stack">
@@ -268,13 +354,16 @@ function InstalledSkills(): ReactNode {
             '共 {{count}} 个，启用 {{enabled}} 个 —— 其中模型这一轮真的看得见 {{visible}} 个。',
         })}
         actions={(
-          <button
-            className="secondary-button"
-            data-testid="skills-refresh"
-            onClick={() => void query.refetch()}
-          >
-            {t('common.refresh', { defaultValue: '刷新' })}
-          </button>
+          <span className="skills-toolbar">
+            <ViewToggle viewMode={viewMode} onChange={setViewMode} testIdPrefix="skills-view" />
+            <button
+              className="secondary-button"
+              data-testid="skills-refresh"
+              onClick={() => void query.refetch()}
+            >
+              {t('common.refresh', { defaultValue: '刷新' })}
+            </button>
+          </span>
         )}
       >
         {query.isError ? (
@@ -291,13 +380,6 @@ function InstalledSkills(): ReactNode {
         {query.isPending ? (
           <p className="empty-state">{t('common.loading', { defaultValue: '加载中…' })}</p>
         ) : null}
-        {!query.isPending && skills.length === 0 ? (
-          <p className="empty-state">
-            {t('skills.empty', {
-              defaultValue: '还没有安装任何技能包。可以到「技能市场」里挑一个装上。',
-            })}
-          </p>
-        ) : null}
 
         {skills.length > 0 ? (
           <p className="field-help skills-cost">
@@ -312,13 +394,20 @@ function InstalledSkills(): ReactNode {
         {/* 空列表时不渲染 <ul>：留一个空壳在 DOM 里，读屏软件会念出
             「列表，0 项」，而界面上写的是「还没有安装任何技能包」——
             两句话在描述同一个空状态，不该同时出现。 */}
-        {skills.length > 0 ? (
-          <ul className="skills-list">
-            {skills.map((item) => (
-              <SkillRow key={item.slug} skill={item} />
-            ))}
-          </ul>
-        ) : null}
+        <CollectionView
+          viewMode={viewMode}
+          items={skills}
+          cardKey={(item) => item.slug}
+          renderCard={(item) => <SkillCard skill={item} />}
+          renderList={(item) => <SkillRow skill={item} />}
+          empty={(
+            <p className="empty-state">
+              {t('skills.empty', {
+                defaultValue: '还没有安装任何技能包。可以到「技能市场」里挑一个装上。',
+              })}
+            </p>
+          )}
+        />
       </Card>
     </div>
   )

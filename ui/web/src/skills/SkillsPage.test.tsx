@@ -1,6 +1,9 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// ?raw 把样式文件当字符串读进来（jsdom 不加载 CSS，算不了样式）。
+import skillsCardCss from './skills-card.css?raw'
 
 import i18n from '../i18n'
 import { SkillsPage } from './SkillsPage'
@@ -58,10 +61,137 @@ function renderPage(skills: Skill[], onPatch?: (slug: string, body: unknown) => 
 
 beforeEach(async () => {
   await i18n.changeLanguage('zh-CN')
+  localStorage.clear()
 })
 
 afterEach(() => {
   vi.unstubAllGlobals()
+})
+
+describe('卡片与列表两种看法', () => {
+  it('默认是卡片，切换器在', async () => {
+    renderPage([skill({ slug: 'one' })])
+    await waitFor(() => expect(screen.getByText('one')).toBeInTheDocument())
+    expect(screen.getByTestId('skills-view-card')).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByTestId('skills-view-list')).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('切到列表后同一个技能还在，开关照样能用', async () => {
+    const seen: [string, unknown][] = []
+    renderPage([skill({ slug: 'beta' })], (slug, body) => seen.push([slug, body]))
+    await waitFor(() => expect(screen.getByText('beta')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByTestId('skills-view-list'))
+    expect(screen.getByTestId('skills-view-list')).toHaveAttribute('aria-pressed', 'true')
+
+    // 少一种能力就等于告诉用户「切到列表就不能改了」，而那不是真的。
+    const box = screen.getByTestId('skills-toggle-beta') as HTMLInputElement
+    box.click()
+    await waitFor(() => expect(seen.length).toBe(1))
+    expect(seen[0]).toEqual(['beta', { enabled: true }])
+  })
+
+  /**
+   * 卡片形态里，两句警告必须**常显**。
+   *
+   * 这一条挡过一次真错：第一版把「打开开关也没用」折进了默认收起的
+   * `<details>`，于是这句话默认看不见 —— 而它是这句话唯一的出现位置，
+   * 等于被删了。能折起来的只有占地方的摘要正文。
+   */
+  it('卡片形态下，没有摘要的警告常显，不折进展开区', async () => {
+    renderPage([
+      skill({ slug: 'mute', model_sees_summary: '', content_chars: 0 }),
+      skill({ slug: 'ghost', enabled: true, model_can_see: false, not_mounted_reason: '正文不在磁盘上' }),
+    ])
+    await waitFor(() => expect(screen.getByText('mute')).toBeInTheDocument())
+
+    // 关键不是「文本在不在 DOM 里」—— testing-library 查得到收起的
+    // `<details>` 内部内容，但**用户看不见**。要断言的是这两句话的祖先里
+    // 没有收起的 details：摘要正文可以折，警告不行。
+    for (const warning of [
+      within(screen.getByText('mute').closest('.skill-card') as HTMLElement).getByText(/打开开关也不会让模型知道/),
+      within(screen.getByText('ghost').closest('.skill-card') as HTMLElement).getByText(/正文不在磁盘上/),
+    ]) {
+      const foldedAncestor = warning.closest('details:not([open])')
+      expect(
+        foldedAncestor,
+        '警告被折进了默认收起的区域，用户根本看不见',
+      ).toBeNull()
+    }
+  })
+
+  it('卡片形态下有摘要时，那段正文折起来（它占地方但不影响用户做什么）', async () => {
+    renderPage([skill({ slug: 'talky', model_sees_summary: '这是一段摘要。' })])
+    await waitFor(() => expect(screen.getByText('talky')).toBeInTheDocument())
+    const card = screen.getByText('talky').closest('.skill-card') as HTMLElement
+    const details = within(card).getByText('模型这一轮看到什么').closest('details') as HTMLDetailsElement
+    expect(details).not.toBeNull()
+    expect(details.open).toBe(false)
+  })
+
+  it('偏好被记住，键归技能包自己名下', async () => {
+    renderPage([skill({ slug: 'one' })])
+    await waitFor(() => expect(screen.getByText('one')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('skills-view-list'))
+    expect(localStorage.getItem('quill:skills:view')).toBe('list')
+  })
+
+  /**
+   * 两种看法都必须能改开关。
+   *
+   * 第一版只测了卡片：把卡片里那份 `SkillActions` 删掉，测试照样全绿 ——
+   * 因为当时那张卡就是默认看到的。少一种能力等于告诉用户「切到列表就不能改了」。
+   */
+  it.each(['card', 'list'] as const)('%s 形态下开关都在且可用', async (view) => {
+    const seen: [string, unknown][] = []
+    if (view === 'list') localStorage.setItem('quill:skills:view', 'list')
+    renderPage([skill({ slug: 'sw', enabled: false })], (slug, body) => seen.push([slug, body]))
+    await waitFor(() => expect(screen.getByText('sw')).toBeInTheDocument())
+
+    const box = screen.getByTestId('skills-toggle-sw') as HTMLInputElement
+    expect(box).toBeInTheDocument()
+    box.click()
+    await waitFor(() => expect(seen.length).toBe(1))
+    expect(seen[0]).toEqual(['sw', { enabled: true }])
+  })
+
+  /**
+   * 动作区是两种看法共用的组件，所以它身上不能带任何形态专属的类名。
+   *
+   * 这一条挡过一次真错：`.skill-card-actions` 里写着 `margin-top: auto` 和
+   * `border-top`，那是「贴在卡片底边」的做法。列表行里同一个类名就把一条竖线
+   * 画在了「挂进对话工具表」旁边，而那列还被正文挤到只剩几十像素，字折成两行。
+   * 界面上看就是：列表视图整体是坏的。jsdom 不加载 CSS，所以这里断言的是
+   * 组件结构，样式那条由下一个判据守。
+   */
+  it.each(['card', 'list'] as const)('%s 形态下动作区都用同一个共用类名', async (view) => {
+    if (view === 'list') localStorage.setItem('quill:skills:view', 'list')
+    renderPage([skill({ slug: 'act' })])
+    await waitFor(() => expect(screen.getByText('act')).toBeInTheDocument())
+
+    const row = screen.getByText('act').closest(view === 'list' ? '.skills-row' : '.skill-card') as HTMLElement
+    const actions = within(row).getByTestId('skills-toggle-act').closest('div') as HTMLElement
+    expect(actions.className.trim().split(/\s+/)).toContain('skills-actions')
+  })
+
+  /**
+   * 「贴到卡底、画分隔线」只属于卡片，样式里必须带 `.skill-card` 限定。
+   *
+   * jsdom 不算样式，所以这条直接读 CSS 源文件：`.skills-actions` 的无条件
+   * 规则里不许出现 border-top / margin-top。这正是上面那个 bug 的形状 ——
+   * 一条只对一种看法成立、却写成了无条件规则的声明。
+   */
+  it('卡片专属的贴底样式不会漏到共用的动作区上', async () => {
+    const css = skillsCardCss
+    // 只看无条件的 `.skills-actions { ... }` 块（后面紧跟 `{` 的那个）。
+    const shared = /^\.skills-actions \{([^}]*)\}/m.exec(css)
+    expect(shared, '.skills-actions 的无条件规则不见了').not.toBeNull()
+    expect(shared![1], '贴底/分隔线是卡片专属的，不能写在共用的动作区上').not.toMatch(
+      /border-top|margin-top/,
+    )
+    // 而卡片自己那份必须有，否则卡片底部会没有那条线。
+    expect(css).toMatch(/\.skill-card \.skills-actions \{[^}]*border-top/)
+  })
 })
 
 describe('技能包页', () => {

@@ -1,0 +1,46 @@
+/* 列表形态的行样式。骨架来自 components/collection/collection.css，
+   这里只补设备页自己的条目内容。 */
+
+/* ---------- MCP 列表行 ----------
+   行里是四段东西：名称与地址、能力与工具的诊断、按钮。竖着一段一段排，
+   不排成并排 —— 诊断那段的宽度由它自己的内容决定（工具名和「服务器里的
+   原名」长短差很多），跟它并排放就会一块儿被挤到换行、位置随内容变，
+   扫视时找不到下一行的同类信息在哪。 */
+.mcp-row {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+}
+
+.mcp-row-main {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  min-width: 0;
+}
+
+.mcp-row-main strong {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+}
+
+/* 按钮贴到行的右端。列表天然是「一屏扫若干行」，按钮落在同一个横向位置上
+   比跟在内容后面更省眼睛。 */
+.mcp-row .form-actions {
+  align-self: flex-end;
+}
+
+/* ---------- 两种形态都要修的一处 ---------- */
+
+/* 工具名那两列在卡片窄栏里会顶破卡片右边界。`.mcp-tool-item` 是 flex，
+   子项默认 `min-width: auto` 也就是不肯小于内容宽度，于是 code 里的长名字
+   把整行撑出去，`.mcp-tool-item code` 的 `word-break: break-all` 因为
+   没有可断的宽度而不起作用。 */
+.mcp-tool-item > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

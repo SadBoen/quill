@@ -216,6 +216,10 @@ export const en = {
       editTitle: 'Edit knowledge base',
       writeNotWired: 'Quill currently only exposes read-only wiki routes, so this page cannot save or delete anything. Next step: implement {{route}}, together with the expected_version used for optimistic concurrency.',
     },
+    collection: {
+      viewCard: 'Cards',
+      viewList: 'List',
+    },
     chat: {
       you: 'You',
       thinking: 'Thinking',
@@ -358,6 +362,7 @@ export const en = {
       tabInstalled: 'Installed',
       tabMarket: 'Market',
       listTitle: 'Installed skill packs',
+      cardDetail: 'What the model sees this turn',
       listDescription: '{{count}} in total, {{enabled}} enabled — of which the model can actually see {{visible}} this turn.',
       loadFailed: 'The skill list did not load',
       loadFailedRetry: 'The skill list did not load. Next step: hit refresh at the top right to retry.',
@@ -1192,6 +1197,7 @@ export const zhCN = {
       tabInstalled: '已安装',
       tabMarket: '技能市场',
       listTitle: '已安装的技能',
+      cardDetail: '模型这一轮看到什么',
       listDescription: '共 {{count}} 个，启用 {{enabled}} 个 —— 其中模型这一轮真的看得见 {{visible}} 个。',
       loadFailed: '技能列表没加载出来',
       loadFailedRetry: '技能列表没加载出来。下一步：点右上角刷新重试。',
@@ -1670,6 +1676,10 @@ export const zhCN = {
       mcpRouteNote: '数据来自 {{route}}。quill 只有一套实例级 MCP，没有「服务端覆盖设备」的那层，所以本页与「扩展 · MCP 服务」是同一份配置的两种入口。',
       adminPages: '管理页面',
       settingsNotWired: '字段 {{field}} 拿不到值：{{route}} 在 quill 里未登记，因此表单保持只读，也不显示任何占位数据。下一步：实现 {{route}} 后再开放保存。',
+    },
+    collection: {
+      viewCard: '卡片',
+      viewList: '列表',
     },
     chat: {
       you: '我',

@@ -1,0 +1,13 @@
+/* 列表形态的行样式。骨架来自 components/collection/collection.css，
+   这里只补模型页自己的条目内容与工具条。 */
+
+.model-row {
+  min-width: 0;
+}
+
+/* 工具条：厂商 tab 与卡片/列表切换器并排。 */
+.models-toolbar {
+  align-items: center;
+  display: inline-flex;
+  gap: 10px;
+}

@@ -1,0 +1,81 @@
+/* ---------- 卡片形态 ----------
+   骨架（栅格、行距）来自 components/collection/collection.css，这里只补
+   技能包自己的条目内容样式。别在这里写布局 —— 五个页面的布局必须一致，
+   各自写一份就等于又回到「五张卡片宽窄不一」的老问题。 */
+
+/* 卡片本体沿用通用面板的边框与圆角，不另发明一套。 */
+.skill-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+}
+
+.skill-card-head {
+  align-items: flex-start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: space-between;
+}
+
+/* 徽标自己占一整行而不是挤在 slug 后面：技能包最多能挂四个徽标，
+   挤在一起会把 slug 折成两行。 */
+.skill-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.skill-card-detail {
+  border-top: 1px solid var(--line);
+  padding-top: 6px;
+}
+
+.skill-card-detail > summary {
+  color: var(--faint);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+/* 「打开开关也没用」那句警告：它常显在卡片上，所以要一眼能看见，
+   不能和那句折叠摘要一样淡。 */
+.skill-card-warning {
+  background: var(--panel);
+  border-left: 2px solid var(--warning);
+  padding-left: 8px;
+}
+
+/* 动作区（开关 + 删除）两个视图共用，所以这里只放两者都成立的部分：
+   横向排列。贴底、画分隔线这类「贴在卡片底边」的做法只属于卡片，
+   写在无条件的规则里会在列表的行尾画出一条竖线。 */
+.skills-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+/* 只有卡片需要把动作区推到卡底并画一条分隔线。 */
+.skill-card .skills-actions {
+  border-top: 1px solid var(--line);
+  margin-top: auto;
+  padding-top: 8px;
+}
+
+/* 列表里它是行尾的一列：不许被正文挤窄，「挂进对话工具表」会折成两行。 */
+.skills-row .skills-actions {
+  flex-shrink: 0;
+  min-width: 148px;
+}
+
+/* 切换器与刷新按钮并排。 */
+.skills-toolbar {
+  align-items: center;
+  display: inline-flex;
+  gap: 8px;
+}

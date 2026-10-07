@@ -248,27 +248,8 @@
 }
 .experts-toolbar-search-clear:hover { color: var(--ink); }
 
-/* 视图切换：Octop 是 antd Segmented。 */
-.experts-view-mode {
-  background: var(--panel-soft);
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  display: inline-flex;
-  padding: 2px;
-}
-.experts-view-mode-item {
-  background: transparent;
-  border: 0;
-  border-radius: 7px;
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 11px;
-  font-weight: 700;
-  padding: 4px 10px;
-}
-.experts-view-mode-item:hover { color: var(--ink); }
-.experts-view-mode-item[aria-pressed="true"] { background: var(--panel); color: var(--accent-strong); }
-.experts-view-mode-label { align-items: center; display: inline-flex; gap: 4px; }
+/* 视图切换器的样式已移到 components/collection/collection.css ——
+   它现在由五个页面共用，留一份在这里就是两份会各自漂移的真相。 */
 
 .experts-toolbar-icon-btn {
   align-items: center;

@@ -231,11 +231,11 @@ it('卡片与列表两种看法都能切，且偏好被记住', async () => {
   expect(list?.getAttribute('data-view')).toBe('list')
   expect(document.querySelectorAll('[data-slug="pdf-toolkit"]')).toHaveLength(1)
   // 记忆键与「我的专家」共用一个：在那边选过列表，这边不该又变回卡片。
-  expect(localStorage.getItem('octop:experts-view')).toBe('list')
+  expect(localStorage.getItem('quill:experts:view')).toBe('list')
 
   fireEvent.click(screen.getByTestId('experts-market-view-card'))
   expect(list?.getAttribute('data-view')).toBe('card')
-  expect(localStorage.getItem('octop:experts-view')).toBe('card')
+  expect(localStorage.getItem('quill:experts:view')).toBe('card')
 })
 
 it('装完那张卡横跨整行，结果说明不会挤在窄格里', async () => {

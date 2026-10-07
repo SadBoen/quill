@@ -168,6 +168,22 @@ button, a, input, textarea, select, summary, [role="button"] { touch-action: man
 .compact-stats dt { font-size: var(--text-2xs); }
 
 /*
+ * .device-card -- 卡片改为竖向 flex，让 `.form-actions` 能贴到卡底。
+ *
+ * 基准给的是 `display: block`，所以每张卡的高度由自己的内容决定：MCP 服务
+ * 三张卡里「探测失败」那张最长，按钮就浮在它内容的末尾，而最短那张的按钮
+ * 悬在中间、底下空一大块。卡片一列摆开，那道不齐的底边一眼就看出来。
+ * 竖向 flex + `margin-top: auto` 让按钮落在同一个位置，和技能包页的做法一致。
+ */
+.device-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.device-card .compact-stats { margin-top: 0; }
+.device-card .form-actions { margin-top: auto; padding-top: 8px; }
+
+/*
  * .sidebar-health -- 侧栏页脚那行模型状态。
  *
  * 它以前直接借用对话页的 .chat-banner。那个类是为「对话区里横跨整幅的提示

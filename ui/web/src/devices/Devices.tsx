@@ -3,6 +3,7 @@ import { type FormEvent, type ReactNode, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Card, ErrorNotice, PageHeader } from '../components/Page'
+import { CollectionView, ViewToggle, useViewMode } from '../components/collection'
 import {
   MCP_ROUTE,
   listMcpServers,
@@ -23,6 +24,7 @@ import {
   mcpSecretMap,
   readMcpForm,
 } from './mcpConfig'
+import './devices-row.css'
 
 const MCP_KEY = ['mcp-servers'] as const
 
@@ -272,6 +274,7 @@ export function DeviceListPage(): ReactNode {
   const hasDraft = draft !== null
   const stateOf = (server: McpServerConfig): McpRowState => mcpRowState(server, savedServers, hasDraft)
   const unsavedCount = countUnsaved(servers, savedServers, hasDraft)
+  const { viewMode, setViewMode } = useViewMode('devices')
 
   const save = useMutation({
     mutationFn: (current: McpDraft) => saveMcpServers(current.servers),
@@ -327,59 +330,38 @@ export function DeviceListPage(): ReactNode {
         <ErrorNotice error={config.error ?? save.error} />
         {draftBanner(unsavedCount, t)}
         <McpLinkStatus body={config.data} route={MCP_ROUTE} />
-        <div className="card-grid">
-          {servers.map((server) => {
-            const state = stateOf(server)
-            return (
-            <article className="device-card" data-testid="mcp-card" data-row-state={state} key={server.name}>
-              <div className="device-card-top">
-                <span className="device-glyph" aria-hidden="true">{transportGlyph(server.transport)}</span>
-                <span className="mcp-summary">
-                  <span>{formatCapabilityMode(server.enabled_capabilities, t)}</span>
-                </span>
-              </div>
-              <h2>{server.name} {unsavedBadge(state, t)}</h2>
-              <p><code>{serverAddress(server)}</code></p>
-              <McpProbeStatus status={mcpStatusOf(config.data, server.name)} />
-              <dl className="compact-stats">
-                <div>
-                  <dt>{t('mcp.transport', { defaultValue: '传输方式' })}</dt>
-                  <dd>{server.transport}</dd>
-                </div>
-                <div>
-                  <dt>{t('mcp.maxConcurrency', { defaultValue: '并发上限' })}</dt>
-                  <dd>{server.max_concurrent_calls ?? '—'}</dd>
-                </div>
-                <div>
-                  <dt>{t('mcp.exactNames', { defaultValue: '能力名' })}</dt>
-                  <dd>{server.enabled_capabilities?.length ?? '—'}</dd>
-                </div>
-              </dl>
-              <div className="form-actions">
-                <button
-                  className="secondary-button"
-                  aria-label={t('mcp.editNamed', { name: server.name, defaultValue: '编辑 {{name}}' })}
-                  onClick={() => {
-                    setEditing({ server })
-                    setFormError(null)
-                  }}
-                >
-                  {t('common.edit', { defaultValue: '编辑' })}
-                </button>
-                <button
-                  className="danger-link"
-                  aria-label={deleteLabel(state, server.name, t)}
-                  onClick={() => updateDraft(servers.filter((item) => item.name !== server.name))}
-                >
-                  {state === 'new'
-                    ? t('mcp.discardDraft', { defaultValue: '丢弃草稿' })
-                    : t('common.delete', { defaultValue: '删除' })}
-                </button>
-              </div>
-            </article>
-            )
-          })}
-        </div>
+        <ViewToggle viewMode={viewMode} onChange={setViewMode} testIdPrefix="devices-view" />
+        <CollectionView
+          viewMode={viewMode}
+          items={servers}
+          cardKey={(server) => server.name}
+          renderCard={(server) => (
+            <McpCard
+              server={server}
+              state={stateOf(server)}
+              address={serverAddress(server)}
+              status={mcpStatusOf(config.data, server.name)}
+              onEdit={() => {
+                setEditing({ server })
+                setFormError(null)
+              }}
+              onDelete={() => updateDraft(servers.filter((item) => item.name !== server.name))}
+            />
+          )}
+          renderList={(server) => (
+            <McpRow
+              server={server}
+              state={stateOf(server)}
+              address={serverAddress(server)}
+              status={mcpStatusOf(config.data, server.name)}
+              onEdit={() => {
+                setEditing({ server })
+                setFormError(null)
+              }}
+              onDelete={() => updateDraft(servers.filter((item) => item.name !== server.name))}
+            />
+          )}
+        />
         {config.isPending ? <p className="empty-state">{t('devices.loading', { defaultValue: '加载中…' })}</p> : null}
         {!config.isPending && !servers.length ? <p className="empty-state">{t('devices.empty', { defaultValue: '还没有配置 MCP 服务。' })}</p> : null}
         <Card
@@ -403,7 +385,109 @@ export function DeviceListPage(): ReactNode {
 }
 
 
-export function McpForm({
+export interface McpEntryProps {
+  server: McpServerConfig
+  state: McpRowState
+  address: string
+  status: ReturnType<typeof mcpStatusOf>
+  onEdit: () => void
+  onDelete: () => void
+}
+
+/**
+ * 一个 MCP 服务的公共部分。两种视图都画同样的四行内容
+ * （名称、地址、传输/并发/能力数、探测结果），只是排布不同 ——
+ * 内容一样、排版不一样，才叫两种看法而不是两个页面。
+ */
+function McpFacts({ server }: { server: McpServerConfig }): ReactNode {
+  const { t } = useTranslation()
+  return (
+    <dl className="compact-stats">
+      <div>
+        <dt>{t('mcp.transport', { defaultValue: '传输方式' })}</dt>
+        <dd>{server.transport}</dd>
+      </div>
+      <div>
+        <dt>{t('mcp.maxConcurrency', { defaultValue: '并发上限' })}</dt>
+        <dd>{server.max_concurrent_calls ?? '—'}</dd>
+      </div>
+      <div>
+        <dt>{t('mcp.exactNames', { defaultValue: '能力名' })}</dt>
+        <dd>{server.enabled_capabilities?.length ?? '—'}</dd>
+      </div>
+    </dl>
+  )
+}
+
+/** 编辑 / 删除。两个视图共用，按钮的行为不该因为看法不同而不同。 */
+function McpActions({ server, state, onEdit, onDelete }: {
+  server: McpServerConfig
+  state: McpRowState
+  onEdit: () => void
+  onDelete: () => void
+}): ReactNode {
+  const { t } = useTranslation()
+  return (
+    <div className="form-actions">
+      <button
+        className="secondary-button"
+        aria-label={t('mcp.editNamed', { name: server.name, defaultValue: '编辑 {{name}}' })}
+        onClick={onEdit}
+      >
+        {t('common.edit', { defaultValue: '编辑' })}
+      </button>
+      <button
+        className="danger-link"
+        aria-label={deleteLabel(state, server.name, t)}
+        onClick={onDelete}
+      >
+        {state === 'new'
+          ? t('mcp.discardDraft', { defaultValue: '丢弃草稿' })
+          : t('common.delete', { defaultValue: '删除' })}
+      </button>
+    </div>
+  )
+}
+
+function McpCard({ server, state, address, status, onEdit, onDelete }: McpEntryProps): ReactNode {
+  const { t } = useTranslation()
+  return (
+    <article className="device-card" data-testid="mcp-card" data-row-state={state}>
+      <div className="device-card-top">
+        <span className="device-glyph" aria-hidden="true">{transportGlyph(server.transport)}</span>
+        <span className="mcp-summary">
+          <span>{formatCapabilityMode(server.enabled_capabilities, t)}</span>
+        </span>
+      </div>
+      <h2>{server.name} {unsavedBadge(state, t)}</h2>
+      <p><code>{address}</code></p>
+      <McpProbeStatus status={status} />
+      <McpFacts server={server} />
+      <McpActions server={server} state={state} onEdit={onEdit} onDelete={onDelete} />
+    </article>
+  )
+}
+
+function McpRow({ server, state, address, status, onEdit, onDelete }: McpEntryProps): ReactNode {
+  const { t } = useTranslation()
+  return (
+    <article className="mcp-row" data-testid="mcp-row" data-row-state={state}>
+      <div className="mcp-row-main">
+        <strong>
+          <span className="device-glyph" aria-hidden="true">{transportGlyph(server.transport)}</span>
+          {server.name} {unsavedBadge(state, t)}
+        </strong>
+        <code className="field-help">{address}</code>
+        <span className="field-help">{formatCapabilityMode(server.enabled_capabilities, t)}</span>
+      </div>
+      <McpFacts server={server} />
+      <McpProbeStatus status={status} />
+      <McpActions server={server} state={state} onEdit={onEdit} onDelete={onDelete} />
+    </article>
+  )
+}
+
+function McpForm({
   onSubmit,
   serverSide = false,
   initial,

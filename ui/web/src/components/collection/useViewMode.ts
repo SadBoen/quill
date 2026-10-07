@@ -54,9 +54,17 @@ export interface ViewModeControl {
  * @param defaultMode 没有记忆时用哪个。默认 `'card'`：
  * 卡片视图不需要滚动就能扫到标题，列表适合逐字段比较 —— 猜错了代价也很小，
  * 一键就能切。
+ * @param storageKeyOverride 显式指定存储键。**只有一个场景该用**：同一页面的
+ * 多个 tab 应当共享一个偏好。专家页的「我的专家」与「市场」就是这种关系 ——
+ * 用户在一个 tab 选了列表，切到另一个不该又变回卡片，那看起来像切换丢了。
+ * 除此之外一律走 `page`。
  */
-export function useViewMode(page: string, defaultMode: ViewMode = 'card'): ViewModeControl {
-  const storageKey = viewStorageKey(page)
+export function useViewMode(
+  page: string,
+  defaultMode: ViewMode = 'card',
+  storageKeyOverride?: string,
+): ViewModeControl {
+  const storageKey = storageKeyOverride ?? viewStorageKey(page)
   const [viewMode, setViewModeState] = useState<ViewMode>(() =>
     loadViewMode(storageKey, defaultMode),
   )

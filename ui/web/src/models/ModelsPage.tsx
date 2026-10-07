@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 
 import { chatErrorMessage } from '../chat/chatApi'
 import { Card, ErrorNotice, PageHeader, StatusBadge } from '../components/Page'
+import { CollectionView, ViewToggle, useViewMode } from '../components/collection'
 import {
   MODELS_ROUTE,
   PROVIDERS_ROUTE,
@@ -33,6 +34,7 @@ import {
   presetVendorsOf,
 } from './presets'
 import './models.css'
+import './models-row.css'
 
 const PROVIDERS_KEY = ['admin-providers'] as const
 const POOL_KEY = ['admin-models'] as const
@@ -115,6 +117,7 @@ export function ModelsPage(): ReactNode {
   const [openPresetId, setOpenPresetId] = useState<string | null>(null)
   const [openCustomId, setOpenCustomId] = useState<string | null>(null)
   const [creatingCustom, setCreatingCustom] = useState(false)
+  const { viewMode, setViewMode } = useViewMode('models')
 
   const invalidate = async (): Promise<void> => {
     await Promise.all([
@@ -217,21 +220,24 @@ export function ModelsPage(): ReactNode {
         <Card
           title={t('models.presetsTitle', { defaultValue: '预设提供商' })}
           actions={(
-            <div className="models-tabs" role="tablist">
-              {(['cloud', 'local'] as PresetTab[]).map((value) => (
-                <button
-                  key={value}
-                  type="button"
-                  role="tab"
-                  className="models-tab"
-                  aria-selected={tab === value}
-                  onClick={() => setTab(value)}
-                >
-                  {value === 'cloud'
-                    ? t('models.tabCloud', { defaultValue: '云端' })
-                    : t('models.tabLocal', { defaultValue: '本地' })}
-                </button>
-              ))}
+            <div className="models-toolbar">
+              <div className="models-tabs" role="tablist">
+                {(['cloud', 'local'] as PresetTab[]).map((value) => (
+                  <button
+                    key={value}
+                    type="button"
+                    role="tab"
+                    className="models-tab"
+                    aria-selected={tab === value}
+                    onClick={() => setTab(value)}
+                  >
+                    {value === 'cloud'
+                      ? t('models.tabCloud', { defaultValue: '云端' })
+                      : t('models.tabLocal', { defaultValue: '本地' })}
+                  </button>
+                ))}
+              </div>
+              <ViewToggle viewMode={viewMode} onChange={setViewMode} testIdPrefix="models-view" />
             </div>
           )}
         >
@@ -259,12 +265,14 @@ export function ModelsPage(): ReactNode {
                         })}
                       </span>
                     </header>
-                    <div className="models-preset-grid">
-                      {presets.map((preset) => {
+                    <CollectionView
+                      viewMode={viewMode}
+                      items={presets}
+                      cardKey={(preset) => preset.preset_id}
+                      renderCard={(preset) => {
                         const provider = configured.find((p) => p.preset_id === preset.preset_id)
                         return (
                           <PresetCard
-                            key={preset.preset_id}
                             preset={preset}
                             provider={provider}
                             open={openPresetId === preset.preset_id}
@@ -279,8 +287,27 @@ export function ModelsPage(): ReactNode {
                             onSetDefault={makeDefault.mutate}
                           />
                         )
-                      })}
-                    </div>
+                      }}
+                      renderList={(preset) => {
+                        const provider = configured.find((p) => p.preset_id === preset.preset_id)
+                        return (
+                          <PresetRow
+                            preset={preset}
+                            provider={provider}
+                            open={openPresetId === preset.preset_id}
+                            isPending={savePreset.isPending}
+                            deletePending={remove.isPending}
+                            defaultPending={makeDefault.isPending}
+                            onToggle={() => setOpenPresetId((current) => (
+                              current === preset.preset_id ? null : preset.preset_id
+                            ))}
+                            onSave={(payload) => savePreset.mutate({ provider, payload })}
+                            onDelete={remove.mutate}
+                            onSetDefault={makeDefault.mutate}
+                          />
+                        )
+                      }}
+                    />
                   </section>
                 )
               })}
@@ -303,10 +330,12 @@ export function ModelsPage(): ReactNode {
               : null}
           />
           {customProviders.length > 0 ? (
-            <div className="models-preset-grid full-row">
-              {customProviders.map((provider) => (
+            <CollectionView
+              viewMode={viewMode}
+              items={customProviders}
+              cardKey={(provider) => provider.id}
+              renderCard={(provider) => (
                 <CustomProviderCard
-                  key={provider.id}
                   provider={provider}
                   open={openCustomId === provider.id}
                   isPending={saveCustom.isPending}
@@ -319,8 +348,23 @@ export function ModelsPage(): ReactNode {
                   onSetDefault={makeDefault.mutate}
                   onToggleEnabled={(enabled) => toggleEnabled.mutate({ id: provider.id, enabled })}
                 />
-              ))}
-            </div>
+              )}
+              renderList={(provider) => (
+                <CustomProviderRow
+                  provider={provider}
+                  open={openCustomId === provider.id}
+                  isPending={saveCustom.isPending}
+                  deletePending={remove.isPending}
+                  defaultPending={makeDefault.isPending}
+                  togglePending={toggleEnabled.isPending}
+                  onToggle={() => setOpenCustomId((current) => (current === provider.id ? null : provider.id))}
+                  onSave={(payload) => saveCustom.mutate({ id: provider.id, payload })}
+                  onDelete={remove.mutate}
+                  onSetDefault={makeDefault.mutate}
+                  onToggleEnabled={(enabled) => toggleEnabled.mutate({ id: provider.id, enabled })}
+                />
+              )}
+            />
           ) : (
             <p className="field-help full-row">
               {t('models.customEmpty', {
@@ -836,6 +880,19 @@ function CustomProviderCard({
       </div>
     </article>
   )
+}
+
+/**
+ * 列表形态：卡片那一整套（展开的编辑表单、状态徽标、操作按钮）照搬，
+ * 只是竖着排成一列、不并排放。**编辑表单两种看法都能用** —— 少一种能力
+ * 就等于告诉用户「切到列表就不能改了」，而那不是真的。
+ */
+function PresetRow(props: React.ComponentProps<typeof PresetCard>): ReactNode {
+  return <article className="model-row">{<PresetCard {...props} />}</article>
+}
+
+function CustomProviderRow(props: React.ComponentProps<typeof CustomProviderCard>): ReactNode {
+  return <article className="model-row">{<CustomProviderCard {...props} />}</article>
 }
 
 function ProviderForm({
