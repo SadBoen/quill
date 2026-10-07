@@ -206,7 +206,15 @@ export const ITEMS = [
     id: 'B2-2',
     milestone: 'M2',
     title: '成员执行器存在（子 agent 真被执行）',
-    verify: { kind: 'absent', path: 'crates/quill-server/src/member_executor.rs' },
+    // 2026-10-08 修正：原来写的是
+    // `{ kind: 'absent', path: 'crates/quill-server/src/member_executor.rs' }` ——
+    // **方向写反了**：文件不存在时它判「已验证」，即一个说「执行器存在」的条目
+    // 靠「不存在」通过。以代码为准：生产侧唯一的 `impl MemberExecutor` 是
+    // quill-agent 里的泛型 `SharedExecutor<E>` 包装，**没有任何具体实现**；
+    // `MockMemberExecutor` 只在 quill-testkit（测试用）。所以这是真实缺口，
+    // 应如实报「未通过」，而不是靠一个反向判据蒙混过去。
+    // 新判据：server 侧出现一个具体的 Executor 结构才算做完（当前 grep 退出非 0）。
+    verify: { kind: 'cmd', cmd: 'grep -rqE "struct [A-Za-z]*Executor" crates/quill-server/src', cwd: 'wsl' },
     blocks: ['M2'],
   },
   {
@@ -382,10 +390,13 @@ export const ITEMS = [
     //
     // 判据是自动的：门禁 .octop-baseline-check.mjs 全仓扫一遍，
     // 任何把它当 Octop 功能参考的引用都报红。
-    verify: {
-      kind: 'script',
-      how: 'node .octop-baseline-check.mjs（另有 --self-test；变异验证见 .scratch/mut-octop-baseline.ps1）',
-    },
+    // 判据是自动的：门禁 .octop-baseline-check.mjs 全仓扫一遍，
+    // 任何把它当 Octop 功能参考的引用都报红。
+    //
+    // 2026-10-08 修正：原来写的是 `kind: 'script'` —— 而 status.mjs 的 decide()
+    // 只认 test/cmd/absent/manual，于是这条一直被判成「判据本身坏了」（真实状态未知）。
+    // 现在改成 cmd，与它的实质（跑一条脚本看退出码）一致。
+    verify: { kind: 'cmd', cmd: 'node .octop-baseline-check.mjs', cwd: 'wsl' },
     blocks: [],
   },
   {
@@ -443,9 +454,13 @@ export const ITEMS = [
     // 2. /api/mbti/apply 强制带 expert_id —— 人格挂在专家上，
     //    一个用户有多个专家，没有「当前智能体」这个说得清的默认目标；
     // 3. 存历史（每人最近 20 条 + 原始作答），Octop 只有一个 persona_mbti 字段。
+    // 2026-10-08 修正：原来写的是 `kind: 'auto'`（decide() 不认，恒判「判据坏了」）。
+    // 它的实质是跑几组测试，改成 cmd。
     verify: {
-      kind: 'auto',
-      how: 'cargo test -p quill-server --lib mbti:: ；--test mbti_http ；ui/web 的 src/mbti',
+      kind: 'cmd',
+      cmd: 'cargo test -p quill-server --lib mbti && cargo test -p quill-server --test mbti_http',
+      cwd: 'wsl',
+      slow: true,
     },
     blocks: [],
   },

@@ -233,6 +233,26 @@ console.log('\n场景 12：**前端用例名必须由真实代码拼出来**（�
   );
 }
 
+console.log('\n场景 13：selfCheck 必须抓到**未知的判据种类**（这是个真实发生过的洞）');
+{
+  // 2026-10-08：`project/items.mjs` 里 B6-4 写了 `kind: 'script'`、
+  // B6-6 写了 `kind: 'auto'`。`decide()` 会把它判成「判据坏了」，
+  // 但 `selfCheck()` 里当时**没有「未知 kind」这一支** —— 于是 `--self-check`
+  // （门禁里跑的那道）报「全部成立」，两条真实状态未知的判据一路绿灯。
+  // 判据声明坏掉比判据未通过更严重，而自检的首要职责正是抓它。
+  const items = [
+    { id: 'Z1', verify: { kind: 'script', how: '跑个脚本' } },
+    { id: 'Z2', verify: { kind: 'auto', how: '跑测试' } },
+  ];
+  const problems = selfCheck(items, baseEvidence.knownTests);
+  const joined = problems.join('\n');
+  check('抓到 kind=script', /Z1/.test(joined) && /未知的判据种类/.test(joined), true);
+  check('抓到 kind=auto', /Z2/.test(joined), true);
+  // 反向：把 kind 改回合法的一种，就不该再报 kind 的问题。
+  const ok = selfCheck([{ id: 'Z3', verify: { kind: 'cmd', cmd: 'ls' } }], baseEvidence.knownTests);
+  check('合法 kind 不误报', ok, []);
+}
+
 console.log('\n' + '='.repeat(60));
 if (failed === 0) {
   console.log(`status 自测：${checks} 项断言全对 —— 判定逻辑可信`);

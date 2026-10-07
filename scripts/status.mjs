@@ -72,6 +72,18 @@ export const VERDICT = {
   BROKEN: '判据本身坏了',
 };
 
+/**
+ * 受支持的判据种类。**`decide` 与 `selfCheck` 必须共用这一份**。
+ *
+ * 为什么单独抽出来：它们曾经各写各的 —— `decide` 的 `default` 会把未知 kind
+ * 判成「判据坏了」，而 `selfCheck` 里**没有「未知 kind」这一支**，
+ * 于是 `--self-check`（门禁里跑的那道）报「全部成立」，抓不到
+ * `project/items.mjs` 里 `kind: 'script'` / `kind: 'auto'` 那两条 ——
+ * 它们的真实状态是未知的，却一路绿灯。这正是「判据声明坏了却没人发现」那一类。
+ * 现在两边都从这里取，加一种 kind 只改一处。
+ */
+export const KNOWN_KINDS = new Set(['test', 'cmd', 'absent', 'manual']);
+
 function log(...a) {
   if (!AS_JSON) console.log(...a);
 }
@@ -277,6 +289,20 @@ export function selfCheck(items, knownTests) {
     const v = it.verify;
     if (!v || !v.kind) {
       problems.push(`${it.id}: 缺 verify`);
+      continue;
+    }
+    // **未知的 kind 必须在这里就报出来。**
+    //
+    // 这个洞真实存在过：`project/items.mjs` 里两条待办写了 `kind: 'script'`
+    // 与 `kind: 'auto'`，`decide()` 把它们判成「判据坏了」，但 `--self-check`
+    // （门禁里跑的那道）没有这一支，于是自检报「全部成立」——
+    // 两条真实状态未知的判据一路绿灯。判据声明坏掉比判据未通过更严重，
+    // 自检的首要职责恰恰是抓这一种，所以它必须先认识「合法 kind 有哪些」。
+    if (!KNOWN_KINDS.has(v.kind)) {
+      problems.push(
+        `${it.id}: 未知的判据种类「${v.kind}」—— decide() 只会把它判成「判据坏了」；` +
+          `合法的是：${[...KNOWN_KINDS].join(' / ')}`,
+      );
       continue;
     }
     if (v.kind === 'test' && knownTests && !knownTests.has(v.name)) {
