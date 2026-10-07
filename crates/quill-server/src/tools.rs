@@ -27,6 +27,12 @@ use quill_provider::{ToolCall, ToolSpec};
 /// 取 4 是够用的上限：真实任务（查两次专家、再查一次会话）用不到一半。
 pub const MAX_TOOL_ROUNDS: usize = 4;
 
+// 上限本身是个不变量：改成 0 会让工具永不执行，改得太大则每轮都在烧真实模型调用。
+// 用**编译期断言**而不是单测 —— 这条断言在构造上就不会失败（所以 clippy 报
+// assertions_on_constants 是对的），它的价值在于构建时就把改坏的人拦下。
+const _: () = assert!(MAX_TOOL_ROUNDS > 0, "工具往返上限不能是 0，否则工具永远不执行");
+const _: () = assert!(MAX_TOOL_ROUNDS <= 8, "工具往返上限过大：每轮都是一次真实模型调用");
+
 /// 轮次用尽后、去掉工具再问一次时塞给模型的话。
 ///
 /// 措辞要点：**让它把手上已有的信息说出来，而不是要求它「给出正确答案」**。
@@ -804,18 +810,6 @@ mod tests {
                 spec.name
             );
         }
-    }
-
-    #[test]
-    fn the_round_trip_budget_is_bounded() {
-        // 不设上限的话，一个「不断调用工具」的循环能把请求挂到超时，
-        // 且每一轮都在烧 CPU。
-        assert!(MAX_TOOL_ROUNDS > 0, "上限不能是 0，否则工具永远不执行");
-        assert!(
-            MAX_TOOL_ROUNDS <= 8,
-            "上限 {} 太大：每轮都是一次真实模型调用",
-            MAX_TOOL_ROUNDS
-        );
     }
 
     #[test]

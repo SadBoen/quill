@@ -403,15 +403,14 @@ const MAX_PAGES: usize = 8;
 
 /// 拉起一个 stdio 子进程，并**同时**开始排空它的 stderr。
 ///
+/// `spawn_stdio` 的返回：`(传输层, stderr 累积器, 排空任务句柄)`。
+/// 排空句柄是 `Option`：传输层在没接 stderr 时不会给我们一个。
+type SpawnedStdio = (TokioChildProcess, Arc<StderrTail>, Option<JoinHandle<()>>);
+
 /// 探测与 `tools/call` 走的是**同一个**拉起函数。分成两份的话，「探测时用的
 /// cwd/env」与「真正调用工具时用的 cwd/env」就会漂，而那种漂移只在某一个
 /// 特定工具上发作，极难查。
-///
-/// 返回 `(传输层, stderr 累积器, 排空任务句柄)`。排空句柄是 `Option`：
-/// 传输层在没接 stderr 时不会给我们一个。
-fn spawn_stdio(
-    row: &McpServerRow,
-) -> Result<(TokioChildProcess, Arc<StderrTail>, Option<JoinHandle<()>>), String> {
+fn spawn_stdio(row: &McpServerRow) -> Result<SpawnedStdio, String> {
     let command = row.command.clone().unwrap_or_default();
     let mut cmd = Command::new(command.trim());
     cmd.args(&row.args);

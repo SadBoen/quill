@@ -33,6 +33,10 @@ const OP_WRITE: &str = "写入 SKILL";
 /// 用户以为装上了，模型按残缺内容行事，比报错难查得多。
 pub const MAX_SKILL_CHARS: usize = 20_000;
 
+// 与专家人格上限（`MAX_INSTRUCTIONS_CHARS` = 20000）同量级。用**编译期断言**钉住 ——
+// 这是常量不变量，原来的单测 assert 在构造上不会失败（clippy 提示是对的）。
+const _: () = assert!(MAX_SKILL_CHARS == 20_000, "SKILL 上限必须与专家人格上限同量级");
+
 pub const COLUMNS: &str = "name, version, source, source_ref, description, enabled, \
      content_hash, install_path, tool_allowlist_json, created_at, updated_at";
 
@@ -485,13 +489,5 @@ mod tests {
             json!(["task"]),
             "没有必填参数的话模型会不知道该传什么"
         );
-    }
-
-    #[test]
-    fn the_size_limit_is_the_same_order_as_the_expert_persona_limit() {
-        // 两处上限应同量级，否则会出现「专家人格放得下、SKILL 放不下」
-        // 这种说不清的失败。
-        assert_eq!(MAX_SKILL_CHARS, 20_000);
-        assert!(MAX_SKILL_CHARS <= 20_000);
     }
 }

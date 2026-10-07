@@ -270,6 +270,7 @@ fn strip_think_block(content: &str) -> Option<String> {
 /// 缓存两项按两种真实形状都读，因为两种都在真机上出现过：
 ///   - OpenAI 系：`prompt_tokens_details.cached_tokens`（vLLM / llama.cpp / OpenRouter）
 ///   - Anthropic 系：`cache_read_input_tokens` / `cache_creation_input_tokens` 顶层字段
+///
 /// 两者都**不存在**时返回 `None`（不知道），不是 `Some(0)`（真的没缓存）。
 /// 这个区分直接决定统计条敢不敢显示「命中率」。
 pub fn usage_from_value(usage: &Value) -> TokenUsage {

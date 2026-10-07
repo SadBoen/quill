@@ -117,13 +117,19 @@ async fn create_session(app: AppState) -> String {
     v["id"].as_str().expect("应当返回会话 id").to_string()
 }
 
+/// 一条消息行的字段：`(role, input, output, turn_ms, cache_read)`。
+type MessageRow<'a> = (&'a str, i64, i64, Option<i64>, Option<i64>);
+
+/// 拷成自有值后的同一行（闭包是 `move` + `'static`，不能借 `rows`）。
+type OwnedMessageRow = (i64, String, i64, i64, Option<i64>, Option<i64>);
+
 /// 直接铺消息行，省掉起一个模型端点。
-fn seed_messages(t: &TestDb, sid: &str, rows: &[(&str, i64, i64, Option<i64>, Option<i64>)]) {
+fn seed_messages(t: &TestDb, sid: &str, rows: &[MessageRow<'_>]) {
     let uid = user_id().as_bytes().to_vec();
     let sid_v = quill_domain::SessionId::parse(sid).expect("会话 id 合法").as_bytes().to_vec();
     // 先全部拷成自有值再进循环：下面的闭包是 `move` + `'static` 的，
     // 直接从 `rows` 里取引用会借出一个逃不出本函数的借用。
-    let owned: Vec<(i64, String, i64, i64, Option<i64>, Option<i64>)> = rows
+    let owned: Vec<OwnedMessageRow> = rows
         .iter()
         .enumerate()
         .map(|(i, (role, input, output, turn_ms, cache_read))| {

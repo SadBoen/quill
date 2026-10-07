@@ -107,6 +107,10 @@ pub const DEFAULT_TIMEOUT_SECS: u64 = 300;
 /// thinking 就吃光额度、只回思考没有正文，4096 才稳。宁可多留也别让用户
 /// 看到空回复——超限会走 `provider_unavailable` 并提示调这个旋钮。
 pub const DEFAULT_MAX_TOKENS: u32 = 4096;
+
+// 这条断言在构造上不会失败（clippy 对常量 assert 的提示是对的），所以用**编译期**
+// 断言：改小 DEFAULT_MAX_TOKENS 的人会在构建时被拦下，而不是等跑测试。
+const _: () = assert!(DEFAULT_MAX_TOKENS >= 4096, "默认 token 预算对推理模型太小");
 pub const DEFAULT_MAX_CONTEXT_TOKENS: u32 = 32768;
 pub const DEFAULT_COMPACTION_THRESHOLD_TOKENS: u32 = 8000;
 /// `compaction_threshold_tokens` 的下限：4001 留出正文空间，避免一压就空。
@@ -296,15 +300,6 @@ mod tests {
         assert_eq!(
             d.compaction_threshold_tokens,
             DEFAULT_COMPACTION_THRESHOLD_TOKENS
-        );
-    }
-
-    #[test]
-    fn the_default_token_budget_leaves_room_for_a_reasoning_model_to_answer() {
-        // 实测：Qwen3.5-4B 在 2048 下 thinking 吃光额度、只回思考没有正文。
-        assert!(
-            DEFAULT_MAX_TOKENS >= 4096,
-            "默认 token 预算对推理模型太小，会让用户只看到空回复：{DEFAULT_MAX_TOKENS}"
         );
     }
 

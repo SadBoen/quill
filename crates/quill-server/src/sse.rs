@@ -85,19 +85,12 @@ impl futures_core::Stream for FrameStream {
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::sync::Arc;
 
-    /// 不唤醒任何东西的 waker。用来在单测里直接 `poll` 一条流 ——
+    /// 不唤醒任何东西的 waker：标准库的 `Waker::noop()` 就是它，不必自己写一个
+    /// `Wake` 实现（clippy::manual_noop_waker）。用途是在单测里直接 `poll` 一条流 ——
     /// `futures-core` 只有 trait，没有 `StreamExt::next()` 可用。
-    struct NoopWaker;
-
-    impl std::task::Wake for NoopWaker {
-        fn wake(self: Arc<Self>) {}
-    }
-
     fn poll_once<S: futures_core::Stream + Unpin>(mut stream: S) -> Poll<Option<S::Item>> {
-        let waker = std::task::Waker::from(Arc::new(NoopWaker));
-        let mut cx = Context::from_waker(&waker);
+        let mut cx = Context::from_waker(std::task::Waker::noop());
         std::pin::Pin::new(&mut stream).poll_next(&mut cx)
     }
 

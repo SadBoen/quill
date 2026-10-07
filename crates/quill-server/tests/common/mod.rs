@@ -1,3 +1,8 @@
+// 共享测试夹具模块：每个集成测试二进制都 `mod common;`，但只用得上其中一部分。
+// 不整体放行 dead_code 的话，任一没被某个二进制用到的 pub 助手都会在那里报 warning
+// —— 而那是「模块被多个二进制共用」的必然结果，不是死代码。
+#![allow(dead_code)]
+
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;

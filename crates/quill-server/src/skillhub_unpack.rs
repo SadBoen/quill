@@ -11,6 +11,10 @@ use std::io::Read;
 
 use crate::skillhub::{MAX_ZIP_COMPRESSION_RATIO, MAX_ZIP_ENTRIES, MAX_ZIP_UNCOMPRESSED_BYTES};
 
+// zip 条目数上限是个常量不变量，用编译期断言钉住（原来写成单测里的
+// `assert!(MAX_ZIP_ENTRIES >= 1_000)`，那条断言在构造上不会失败）。
+const _: () = assert!(MAX_ZIP_ENTRIES >= 1_000, "zip 条目数上限过低");
+
 /// 一个技能包解出来的东西。
 // `Debug` 只为测试里的 `panic!("{other:?}")` 存在 —— 但有它才能在断言失败时
 // 打出实际拿到了什么，而不是一句「这里不对」。
@@ -673,9 +677,8 @@ mod tests {
 
     #[test]
     fn a_package_with_too_many_entries_is_refused() {
-        // 不真的造 2001 个文件（太慢），只断言上限常量本身被钉住，
-        // 并单独验证「条目数超限」这条错误信息是对的。
-        assert!(MAX_ZIP_ENTRIES >= 1_000);
+        // 不真的造 2001 个文件（太慢），只验证「条目数超限」这条错误信息是对的；
+        // 上限常量本身改由文件顶部的编译期断言钉住。
         let err = refuse("包里有 9999 个文件，超过 2000 个上限");
         assert!(err.message().contains("安全检查"));
     }

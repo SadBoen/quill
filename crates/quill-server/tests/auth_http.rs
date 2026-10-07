@@ -31,7 +31,6 @@ const WRONG_PW: &str = "definitely-not-the-one";
 /// 复合解析器里那个环境变量令牌背后的账号。
 const ENV_ADMIN: &str = "0192b7c8-0000-7000-8000-000000000001";
 const ENV_MEMBER: &str = "0192b7c8-0000-7000-8000-000000000002";
-const ENV_OTHER: &str = "0192b7c8-0000-7000-8000-000000000003";
 
 fn env_admin_id() -> quill_domain::UserId {
     quill_domain::UserId::parse(ENV_ADMIN).expect("测试 UID 必须合法")

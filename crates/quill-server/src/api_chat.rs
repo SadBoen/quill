@@ -715,6 +715,12 @@ pub const USAGE_SESSIONS_LIMIT: i64 = 200;
 /// 汇总规则 —— 那些规则（缺一条耗时就不给、没上报缓存就不报比率…）写两遍必然漂移。
 /// 这里只把行取出来、按会话分组喂给它。合并总计也是同一个函数跑一遍全量行，
 /// 所以「总计」和「每行加起来」必然一致。
+/// `GET /api/usage` 的行集合：会话行 + 每会话的 `(消息 id, 用量)`。
+type UsageRows = (
+    Vec<SessionRow>,
+    Vec<(Vec<u8>, crate::session_metrics::MessageUsage)>,
+);
+
 pub async fn usage(
     State(state): State<AppState>,
     user: AuthUser,
@@ -725,8 +731,7 @@ pub async fn usage(
     let (sessions, rows) = db
         .call(move |pool, _rt| {
             Box::pin(async move {
-                let r: Result<(Vec<SessionRow>, Vec<(Vec<u8>, crate::session_metrics::MessageUsage)>), quill_agent::AgentError> =
-                    async {
+                let r: Result<UsageRows, quill_agent::AgentError> = async {
                         let listed = sqlx::query(
                             "SELECT id, title, expert_id, last_active_at FROM sessions \
                              WHERE user_id = ? AND deleted_at IS NULL \
@@ -1129,14 +1134,16 @@ pub(crate) async fn prepare_turn(
         uid,
         sid,
         &user_id,
-        seq_user,
-        "user",
-        "complete",
-        &content,
-        None,
-        // 用户这一轮没调用模型，没有 token 概念。
-        TokenUsage::default(),
-        None,
+        MessageBody {
+            seq: seq_user,
+            role: "user",
+            status: "complete",
+            content: &content,
+            reasoning: None,
+            // 用户这一轮没调用模型，没有 token 概念。
+            usage: TokenUsage::default(),
+            turn_ms: None,
+        },
     )
     .await?;
 
@@ -1516,13 +1523,15 @@ pub(crate) async fn finish_turn(
         prep.uid,
         prep.sid,
         &assistant_id,
-        seq_assistant,
-        "assistant",
-        "complete",
-        &text,
-        Some(&reasoning),
-        usage,
-        Some(turn_ms),
+        MessageBody {
+            seq: seq_assistant,
+            role: "assistant",
+            status: "complete",
+            content: &text,
+            reasoning: Some(&reasoning),
+            usage,
+            turn_ms: Some(turn_ms),
+        },
     )
     .await?;
 
@@ -1763,19 +1772,38 @@ async fn next_seq(
     .map_err(storage)
 }
 
+/// 一条要写进 `messages` 的消息体。
+///
+/// 把这七列拼成一个结构体，是因为 `append_message` 原本有 11 个参数
+/// （`clippy::too_many_arguments`）：前四个（db/uid/sid/mid）是不变的定位参数，
+/// 后面这七个才随每一行而变。分组而不是整条 `#[allow]`，改的人一眼能看出
+/// 「变化的东西」与「定位的东西」是两回事。
+struct MessageBody<'a> {
+    seq: i64,
+    role: &'a str,
+    status: &'a str,
+    content: &'a str,
+    reasoning: Option<&'a str>,
+    usage: TokenUsage,
+    turn_ms: Option<i64>,
+}
+
 async fn append_message(
     db: &crate::db::DbBridge,
     uid: quill_domain::UserId,
     sid: [u8; 16],
     mid: &[u8; 16],
-    seq: i64,
-    role: &str,
-    status: &str,
-    content: &str,
-    reasoning: Option<&str>,
-    usage: TokenUsage,
-    turn_ms: Option<i64>,
+    body: MessageBody<'_>,
 ) -> Result<i64, ApiError> {
+    let MessageBody {
+        seq,
+        role,
+        status,
+        content,
+        reasoning,
+        usage,
+        turn_ms,
+    } = body;
     let content = content.to_string();
     let reasoning = reasoning.map(String::from);
     let role = role.to_string();

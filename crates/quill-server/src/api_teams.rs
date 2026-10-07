@@ -13,7 +13,8 @@
 //!   - TEAM_MEMBER_BUSY：quill 没有常驻 agent 进程，不存在「某个成员正在被占用」
 //!     这个状态。写一个永远走不到的错误分支等于凭空造状态。
 //!   - TEAM_NOT_SHAREABLE：quill 没有团队共享/发布功能，这个判断没有对象。
-//!   两者要等真出现「成员进程占用」与「团队分享」这两件事时再随功能一起加。
+//!
+//! 两者要等真出现「成员进程占用」与「团队分享」这两件事时再随功能一起加。
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
