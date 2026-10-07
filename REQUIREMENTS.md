@@ -33,7 +33,17 @@ llama.cpp旧了你就更新成最新版本，也可以换其他运行环境，�
 ## 项目定位（最高指示，不是需求）
 
 quill —— 个人 / 家庭 / 小团队自用的 Agent 平台。
-**以 Rust 为实现语言（前端 TS 属壳，不受此限）、以腾讯 octop 为产品外壳、以 goose 为 Agent 内核。**
+
+**最高指示（四条同级，全部来自用户原话）：**
+
+1. 以 **Rust** 为实现语言（前端 TS 属壳，不受此限）；
+2. 以腾讯 **octop** 为产品外壳；
+3. 以 **goose** 为 Agent 内核；
+4. **最终产物只打包 quill 一个项目**（2026-10-08 补充）：goose 与 octop 是**参考源**，
+   允许把它们的代码**抄进来**，但**不许把整个项目当依赖**加进 `Cargo.toml`。
+   唯一例外是**可调用的 API 服务**（进程外服务）—— goose 是 Rust 库、octop 后端是 Python，
+   两者都不是这种，所以两者只能抄、不能依赖。删掉 `vendor/goose` 与 `.octop-ref/octop`
+   后 `cargo build` 必须照常成功。
 
 代码在 `D:\96_CoderWorld\quill`（WSL 路径 `/mnt/d/96_CoderWorld/quill`）。
 
