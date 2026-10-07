@@ -16,11 +16,11 @@
 
 ## A. 门禁与地基（依最高指示第 5 条）
 
-- [ ] Q001 · 加 `rust-toolchain.toml` 固定 Rust 版本（现在**没有**，任何人都可能用不同版本编译）· 仓库根 · 文件存在且 `cargo --version` 与之相符
-- [ ] Q002 · 加 `deny.toml` 做依赖/许可证门禁 · 仓库根 · `cargo deny check` 能跑（或如实说明为何暂不可用）
-- [ ] Q003 · 定 `rustfmt.toml` 并做**一次性全量格式化**（单独一个提交，免得淹没真实 diff）· 仓库根 · `cargo fmt --check` 退出 0
-- [ ] Q004 · 把 `cargo fmt --check` 接进 `.github/workflows/gates.yml` · CI · 工作流里有这一步且能过
-- [ ] Q005 · 把 `cargo clippy --workspace --all-targets -- -D warnings` 接进 CI（现在刻意没跑）· CI · 工作流里有这一步且退出 0
+- [x] Q001 · 加 `rust-toolchain.toml` 固定 Rust 版本（现在**没有**，任何人都可能用不同版本编译）· 仓库根 · 文件存在且 `cargo --version` 与之相符
+- [x] Q002 · 加 `deny.toml` 做依赖/许可证门禁 · 仓库根 · `cargo deny check` 能跑（或如实说明为何暂不可用）
+- [x] Q003 · 定 `rustfmt.toml` 并做**一次性全量格式化**（单独一个提交，免得淹没真实 diff）· 仓库根 · `cargo fmt --check` 退出 0
+- [x] Q004 · 把 `cargo fmt --check` 接进 `.github/workflows/gates.yml` · CI · 工作流里有这一步且能过
+- [x] Q005 · 把 `cargo clippy --workspace --all-targets -- -D warnings` 接进 CI（现在刻意没跑）· CI · 工作流里有这一步且退出 0
 - [ ] Q006 · 给 `quill-server` 的 22 条内联 SQL 逐条收口到对应 `*_repo`（`api_chat.rs`）· `crates/quill-server/src/` · 该文件内 `sqlx::query` 计数降到 0
 - [ ] Q007 · 按 `BACKLOG.md` B0-4 定 `need_str`/`opt_str` 的规范语义并合并 5+3 份 · `crates/quill-server/src/jsonx.rs` · 只剩一份定义，且补了钉住新语义的测试
 - [ ] Q008 · `quill-server` 拆分：把 `api_*` 之外的通用件（`error.rs`/`db.rs`/`state.rs`）之外的巨石按域拆 crate 或子模块 · `crates/quill-server/src/` · 单文件上限显著下降且测试全绿

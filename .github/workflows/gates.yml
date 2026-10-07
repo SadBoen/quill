@@ -48,11 +48,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 只装工具链本体。这里刻意**不**开 clippy/rustfmt：它们要花时间装，
-      # 而本工作流并没有跑它们 —— 装了不用是纯浪费。等哪天真把 clippy
-      # 接进门禁（带 `-- -D warnings`），再把 components 加回来。
-      - name: 装 Rust
-        uses: dtolnay/rust-toolchain@stable
+      # 按仓库根的 `rust-toolchain.toml` 装工具链，并带上 rustfmt 与 clippy：
+      # 最高指示第 5 条把 `cargo fmt --check` 与 `cargo clippy -D warnings` 列为门禁的一部分。
+      # 用 `@master` 且**不**给 `toolchain` 输入，是为了让它读仓库里的 rust-toolchain.toml ——
+      # 否则会出现「本地钉 1.99.0、CI 跑浮动 stable」两边版本漂，门禁的绿就不是同一个绿的。
+      - name: 装 Rust（按 rust-toolchain.toml，含 rustfmt + clippy）
+        uses: dtolnay/rust-toolchain@master
+        with:
+          components: rustfmt, clippy
 
       # 缓存 cargo 产物与 npm 的下载缓存（**不是** node_modules）：
       # 下面跑的是 `npm ci`，它会先删掉 node_modules 再按 lock 重装 ——
@@ -96,6 +99,14 @@ jobs:
 
       - name: Rust 全部测试
         run: cargo test --workspace
+
+      # 最高指示第 5 条把这两道列为门禁的一部分。此前 CI 刻意没跑它们
+      # （旧注释原话「刻意不开 clippy/rustfmt」），于是一整类问题只能靠人记得手动看。
+      - name: Rust 格式检查（rustfmt）
+        run: cargo fmt --all -- --check
+
+      - name: Rust lint（clippy，warning 即失败）
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: 文本门禁 · 乱码
         run: node .mojibake-check.mjs

@@ -34,13 +34,13 @@ node scripts/status.mjs --json   # 机器可读
 `bash .scripts/gates.sh` 退出 0 才算活。覆盖：构建 / Rust 全部测试 / 前端
 typecheck·lint·vitest·build / 四道文本门禁。
 
-### B0-3 `cargo fmt` / `cargo clippy` 还没进门禁
-最高指示第 5 条把 `cargo clippy -D warnings` 与 `cargo fmt --check` 列为门禁的一部分，
-但 CI（`gates.yml:51`）原话是「刻意不开 clippy/rustfmt」，`.scripts/gates.sh` 也不含它们。
-实测：`cargo clippy --workspace --all-targets` 退出 0、零 warning；`cargo fmt --check`
-有 **481 个文件**差异（项目从未采用 rustfmt）。
-要落地第 5 条：先定 `rustfmt.toml` + 一次性全量格式化（**单独一个提交**，免得淹没真实 diff），
-再把两者接进 CI。
+### B0-3 `cargo fmt` / `cargo clippy` 已进门禁（2026-10-08）
+已落地（见 `project/queue.md` Q001–Q005）：`rust-toolchain.toml`（钉 1.99.0，含 rustfmt/clippy）、
+`rustfmt.toml`（默认风格）、一次性全量格式化（`cargo fmt --all -- --check` 差异 253 → **0**）、
+`deny.toml`；CI 里加了 `cargo fmt --all -- --check` 与
+`cargo clippy --workspace --all-targets -- -D warnings`。
+**还差一步**：`.scripts/gates.sh`（本地那条命令）尚未含这两步 —— 应与 CI 对齐，否则
+「一条命令跑全部门禁」是假的。
 
 ### B0-4 HTTP 层取值助手有 5 份 `need_str` / 3 份 `opt_str`，且语义不一致
 以代码为准（`grep -rn "fn need_str\|fn opt_str" crates/quill-server/src/`）：
