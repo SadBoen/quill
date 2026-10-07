@@ -36,9 +36,21 @@ function ctx(over: Partial<SessionContext> = {}): SessionContext {
   }
 }
 
-function renderRing(context: SessionContext, open = false) {
+function renderRing(
+  context: SessionContext,
+  open = false,
+  cache?: { cacheHit?: number | null; cacheRead?: number | null },
+) {
   const onToggle = vi.fn()
-  render(<ContextRing context={context} open={open} onToggle={onToggle} />)
+  render(
+    <ContextRing
+      context={context}
+      open={open}
+      onToggle={onToggle}
+      cacheHit={cache?.cacheHit ?? null}
+      cacheRead={cache?.cacheRead ?? null}
+    />,
+  )
   return { onToggle }
 }
 
@@ -103,5 +115,43 @@ describe('上下文小环', () => {
     render(<ContextRing context={ctx()} open={false} onToggle={onToggle} />)
     fireEvent.click(screen.getByRole('button'))
     expect(onToggle).toHaveBeenCalledTimes(1)
+  })
+
+  /**
+   * 缓存命中率搬到这里，而不是留在聊天页那排统计里。
+   *
+   * 判据是「没上报就不出现」：本地模型常常不报缓存 token，
+   * 那种情况下这一行必须整行消失，不能显示成「缓存命中 0%」——
+   * 0% 是一个断言，「没测到」不是。
+   */
+  describe('缓存命中率', () => {
+    it('报了就显示，报的是 0% 也照样显示', () => {
+      renderRing(ctx(), true, { cacheHit: 0, cacheRead: 0 })
+      expect(screen.getByRole('dialog')).toHaveTextContent('缓存命中 0%')
+    })
+
+    it('命中率与缓存 token 数一起说，单独一个比例没法解释', () => {
+      renderRing(ctx(), true, { cacheHit: 0.96, cacheRead: 575 })
+      const panel = screen.getByRole('dialog')
+      expect(panel).toHaveTextContent('96%')
+      expect(panel).toHaveTextContent('575')
+    })
+
+    it('上游没上报时整行不出现', () => {
+      renderRing(ctx(), true, { cacheHit: null, cacheRead: null })
+      expect(screen.getByRole('dialog')).not.toHaveTextContent('缓存命中')
+    })
+
+    it('不传这个 prop 时也不出现', () => {
+      // 默认值必须是「没有」而不是 0：调用方忘了传不该凭空多出一行断言。
+      render(<ContextRing context={ctx()} open onToggle={() => {}} />)
+      expect(screen.getByRole('dialog')).not.toHaveTextContent('缓存命中')
+    })
+
+    it('收起来的时候看不见，得点开才有', () => {
+      renderRing(ctx(), false, { cacheHit: 0.96, cacheRead: 575 })
+      expect(screen.queryByRole('dialog')).toBeNull()
+      expect(screen.getByRole('button')).not.toHaveTextContent('缓存命中')
+    })
   })
 })

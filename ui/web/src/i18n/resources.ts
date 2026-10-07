@@ -227,7 +227,7 @@ export const en = {
       expertNoPersona: '(no persona set)',
       expertHidden: '{{count}} more experts have "enabled by default" turned off, so they are not in this list.',
       sessionMeta: '{{count}} messages · {{model}}',
-      usage: '{{ms}} ms · in {{input}} / out {{output}} tokens',
+      usage: '{{ms}} ms · in {{input}} / out {{output}} tokens{{speed}}',
       tokenHint: 'Token stored in this browser',
       title: { loadingExpert: 'Loading expert…', noExpert: 'No expert available' },
       deleteGone:
@@ -241,6 +241,7 @@ export const en = {
         usedOf: 'Using {{used}} / {{max}} tokens ({{percent}}%)',
         noSegments: 'The server returned no breakdown.',
         charUnit: 'chars',
+        cacheHit: 'Cache hit {{percent}}% ({{tokens}} tokens from cache)',
       },
       sidebar: {
         label: 'Experts & chats',
@@ -1687,7 +1688,7 @@ export const zhCN = {
       expertNoPersona: '（未设置人格）',
       expertHidden: '另有 {{count}} 个专家已取消「默认启用」，不在这个下拉里。',
       sessionMeta: '{{count}} 条消息 · {{model}}',
-      usage: '{{ms}} 毫秒 · 入 {{input}} / 出 {{output}} tokens',
+      usage: '{{ms}} 毫秒 · 入 {{input}} / 出 {{output}} tokens{{speed}}',
       tokenHint: '令牌已保存在本机浏览器',
       title: { loadingExpert: '角色加载中…', noExpert: '没有可用角色' },
       deleteGone:
@@ -1700,6 +1701,7 @@ export const zhCN = {
         usedOf: '已占用 {{used}} / {{max}} tokens（{{percent}}%）',
         noSegments: '服务端没给出构成明细。',
         charUnit: '字符',
+        cacheHit: '缓存命中 {{percent}}%（{{tokens}} tokens 走缓存）',
       },
       sidebar: {
         label: '角色与会话',

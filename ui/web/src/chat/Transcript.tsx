@@ -15,13 +15,17 @@ function MessageRow({ message }: { message: ChatMessage }): ReactNode {
         <span>{formatTime(message.created_at, i18n.resolvedLanguage)}</span>
       </header>
       <ContentBlocks blocks={messageBlocks(message)} />
+      {/* 这一条的耗时与出入参。原先会话级统计条里也有一份「模型耗时」，
+          那是整个会话的求和 —— 同一件事在两个地方各说一次，且级别不同，
+          读者无从判断眼前这个数说的是哪一条。放在消息末尾就没有这个歧义。 */}
       {!isHuman && message.turn_ms > 0 ? (
-        <p className="chat-muted">
+        <p className="chat-muted" data-testid="chat-turn-usage">
           {t('chat.usage', {
             ms: message.turn_ms,
             input: message.input_tokens,
             output: message.output_tokens,
-            defaultValue: '{{ms}} ms · 入 {{input}} / 出 {{output}} tokens',
+            speed: formatSpeed(message.output_tokens, message.turn_ms),
+            defaultValue: '{{ms}} 毫秒 · 入 {{input}} / 出 {{output}} tokens{{speed}}',
           })}
         </p>
       ) : null}
@@ -122,6 +126,17 @@ export function ContentBlocks({ blocks }: { blocks: ContentBlock[] }): ReactNode
     }
     return null
   })
+}
+
+/**
+ * 每秒输出多少 token。算不出来就返回空串。
+ *
+ * 返回空串而不是「—」：这一行已经有耗时和出入参三个数了，
+ * 速度只是它们的商。真的少一个数时，那一行读起来会像坏了。
+ */
+function formatSpeed(outputTokens: number, turnMs: number): string {
+  if (!(outputTokens > 0) || !(turnMs > 0)) return ''
+  return ` · ${(outputTokens / (turnMs / 1000)).toFixed(1)} tok/s`
 }
 
 function formatTime(value: number, language: string | undefined): string {

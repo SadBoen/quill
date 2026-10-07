@@ -93,6 +93,17 @@
   width: 8px;
 }
 
+/* 缓存命中率。跟上面的构成明细之间留一道分隔线，
+   因为它是「花了多少钱」而上面是「占了多少位置」，两类信息。 */
+.chat-context-panel-cache {
+  border-top: 1px solid var(--line);
+  color: var(--ink);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  margin: 8px 0 0;
+  padding-top: 7px;
+}
+
 .chat-context-panel-note {
   color: var(--faint);
   font-size: 10px;

@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import './SessionMetricsBar.css'
 import {
+  CHAT_BAR_KEYS,
   formatMetric,
   metricLabel,
   visibleMetrics,
@@ -14,15 +15,19 @@ import {
  * 界面照抄 octop 的 `TrajectoryMetricsBar.tsx`：一排 `标签 值` 的 chip，
  * 用 `·` 分隔，贴在会话底部。
  *
- * 两处刻意的不同：
+ * 三处刻意的不同：
  * 1. octop 那个组件自己带 `agentId`/`threadId` 两个没用上的 prop，
  *    这里不抄 —— 抄进来就是两个误导性的死参数。
  * 2. `metrics` 为 null 时不渲染。octop 渲染空 div，这里直接不出现：
  *    一排什么都没有的统计条比没有统计条更让人困惑。
+ * 3. **显示的指标比 octop 少**。octop 一屏铺开十项，我们只留
+ *    `CHAT_BAR_KEYS` 三项。抄全了的后果是实测出来的：一屏 8 个词，
+ *    其中「轮次/回复」互相重复、「tok/s」可由旁边两个数直接除出来、
+ *    「缓存命中」属于上下文窗口而不属于花销。各归各位，见 `sessionMetrics.ts`。
  */
 export default function SessionMetricsBar({ metrics }: { metrics: SessionMetrics | null }) {
   const { t } = useTranslation()
-  const entries = metrics ? visibleMetrics(metrics) : []
+  const entries = metrics ? visibleMetrics(metrics, CHAT_BAR_KEYS) : []
 
   if (entries.length === 0) return null
 
@@ -57,7 +62,9 @@ export default function SessionMetricsBar({ metrics }: { metrics: SessionMetrics
 function chipText(key: SessionMetricKey, value: number, label: string): string {
   const text = formatMetric(key, value)
   // 轮次与速率把数字放前面：「3 轮次」「12.5 tok/s」读起来比反过来顺，
-  // 这是照抄 octop 的 chipText()。
+  // 这是照抄 octop 的 chipText()。当前 `CHAT_BAR_KEYS` 里没有这两类，
+  // 分支留着是因为用量统计页共用同一套 `formatMetric`，
+  // 改掉它会连带改坏那边。
   if (key === 'turns' || key === 'steps' || key === 'tok_per_s') {
     return `${text} ${label}`
   }

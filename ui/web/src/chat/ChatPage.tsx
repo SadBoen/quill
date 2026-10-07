@@ -657,6 +657,8 @@ export function ChatPage(): ReactNode {
                     context={sessionContext.data}
                     open={contextOpen}
                     onToggle={() => setContextOpen((v) => !v)}
+                    cacheHit={metrics.data?.cache_hit_ratio ?? null}
+                    cacheRead={metrics.data?.cache_read_tokens ?? null}
                   />
                 ) : null}
                 <span

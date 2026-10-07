@@ -28,10 +28,15 @@ export function ContextRing({
   context,
   open,
   onToggle,
+  cacheHit = null,
+  cacheRead = null,
 }: {
   context: SessionContext
   open: boolean
   onToggle: () => void
+  /** 会话级缓存命中率。null = 上游没上报缓存 token，这时整行不出现。 */
+  cacheHit?: number | null
+  cacheRead?: number | null
 }): ReactNode {
   const { t } = useTranslation()
 
@@ -104,6 +109,18 @@ const segments = (context.segments ?? []).filter((s) => s.chars > 0)
               ))}
             </ul>
           )}
+          {/* 缓存命中率放这里，不放聊天页那排统计里：它和上下文占用是同一件事的
+              两面 —— 缓存读省掉的是钱，占掉的是窗口。分开放等于让用户
+              自己把两个不同页面上的数乘起来才知道省了多少。 */}
+          {cacheHit !== null ? (
+            <p className="chat-context-panel-cache">
+              {t('chat.contextRing.cacheHit', {
+                percent: Math.round(cacheHit * 100),
+                tokens: cacheRead ?? 0,
+                defaultValue: '缓存命中 {{percent}}%（{{tokens}} tokens 走缓存）',
+              })}
+            </p>
+          ) : null}
           <p className="chat-context-panel-note">
             {t('usage.charsNotTokens', { defaultValue: '按字符数，不是 token 数（quill 没有分词器）' })}
           </p>
