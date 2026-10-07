@@ -34,6 +34,7 @@ pub mod llm_providers;
 pub mod mbti;
 pub mod mcp_client;
 pub mod mcp_repo;
+pub mod member_executor;
 pub mod middleware;
 /// 「路径在不在目录里」的唯一判定口径，见模块文档。
 pub mod pathsafe;

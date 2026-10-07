@@ -29,6 +29,11 @@ pub const LIST_SQL: &str = "SELECT team_slug, name, description, leader_expert_i
 pub const GET_SQL: &str = "SELECT team_slug, name, description, leader_expert_id, created_at, \
      updated_at FROM teams WHERE user_id = ? AND team_slug = ? AND deleted_at IS NULL";
 
+/// 按 16 字节 `id` 单读。派工真执行按这个走 —— 路径参数就是 32 位 hex 的 id，
+/// 而不是对外可见的 `team_slug`（两层标识的分工见文件头）。
+pub const GET_BY_ID_SQL: &str = "SELECT team_slug, name, description, leader_expert_id, \
+     created_at, updated_at FROM teams WHERE user_id = ? AND id = ? AND deleted_at IS NULL";
+
 /// 成员按 expert_id 升序读出，契约要求 member_ids 有序。
 pub const MEMBERS_SQL: &str = "SELECT expert_id FROM team_members \
      WHERE user_id = ? AND team_id = ? AND role = 'member' ORDER BY expert_id ASC";
@@ -219,6 +224,40 @@ pub async fn get(
     let b = blob_of(&uid);
     let s = slug.to_string();
     db.call(move |pool, _rt| Box::pin(async move { sql_get(&pool, b, s).await }))
+}
+
+/// 按 16 字节 `id` 取团。派工真执行用它把团名 / 主持人 / 成员读出来，
+/// 好构造 `quill_domain::Team` 交给 `Dispatcher`。
+pub async fn get_by_id(
+    db: &DbBridge,
+    uid: quill_adapters::UserId,
+    team_id: [u8; 16],
+) -> Result<Option<TeamRow>, quill_agent::AgentError> {
+    let b = blob_of(&uid);
+    db.call(move |pool, _rt| {
+        Box::pin(async move {
+            let row = sqlx::query(GET_BY_ID_SQL)
+                .bind(b.clone())
+                .bind(team_id.to_vec())
+                .fetch_optional(&pool)
+                .await
+                .map_err(|e| storage_error(OP_GET, e))?;
+            let Some(r) = row else {
+                return Ok(None);
+            };
+            let rows = sqlx::query(MEMBERS_SQL)
+                .bind(b)
+                .bind(team_id.to_vec())
+                .fetch_all(&pool)
+                .await
+                .map_err(|e| storage_error(OP_GET, e))?;
+            let mut members = Vec::with_capacity(rows.len());
+            for row in &rows {
+                members.push(col!(row, String, "expert_id", OP_GET));
+            }
+            Ok(Some(row_to_team(&r, members)?))
+        })
+    })
 }
 
 pub async fn slug_taken(

@@ -103,10 +103,18 @@ grep -cE 'not_implemented\(' crates/quill-server/src/routes.rs  # → 14
 | `mbti/{profiles,questions,score,store,apply}.rs` | 651+422+289+234+206 | MBTI | 是 |
 | `api_*`（其余 13 个） | — | 见 §3 路由表 | 是 |
 
-**没有 `member_executor.rs` 这类生产执行器**：
-`grep -rnE 'struct [A-Za-z]*Executor' crates/quill-server/src` 为空。
-生产侧唯一的 `impl MemberExecutor` 是 `quill-agent/src/dispatch.rs:739` 的泛型
-`SharedExecutor<E>` 包装；具体实现只有 `quill-testkit/src/mock_member.rs`（测试用）。
+**派工真执行（2026-10-08 落地）**：
+`crates/quill-server/src/member_executor.rs` 的 `ProviderMemberExecutor` 实现了
+`MemberExecutor`，`start` 里真的用 provider 调一次模型，并接到
+`POST /api/teams/{id}/dispatch/run`（`api_dispatch::run`，登记在 `EXTRA_ROUTES`）。
+老的 `POST /api/teams/{id}/dispatch`（`book`）**语义一个字没改**，仍是只记账
+（`executed:false`）。`steer` / `abort` **明确返回「尚未实现」**，不是静默空操作。
+
+```bash
+grep -rn 'ProviderMemberExecutor' crates/quill-server/src | head    # 定义与使用处
+grep -n 'dispatch/run' crates/quill-server/src/routes.rs            # 路由登记
+cargo test -p quill-server --test dispatch_run_http                 # 端到端判据（5 条）
+```
 
 ---
 

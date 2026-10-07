@@ -94,6 +94,9 @@ pub fn build_router(state: AppState) -> Router {
             "/api/teams/{id}/dispatch",
             get(api_dispatch::list_round).post(api_dispatch::book),
         )
+        // 真执行那一条。**与 book 分开**：`book` 只记账（响应明写 `executed:false`），
+        // 这条才真的让每个成员各跑一次模型。见 api_dispatch::run 的文档注释。
+        .route("/api/teams/{id}/dispatch/run", post(api_dispatch::run))
         .route("/api/dispatch/inflight", get(api_dispatch::inflight));
 
     let teams = Router::new()
@@ -521,5 +524,7 @@ pub const EXTRA_ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/sessions/{id}/messages/stream"),
     ("GET", "/api/teams/{id}/dispatch"),
     ("POST", "/api/teams/{id}/dispatch"),
+    // 派工**真执行**。自加的路由（octop 的派工只登记不跑），所以进 EXTRA。
+    ("POST", "/api/teams/{id}/dispatch/run"),
     ("GET", "/api/dispatch/inflight"),
 ];

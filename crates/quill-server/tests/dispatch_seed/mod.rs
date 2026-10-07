@@ -109,20 +109,24 @@ pub fn seed(db: &Arc<DbBridge>, owner: UserId, team_seed: u8, members: &[&str]) 
     }
 
     db.call({
-        let sql = "INSERT INTO teams (user_id, id, name, room_id, leader_session_id, \
+        let sql = "INSERT INTO teams (user_id, id, name, team_slug, room_id, leader_session_id, \
                     leader_expert_id, state, state_changed_at, created_at, updated_at) \
-                    VALUES (?, ?, ?, ?, ?, ?, 'IDLE', ?, ?, ?)"
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'IDLE', ?, ?, ?)"
             .to_string();
         let blob = owner_blob.clone();
         let tblob = team_id.to_vec();
         let lblob = leader_blob.clone();
         let room = room_id.clone();
+        // `team_slug` 必须写：0006 之后它是团队对外的标识，空串会让领域层
+        // 的 `team_of` 直接报「团队标识为空」（读代码才发现，不是猜的）。
+        let slug = format!("team-{team_seed}");
         move |pool, _rt| {
             Box::pin(async move {
                 sqlx::query(&sql)
                     .bind(blob)
                     .bind(tblob)
                     .bind(format!("team-{team_seed}"))
+                    .bind(slug)
                     .bind(room)
                     .bind(lblob)
                     .bind("team-leader")

@@ -206,15 +206,20 @@ export const ITEMS = [
     id: 'B2-2',
     milestone: 'M2',
     title: '成员执行器存在（子 agent 真被执行）',
-    // 2026-10-08 修正：原来写的是
-    // `{ kind: 'absent', path: 'crates/quill-server/src/member_executor.rs' }` ——
-    // **方向写反了**：文件不存在时它判「已验证」，即一个说「执行器存在」的条目
-    // 靠「不存在」通过。以代码为准：生产侧唯一的 `impl MemberExecutor` 是
-    // quill-agent 里的泛型 `SharedExecutor<E>` 包装，**没有任何具体实现**；
-    // `MockMemberExecutor` 只在 quill-testkit（测试用）。所以这是真实缺口，
-    // 应如实报「未通过」，而不是靠一个反向判据蒙混过去。
-    // 新判据：server 侧出现一个具体的 Executor 结构才算做完（当前 grep 退出非 0）。
-    verify: { kind: 'cmd', cmd: 'grep -rqE "struct [A-Za-z]*Executor" crates/quill-server/src', cwd: 'wsl' },
+    // 2026-10-08 修正过一次：原来绑的是 `absent crates/…/member_executor.rs` ——
+    // **方向写反了**，文件不存在反而判「已验证」。当时改成 grep 具体结构，
+    // 因为那会儿生产侧确实没有任何具体实现（只有 quill-agent 的泛型
+    // SharedExecutor 包装 + testkit 的 mock）。
+    //
+    // 2026-10-08 同日落地：`crates/quill-server/src/member_executor.rs` 的
+    // `ProviderMemberExecutor` 真的调模型，并接到
+    // `POST /api/teams/{id}/dispatch/run`（见 api_dispatch::run）。
+    // 所以判据从「结构存在」升到**行为**：绑那条端到端测试 ——
+    // 它验的是「每个成员真被调了一次模型，产出进了 results」。
+    verify: {
+      kind: 'test',
+      name: 'running_a_round_really_calls_the_model_and_returns_the_output',
+    },
     blocks: ['M2'],
   },
   {

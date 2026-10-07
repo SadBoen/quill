@@ -358,6 +358,13 @@ pub fn agent_error_to_api(op: &str, e: AgentError) -> ApiError {
              例如 ai-coding-coach），或传 null / 省略 source_template 表示这个专家不来自模板。"
         )),
         AgentError::DispatchRequestInvalid { reason } => ApiError::bad_request(reason),
+        // 「派给一个不在名册里的专家」是**调用方**的错，不是服务端故障。
+        // 报 500 会把「你写错了专家名」说成「我们坏了」，而且 detail 里把真实
+        // 原因藏进日志、调用方无从下手（2026-10-08 写派工真执行时实测到）。
+        AgentError::TeamInvalid(t) => ApiError::bad_request(format!(
+            "专家团的数据不合法：{t}。\
+             下一步：用 `GET /api/teams/{{id}}` 看这个团的名册，只按名册里的专家派工。"
+        )),
         AgentError::Storage { .. } => ApiError::internal(
             "存储层操作失败，真实原因已写入服务端日志（响应体不含内部细节）。\
              下一步：用同一请求重试一次；若持续失败，执行 `quill doctor --section=db`。"
@@ -385,6 +392,31 @@ mod tests {
             .expect_err("驼峰拼写必须判红");
         assert_eq!(err.status(), axum::http::StatusCode::BAD_REQUEST);
         assert!(err.detail().contains("displayName"));
+    }
+
+    #[test]
+    fn a_dispatch_to_a_non_member_expert_is_a_client_error_not_a_500() {
+        // 调用方写错专家名是**客户端**错误。2026-10-08 写派工真执行时实测到：
+        // 原来它落到 `other =>` 兜底变 500，detail 只说「真实原因已写入服务端日志」，
+        // 调用方既不知道自己错了、也不知道错在哪。
+        let err = agent_error_to_api(
+            "执行派工",
+            AgentError::TeamInvalid(quill_domain::TeamError::UnknownExpert(
+                quill_adapters::ExpertId::parse("ghost-analyst").expect("测试专家名合法"),
+            )),
+        );
+        assert_eq!(err.status(), axum::http::StatusCode::BAD_REQUEST);
+        assert!(
+            err.detail().contains("ghost-analyst"),
+            "要点名是哪个专家不在名册里：{}",
+            err.detail()
+        );
+        // `bad_request` 没有 advice 槽位，指引写在 detail 里（与其它 bad_request 分支一致）。
+        assert!(
+            err.detail().contains("GET /api/teams"),
+            "要告诉调用方怎么自查名册：{}",
+            err.detail()
+        );
     }
 
     #[test]

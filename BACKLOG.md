@@ -64,12 +64,32 @@ typecheck·lint·vitest·build / 四道文本门禁。
 **台账键是 `(owner, room_id, round)`，不是 `team_id`** —— 要真正按团队过滤得改键，
 那是产品契约变更，先问。
 
-### B2-2 成员执行器不存在
-以代码为准：生产侧唯一的 `impl MemberExecutor` 是 `quill-agent/src/dispatch.rs:739`
-的泛型 `SharedExecutor<E>` 包装；**没有任何具体实现**，
-`MockMemberExecutor` 只在 `quill-testkit`（测试用）。
-参照 `vendor/goose/crates/goose/src/agents/subagent_handler.rs` 的 `run_subagent_task`
-（每子 agent 独立 config + 独立 session）来做，并注明哪些自研。
+### B2-2 成员执行器（**2026-10-08 落地第一版**）
+
+**已做**：`crates/quill-server/src/member_executor.rs` 的 `ProviderMemberExecutor`
+真的实现了 `MemberExecutor` —— `start` 里按「专家人格（`experts.instructions`）+
+他人格前缀 + 任务标题/正文」拼 prompt，用实例 provider 调一次模型，正文回成
+`MemberOutcome`。接在 `POST /api/teams/{id}/dispatch/run`（`api_dispatch::run`）。
+端到端判据 5 条（`tests/dispatch_run_http.rs`）：真调模型、幂等、团队不存在 404、
+派给非本团专家 4xx 且一个成员都不跑。
+
+**与 `quill-agent` 预留接口的配合（关键，改之前先读）**：
+`Dispatcher::dispatch_round` 是**同步**的，内部用**空 waker 自旋 poll**
+`MemberExecutor::start` 返回的 future（`dispatch.rs:764`）。所以 `start` 必须在
+返回 future 之前就把活干完 —— 执行器用「一条独立线程 + 独立 current-thread 运行时」
+跑异步模型调用（与 `mcp_client::call_tool_blocking` 同一套做法，理由见那里的注释：
+`Handle::block_on` / `block_in_place` 在 async 上下文会 panic）。
+
+**还没做的（如实列，别当成做完了）**：
+
+- `steer` / `abort` 明确返回 `AdapterError::Internal("尚未实现…")` —— 没有
+  「运行中追加指令 / 中途取消」这两条通道。返回 `Ok(())` 会是谎话。
+- **成员产出没有落库**：`MemberOutcome` 只回文本，token 用量不进 `messages`
+  也不进台账。所以派工这一轮的消耗在用量页上**看不到**。
+- **成员用同一个 `round.session`**，没有按成员各开一条独立会话 ——
+  `vendor/goose/.../subagent_handler.rs` 的 `run_subagent_task` 是「每子 agent
+  独立 config + 独立 session」，我们只对齐了「独立调一次模型」这一层。
+- 响应里带整段成员产出，长任务下响应体可能很大（未截断）。
 
 ### B2-3 建团队静默多出的 `team_leader` 会话
 `teams.leader_session_id` NOT NULL + 外键 → `POST /api/teams` 会插一条

@@ -5,7 +5,10 @@ use axum::Json;
 use serde_json::{json, Value};
 
 use quill_adapters::{ExpertId, MemberId, SessionId};
-use quill_agent::{BeginOutcome, DispatchKey, DispatchLedger, DispatchRecord, RoundPrefix};
+use quill_agent::{
+    BeginOutcome, DispatchKey, DispatchLedger, DispatchRecord, DispatchTask, Dispatcher,
+    MemberResult, RoundPrefix, RoundRequest,
+};
 
 use crate::api_experts::{agent_error_to_api, map_agent_error, only_keys};
 use crate::auth::AuthUser;
@@ -178,6 +181,193 @@ pub async fn book(
                      PENDING 记录在崩溃恢复口径下属于「可安全重派」，执行器就绪后重放同一轮即会真正执行。",
         })),
     ))
+}
+
+/// `POST /api/teams/{id}/dispatch/run` —— **真的把这一轮跑起来**（M2）。
+///
+/// 与 `book` 的分工，说清楚免得混：
+///
+/// - `book`：只记账。响应里 `executed:false`，是给「先把轮次登记下来、稍后再跑」
+///   这类调用方的，语义一个字没变。
+/// - `run`（本条）：**真执行**。每个成员各调一次模型，产出收进 `results`。
+///   幂等闸门仍然是那张台账 —— `Dispatcher::dispatch_round` 对已终态的成员直接跳过，
+///   所以重复提交同一轮是安全的（`skipped_as_duplicate` 会如实报出来）。
+///
+/// **为什么另起一条路由而不是改 `book`**：`book` 的响应形状（`executed:false`）
+/// 是对外契约的一部分；把执行混进去会让它的语义随请求内容而变，老调用方要跟着改。
+/// 新增一条是纯增量。
+///
+/// 与 `book` 唯一的请求字段差别：每个成员**必须多带 `title` 与 `instructions`** ——
+/// 光知道「派给谁」执行不了，还得知道「让它干什么」。
+pub async fn run(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(team): Path<String>,
+    JsonBody(body): JsonBody,
+) -> Result<(axum::http::StatusCode, Json<Value>), ApiError> {
+    only_keys(
+        &body,
+        &["room_id", "round", "leader_session_id", "members"],
+        "POST /api/teams/{id}/dispatch/run",
+    )?;
+    let team_id = parse_hex16(&team, "路径参数 {id}（团队标识）")?;
+    let db = state.db()?;
+    let row = crate::teams_repo::get_by_id(db, user.0.user_id, team_id)
+        .await
+        .map_err(|e| agent_error_to_api("读取团队", e))?
+        .ok_or_else(|| {
+            ApiError::entity_not_found(format!(
+                "团队 {team} 不存在（已软删的团队同样算不存在）。\
+                 下一步：先用 GET /api/teams 确认这个 id 还在，再往它派工。"
+            ))
+        })?;
+
+    let room_id = need_str(&body, "room_id")?;
+    let round = need_round(&body)?;
+    let leader = SessionId::parse(&need_str(&body, "leader_session_id")?).map_err(|e| {
+        ApiError::bad_request(format!("leader_session_id 非法（{e}）：应为 32 位十六进制。"))
+    })?;
+
+    let members = body
+        .get("members")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            ApiError::bad_request(
+                "缺少字段 members（数组）。每项形如 \
+                 {\"expert\":\"cost-analyst\",\"member\":\"cost-analyst-1\",\
+                 \"title\":\"分析成本\",\"instructions\":\"给出三点结论\",\
+                 \"member_session_id\":\"<32 位十六进制>\"}。"
+                    .to_string(),
+            )
+        })?;
+    if members.is_empty() {
+        return Err(ApiError::bad_request(
+            "members 为空：这一轮没有任何成员要派。".to_string(),
+        ));
+    }
+
+    let mut member_sessions: BTreeMap<ExpertId, SessionId> = BTreeMap::new();
+    let mut tasks = Vec::with_capacity(members.len());
+    for (i, m) in members.iter().enumerate() {
+        only_keys(
+            m,
+            &["expert", "member", "title", "instructions", "member_session_id"],
+            "members[]",
+        )?;
+        let expert = ExpertId::parse(&need_str(m, "expert")?)
+            .map_err(|e| ApiError::bad_request(format!("members[{i}].expert 非法（{e}）。")))?;
+        let member = MemberId::parse(&need_str(m, "member")?)
+            .map_err(|e| ApiError::bad_request(format!("members[{i}].member 非法（{e}）。")))?;
+        if !member.as_str().starts_with(&format!("{expert}-")) {
+            return Err(ApiError::bad_request(format!(
+                "members[{i}].member = {:?} 必须以 \"{expert}-\" 开头（成员实例标识由专家名派生）。",
+                member.as_str()
+            )));
+        }
+        // 与 `book` 的区别就在这两行：真执行要知道「这一项叫什么、要它做什么」。
+        let title = need_str(m, "title")?;
+        let instructions = need_str(m, "instructions")?;
+        let sid = SessionId::parse(&need_str(m, "member_session_id")?).map_err(|e| {
+            ApiError::bad_request(format!("members[{i}].member_session_id 非法（{e}）。"))
+        })?;
+        if member_sessions.insert(expert.clone(), sid).is_some() {
+            return Err(ApiError::bad_request(format!(
+                "members 里出现了两次专家 {expert}：同一轮同一专家只允许一条派工（ux_dispatch_once）。"
+            )));
+        }
+        tasks.push(
+            DispatchTask::new(expert.clone(), member, title, instructions)
+                .map_err(|e| agent_error_to_api("组装派工任务", e))?,
+        );
+    }
+
+    // 把存储里的团还原成领域 `Team`：`dispatch_round` 用它校验「派给的这个专家
+    // 到底是不是本团成员」。**名册必须来自库里存的那份，不能来自本次请求** ——
+    // 拿请求里的专家去建名册，等于把这道校验架空：派给谁都算「是本团成员」。
+    let mut domain_team = quill_domain::team::team_of(&row.team_id, &row.name, &row.leader_id)
+        .map_err(|e| ApiError::internal(format!("团队 {team} 的行读出来不合法：{e}")))?;
+    let stored: Vec<&str> = row.member_ids.iter().map(String::as_str).collect();
+    let roster = quill_domain::team::roster(&stored);
+    for id in &row.member_ids {
+        let expert = ExpertId::parse(id)
+            .map_err(|e| ApiError::internal(format!("团队 {team} 存的成员 {id:?} 不合法：{e}")))?;
+        // 名册本身就是从这一列读出来的，所以这里「不在名册」不可能发生；
+        // 真发生了是数据损坏，如实报 500 而不是悄悄跳过。
+        domain_team
+            .add_member(expert, &roster)
+            .map_err(|e| ApiError::internal(format!("团队 {team} 的成员名册在库里不合法：{e}")))?;
+    }
+
+    let ledger = SqlxDispatchLedger::new(
+        std::sync::Arc::clone(db),
+        DispatchScope::new(team_id, leader, member_sessions),
+    );
+    let executor = crate::member_executor::ProviderMemberExecutor::new(
+        state.llm()?,
+        state.llm_config_snapshot(),
+        std::sync::Arc::clone(db),
+    );
+    let dispatcher = Dispatcher::new(executor, ledger);
+    let owner = user.0.user_id;
+
+    // `dispatch_round` 是同步的，而且会阻塞整轮（成员数 × 模型延迟）；
+    // 直接在这里调会占住一个 tokio worker 直到最后一个成员答完。
+    let report = tokio::task::spawn_blocking(move || {
+        let req = RoundRequest {
+            owner,
+            session: leader,
+            team: &domain_team,
+            room_id: &room_id,
+            round,
+            tasks: &tasks,
+            chain: &[],
+        };
+        dispatcher.dispatch_round(&req)
+    })
+    .await
+    .map_err(|e| {
+        ApiError::internal(format!(
+            "派工线程没能返回结果（可能是 panic）：{e}。\
+             下一步：看服务端日志里这一轮之前的 [chat] / 派工记录。"
+        ))
+    })
+    .and_then(|r| r.map_err(|e| agent_error_to_api("执行派工", e)))?;
+
+    Ok((
+        axum::http::StatusCode::OK,
+        Json(json!({
+            "room_id": report.room_id,
+            "round": report.round,
+            "executed": true,
+            "delivered": report.delivered_count(),
+            "failed": report.failed_count(),
+            "skipped_as_duplicate": report
+                .skipped_as_duplicate
+                .iter()
+                .map(|m| m.as_str())
+                .collect::<Vec<&str>>(),
+            "recovered_for_retry": report.recovered_for_retry.len(),
+            "results": report.results.iter().map(result_json).collect::<Vec<Value>>(),
+            "summary": report.summary(),
+        })),
+    ))
+}
+
+fn result_json(r: &MemberResult) -> Value {
+    let mut v = json!({ "member": r.member().as_str() });
+    match r {
+        MemberResult::Delivered { outcome, .. } => {
+            v["status"] = json!("delivered");
+            v["scope"] = json!(outcome.completed_scope());
+            v["output"] = json!(outcome.output());
+        }
+        MemberResult::Failed { error, .. } => {
+            v["status"] = json!("failed");
+            v["error_code"] = json!(error.code());
+            v["error"] = json!(error.to_string());
+        }
+    }
+    v
 }
 
 pub async fn inflight(

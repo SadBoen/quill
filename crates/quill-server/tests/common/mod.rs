@@ -68,8 +68,7 @@ impl Drop for TestDb {
 }
 
 pub fn migration_sql() -> String {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../quill-store/migrations");
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../quill-store/migrations");
     // 顺序与文件名**一律从 quill_store::MIGRATIONS 取**，不在这里手写。
     //
     // 原来这里是硬编码的 7 个文件名，于是新加 0008 时忘了加进来：

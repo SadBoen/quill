@@ -143,7 +143,7 @@ quill-testkit   ← 仅 dev-dependency
 | `GET /api/subagent-catalog`（+ `/divisions`、`/{slug}`） | 内置子 agent 目录 | 未做 |
 | `GET/POST /api/agents/{id}/subagents…` | agent 子 agent | 未做 |
 | `GET/POST/PATCH/DELETE /api/teams…` | 专家团 CRUD | **已实现**（`api_teams.rs`） |
-| 团队派工真执行 | — | **未做**：`api_dispatch.rs` 只记账；`MemberExecutor` 只有 `quill-testkit` 里的 mock |
+| 团队派工真执行 | — | **已实现（第一版）**：`ProviderMemberExecutor` + `POST /api/teams/{id}/dispatch/run`（`api_dispatch::run`）。`steer`/`abort` 未做；成员产出未落库 |
 
 > 参照实现：`vendor/goose/crates/goose/src/agents/subagent_handler.rs` 的
 > `run_subagent_task`（每子 agent 独立 config + 独立 session）、
