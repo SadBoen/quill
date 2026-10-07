@@ -397,6 +397,26 @@ macro_rules! col {
 }
 pub(crate) use col;
 
+/// 取 TEXT 列：NULL 或取不到 → 空串。
+///
+/// 与 `api_chat` 里那两个私有 `s`/`n` 是同一种东西 —— 那两份是重复，这里收成
+/// 唯一一份，新的 repo 模块直接用，别再各写一遍。（`api_chat` 的 `s`/`n` 现在
+/// 只是转发到这里。）
+pub fn col_str(row: &sqlx::sqlite::SqliteRow, name: &str) -> String {
+    sqlx::Row::try_get::<Option<String>, _>(row, name)
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+}
+
+/// 取 INTEGER 列：NULL 或取不到 → 0。
+pub fn col_i64(row: &sqlx::sqlite::SqliteRow, name: &str) -> i64 {
+    sqlx::Row::try_get::<Option<i64>, _>(row, name)
+        .ok()
+        .flatten()
+        .unwrap_or(0)
+}
+
 fn fnv128(seed: u64, parts: &[&[u8]]) -> [u8; 16] {
     const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
     let mut h = seed;

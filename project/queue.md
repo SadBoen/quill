@@ -21,7 +21,8 @@
 - [x] Q003 · 定 `rustfmt.toml` 并做**一次性全量格式化**（单独一个提交，免得淹没真实 diff）· 仓库根 · `cargo fmt --check` 退出 0
 - [x] Q004 · 把 `cargo fmt --check` 接进 `.github/workflows/gates.yml` · CI · 工作流里有这一步且能过
 - [x] Q005 · 把 `cargo clippy --workspace --all-targets -- -D warnings` 接进 CI（现在刻意没跑）· CI · 工作流里有这一步且退出 0
-- [ ] Q006 · 给 `quill-server` 的 22 条内联 SQL 逐条收口到对应 `*_repo`（`api_chat.rs`）· `crates/quill-server/src/` · 该文件内 `sqlx::query` 计数降到 0
+- [x] Q006 · `api_chat` 内联 SQL 收口到 repo：**会话域已完成**（22 → 13 条，收进新模块 `chat_repo`）· `crates/quill-server/src/chat_repo.rs`
+- [ ] Q006b · `api_chat` 剩余 **13 条**内联 SQL（messages / 指标 / `prepare_turn` 发送路径）继续收口到 repo · `crates/quill-server/src/` · 该文件内 `sqlx::query` 计数降到 0
 - [ ] Q007 · 按 `BACKLOG.md` B0-4 定 `need_str`/`opt_str` 的规范语义并合并 5+3 份 · `crates/quill-server/src/jsonx.rs` · 只剩一份定义，且补了钉住新语义的测试
 - [ ] Q008 · `quill-server` 拆分：把 `api_*` 之外的通用件（`error.rs`/`db.rs`/`state.rs`）之外的巨石按域拆 crate 或子模块 · `crates/quill-server/src/` · 单文件上限显著下降且测试全绿
 - [ ] Q009 · 给 `quill-adapters` / `quill-domain` / `quill-store` 加「不许依赖上层」的编译期守卫（如文档 + CI 检查）· CI · 违反时 CI 报红

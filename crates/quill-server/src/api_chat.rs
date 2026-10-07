@@ -81,57 +81,25 @@ pub async fn list(
     let db = state.db()?;
     let uid = user.0.user_id;
     let excluded = q.excluded();
-    let rows = db
-        .call(move |pool, _rt| {
-            Box::pin(async move {
-                let r: Result<Vec<Value>, quill_agent::AgentError> = async {
-                    // 排除条件用 `NOT IN` 的占位符动态拼，不拼字符串 ——
-                    // kind 来自查询参数，拼进去就是注入面。
-                    // 空列表时退化成「不过滤」，而不是 `NOT IN ()` 那种语法错。
-                    let placeholders = vec!["?"; excluded.len()].join(", ");
-                    let sql = format!(
-                        "SELECT hex(id) AS id, kind, room_id, title, expert_id, provider_id, \
-                         model, state, message_count, created_at, last_active_at \
-                         FROM sessions WHERE user_id = ? AND deleted_at IS NULL{where_clause} \
-                         ORDER BY last_active_at DESC LIMIT 100",
-                        where_clause = if excluded.is_empty() {
-                            String::new()
-                        } else {
-                            format!(" AND kind NOT IN ({placeholders})")
-                        },
-                    );
-                    let mut query = sqlx::query(&sql).bind(uid.as_bytes().to_vec());
-                    for kind in &excluded {
-                        query = query.bind(kind.as_str());
-                    }
-                    let out = query
-                        .fetch_all(&pool)
-                        .await
-                        .map_err(|e| crate::db::storage_error("列会话", e))?;
-                    Ok(out
-                        .into_iter()
-                        .map(|row| {
-                            json!({
-                                "id": s(&row, "id"),
-                                "kind": s(&row, "kind"),
-                                "room_id": s(&row, "room_id"),
-                                "title": s(&row, "title"),
-                                "expert_id": s(&row, "expert_id"),
-                                "provider_id": s(&row, "provider_id"),
-                                "model": s(&row, "model"),
-                                "state": s(&row, "state"),
-                                "message_count": n(&row, "message_count"),
-                                "created_at": n(&row, "created_at"),
-                                "last_active_at": n(&row, "last_active_at"),
-                            })
-                        })
-                        .collect())
-                }
-                .await;
-                r
+    let rows = crate::chat_repo::list_sessions(db, uid, excluded).map_err(storage)?;
+    let rows: Vec<Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.id,
+                "kind": r.kind,
+                "room_id": r.room_id,
+                "title": r.title,
+                "expert_id": r.expert_id,
+                "provider_id": r.provider_id,
+                "model": r.model,
+                "state": r.state,
+                "message_count": r.message_count,
+                "created_at": r.created_at,
+                "last_active_at": r.last_active_at,
             })
         })
-        .map_err(storage)?;
+        .collect();
 
     Ok(Json(json!({ "sessions": rows })).into_response())
 }
@@ -197,18 +165,14 @@ fn advice_for_unusable_reply(e: &quill_provider::ProviderError) -> &'static str 
      打印完整诊断后再用同一条消息重试。"
 }
 
+// 取列助手已收口到 `crate::db::{col_str, col_i64}`（原先本文件与别处各写一份）。
+// 保留 `s` / `n` 两个短名只是让本文件里二十来处调用点不用动。
 fn s(row: &sqlx::sqlite::SqliteRow, name: &str) -> String {
-    sqlx::Row::try_get::<Option<String>, _>(row, name)
-        .ok()
-        .flatten()
-        .unwrap_or_default()
+    crate::db::col_str(row, name)
 }
 
 fn n(row: &sqlx::sqlite::SqliteRow, name: &str) -> i64 {
-    sqlx::Row::try_get::<Option<i64>, _>(row, name)
-        .ok()
-        .flatten()
-        .unwrap_or(0)
+    crate::db::col_i64(row, name)
 }
 
 pub async fn create(
@@ -253,45 +217,24 @@ pub async fn create(
     let hex_id = to_hex_upper(&id);
     let expert_for_write = expert_id.clone();
 
-    db.call(move |pool, _rt| {
-        Box::pin(async move {
-            let r: Result<(), quill_agent::AgentError> = async {
-                sqlx::query(
-                    "INSERT INTO sessions(user_id,id,kind,room_id,title,provider_id,model,state,\
-                     workspace_path,created_at,updated_at,last_active_at) \
-                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                )
-                .bind(uid.as_bytes().to_vec())
-                .bind(id.to_vec())
-                .bind("solo")
-                .bind(room.clone())
-                .bind(title.clone())
-                .bind("local")
-                .bind(model.clone())
-                .bind("IDLE")
-                .bind(workspace.clone())
-                .bind(now)
-                .bind(now)
-                .bind(now)
-                .execute(&pool)
-                .await
-                .map_err(|e| crate::db::storage_error("建会话", e))?;
-                if !expert_for_write.is_empty() {
-                    sqlx::query("UPDATE sessions SET expert_id = ? WHERE user_id = ? AND id = ?")
-                        .bind(expert_for_write)
-                        .bind(uid.as_bytes().to_vec())
-                        .bind(id.to_vec())
-                        .execute(&pool)
-                        .await
-                        .map_err(|e| crate::db::storage_error("挂专家", e))?;
-                }
-                Ok(())
-            }
-            .await;
-            r
-        })
-    })
+    crate::chat_repo::insert_solo_session(
+        db,
+        uid,
+        crate::chat_repo::NewSoloSession {
+            id,
+            room_id: room.clone(),
+            title: title.clone(),
+            model: model.clone(),
+            workspace_path: workspace.clone(),
+            now,
+        },
+        "建会话",
+    )
     .map_err(storage)?;
+    // 没指定专家时 `expert_for_write` 是空串，等价于不挂。
+    if !expert_for_write.is_empty() {
+        crate::chat_repo::set_expert(db, uid, id, expert_for_write).map_err(storage)?;
+    }
 
     // 建会话时就体检一次绑定：调用方指定了专家但那个专家不存在/已删的会话照样建
     // （用户可能只是想聊天），但必须在响应里明说「你选的专家没生效」，
@@ -334,25 +277,7 @@ pub async fn get_one(
     let db = state.db()?;
     let uid = user.0.user_id;
     let sid = parse_id(&id)?;
-    let found = db
-        .call(move |pool, _rt| {
-            Box::pin(async move {
-                let r: Result<bool, quill_agent::AgentError> = async {
-                    let n: i64 = sqlx::query_scalar(
-                        "SELECT count(*) FROM sessions WHERE user_id = ? AND id = ? AND deleted_at IS NULL",
-                    )
-                    .bind(uid.as_bytes().to_vec())
-                    .bind(sid.to_vec())
-                    .fetch_one(&pool)
-                    .await
-                    .map_err(|e| crate::db::storage_error("查会话", e))?;
-                    Ok(n > 0)
-                }
-                .await;
-                r
-            })
-        })
-        .map_err(storage)?;
+    let found = crate::chat_repo::session_exists(db, uid, sid).map_err(storage)?;
 
     if found {
         Ok(Json(json!({ "id": id, "found": true })).into_response())
@@ -380,24 +305,7 @@ pub async fn delete(
     let sid = parse_id(&id)?;
 
     // 先看这一行在不在：不存在 / 不属于当前用户 → 404；已软删 → 幂等 false。
-    let prior: Option<Option<i64>> = db
-        .call(move |pool, _rt| {
-            Box::pin(async move {
-                let r: Result<Option<Option<i64>>, quill_agent::AgentError> = async {
-                    sqlx::query_scalar(
-                        "SELECT deleted_at FROM sessions WHERE user_id = ? AND id = ?",
-                    )
-                    .bind(uid.as_bytes().to_vec())
-                    .bind(sid.to_vec())
-                    .fetch_optional(&pool)
-                    .await
-                    .map_err(|e| crate::db::storage_error("查会话", e))
-                }
-                .await;
-                r
-            })
-        })
-        .map_err(storage)?;
+    let prior = crate::chat_repo::session_deleted_at(db, uid, sid).map_err(storage)?;
 
     let Some(deleted_at) = prior else {
         return Err(ApiError::entity_not_found(format!(
@@ -415,28 +323,7 @@ pub async fn delete(
     }
 
     let now = now_ms();
-    let affected = db
-        .call(move |pool, _rt| {
-            Box::pin(async move {
-                let r: Result<u64, quill_agent::AgentError> = async {
-                    let n = sqlx::query(
-                        "UPDATE sessions SET deleted_at = ?, updated_at = ? \
-                         WHERE user_id = ? AND id = ? AND deleted_at IS NULL",
-                    )
-                    .bind(now)
-                    .bind(now)
-                    .bind(uid.as_bytes().to_vec())
-                    .bind(sid.to_vec())
-                    .execute(&pool)
-                    .await
-                    .map_err(|e| crate::db::storage_error("软删会话", e))?;
-                    Ok(n.rows_affected())
-                }
-                .await;
-                r
-            })
-        })
-        .map_err(storage)?;
+    let affected = crate::chat_repo::soft_delete_session(db, uid, sid, now).map_err(storage)?;
 
     // 会话本身没了即可用性；派工记录与团队关系保留，便于回溯这段会话做过什么。
     // `sessions_auth` 不在这里处理：它只存登录令牌（token_hash / family_id /
@@ -902,25 +789,7 @@ pub(crate) async fn session_exists(
     uid: quill_domain::UserId,
     sid: [u8; 16],
 ) -> Result<bool, ApiError> {
-    let found = db
-        .call(move |pool, _rt| {
-            Box::pin(async move {
-                let r: Result<bool, quill_agent::AgentError> = async {
-                    let n: i64 = sqlx::query_scalar(
-                        "SELECT count(*) FROM sessions WHERE user_id = ? AND id = ? AND deleted_at IS NULL",
-                    )
-                    .bind(uid.as_bytes().to_vec())
-                    .bind(sid.to_vec())
-                    .fetch_one(&pool)
-                    .await
-                    .map_err(|e| crate::db::storage_error("查会话", e))?;
-                    Ok(n > 0)
-                }
-                .await;
-                r
-            })
-        })
-        .map_err(storage)?;
+    let found = crate::chat_repo::session_exists(db, uid, sid).map_err(storage)?;
     Ok(found)
 }
 
@@ -945,35 +814,19 @@ pub(crate) async fn create_session_for_channel(
     let workspace = format!("ws/{short}");
     let title = title.chars().take(64).collect::<String>();
 
-    db.call(move |pool, _rt| {
-        Box::pin(async move {
-            let r: Result<(), quill_agent::AgentError> = async {
-                sqlx::query(
-                    "INSERT INTO sessions(user_id,id,kind,room_id,title,provider_id,model,state,\
-                     workspace_path,created_at,updated_at,last_active_at) \
-                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                )
-                .bind(uid.as_bytes().to_vec())
-                .bind(id.to_vec())
-                .bind("solo")
-                .bind(&room)
-                .bind(&title)
-                .bind("local")
-                .bind("")
-                .bind("IDLE")
-                .bind(&workspace)
-                .bind(now)
-                .bind(now)
-                .bind(now)
-                .execute(&pool)
-                .await
-                .map_err(|e| crate::db::storage_error("为通道建会话", e))?;
-                Ok(())
-            }
-            .await;
-            r
-        })
-    })
+    crate::chat_repo::insert_solo_session(
+        db,
+        uid,
+        crate::chat_repo::NewSoloSession {
+            id,
+            room_id: room,
+            title,
+            model: String::new(),
+            workspace_path: workspace,
+            now,
+        },
+        "为通道建会话",
+    )
     .map_err(storage)?;
 
     Ok(id)
