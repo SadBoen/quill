@@ -2,6 +2,7 @@ pub mod api_admin;
 pub mod api_auth;
 /// 备份：导出 / 校验 / 还原的 HTTP 接线。
 pub mod api_backup;
+pub mod api_bundle;
 pub mod api_chat;
 pub mod api_chat_stream;
 /// 外部消息通道：REST 线与长轮询后台任务。

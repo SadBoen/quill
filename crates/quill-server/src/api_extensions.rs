@@ -1434,7 +1434,7 @@ pub(crate) fn read_skill_body(path: &std::path::Path) -> String {
     std::fs::read_to_string(path).unwrap_or_default()
 }
 
-fn write_skill_body(path: &std::path::Path, content: &str) -> Result<(), ApiError> {
+pub(crate) fn write_skill_body(path: &std::path::Path, content: &str) -> Result<(), ApiError> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| {
             ApiError::internal(format!("创建 SKILL 目录 {} 失败：{e}", dir.display()))

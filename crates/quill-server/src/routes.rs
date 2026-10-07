@@ -209,15 +209,11 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/api/extensions/bundle/import",
-            post(|_u: crate::auth::AuthUser| async {
-                not_implemented("POST", "/api/extensions/bundle/import")
-            }),
+            post(crate::api_bundle::import),
         )
         .route(
             "/api/extensions/bundle/export",
-            get(|_u: crate::auth::AuthUser| async {
-                not_implemented("GET", "/api/extensions/bundle/export")
-            }),
+            get(crate::api_bundle::export),
         );
 
     // 备份。目标目录由服务端按相对名解析（见 api_backup）：
@@ -496,8 +492,6 @@ pub const CONTRACT_ROUTES: &[(&str, &str)] = &[
     ("PATCH", "/api/extensions/skills/{name}"),
     ("DELETE", "/api/extensions/skills/{name}"),
     ("GET", "/api/extensions/plugins"),
-    ("POST", "/api/extensions/bundle/import"),
-    ("GET", "/api/extensions/bundle/export"),
     ("POST", "/api/backup/export"),
     ("POST", "/api/backup/restore"),
     ("POST", "/api/backup/verify"),
@@ -527,4 +521,9 @@ pub const EXTRA_ROUTES: &[(&str, &str)] = &[
     // 派工**真执行**。自加的路由（octop 的派工只登记不跑），所以进 EXTRA。
     ("POST", "/api/teams/{id}/dispatch/run"),
     ("GET", "/api/dispatch/inflight"),
+    // 设置包导出/导入（需求 4 多端同步）。**不是 octop 契约路由** ——
+    // 上游 api/routers 与 dashboard 里都没有 bundle 这个形状，逐字查过。
+    // 它是 quill 自加的，却长期登记在 CONTRACT 里，是分类错位，本轮移到 EXTRA。
+    ("POST", "/api/extensions/bundle/import"),
+    ("GET", "/api/extensions/bundle/export"),
 ];
