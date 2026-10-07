@@ -1,0 +1,70 @@
+/*
+ * 卡片 / 列表 的公共外壳。
+ *
+ * 这份文件是「四个页面看起来是同一个系统」的全部依据：栅格列宽、行距、
+ * 切换器按钮的样式都在这里，各页面不再自己写一份。
+ *
+ * **配色全部走 `var(--*)`。** 项目规矩：全局样式来自 OpenOctopus，
+ * `index.css` 与 vendor 逐字相同（有 sha256 门禁），本地样式只能落在
+ * overrides.css 或本文件。这里一处硬编码色值都没有，就是这条规矩的落点。
+ */
+
+.collection-view-toggle {
+  align-items: center;
+  display: inline-flex;
+  gap: 2px;
+}
+
+.collection-view-toggle-item {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--faint);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+}
+
+.collection-view-toggle-item:hover { color: var(--ink); }
+
+.collection-view-toggle-item[aria-pressed='true'] {
+  background: var(--panel);
+  border-color: var(--line);
+  color: var(--accent-strong);
+}
+
+/*
+ * 栅格：`minmax` 而不是固定列数。窄屏下自动掉列，不需要媒体查询，
+ * 也就不会出现「某个页面忘了写塌缩规则所以手机上横着滚」这种事。
+ */
+.collection-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+}
+
+/* 卡片等高：同一行里的卡片底边对齐，靠这个而不是靠各页面自己算高度。 */
+.collection-grid-item {
+  display: flex;
+  min-width: 0;
+}
+
+.collection-grid-item > * {
+  flex: 1;
+  min-width: 0;
+}
+
+.collection-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+}
+
+.collection-list-item { min-width: 0; }
