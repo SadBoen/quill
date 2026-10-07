@@ -4,6 +4,7 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import { AccountPage } from '../account/Account'
 import { AdminInstancePage, AdminUsersPage } from '../admin/Admin'
 import { AdminBackupPage } from '../admin/AdminBackup'
+import { ChannelsPage } from '../channels/Channels'
 import { AutomationsPage } from '../automations/Automations'
 import { AuthPage, RequireAdmin, RequireAuth } from '../auth/auth'
 import { ChatPage } from '../chat'
@@ -39,6 +40,7 @@ export function AppRoutes(): ReactNode {
             <Route path="/devices/:name/mcp" element={<Navigate to="/devices" replace />} />
             <Route path="/skills" element={<SkillsPage />} />
             <Route path="/automations" element={<AutomationsPage />} />
+            <Route path="/channels" element={<ChannelsPage />} />
             <Route path="/account" element={<AccountPage />} />
             <Route element={<RequireAdmin />}>
               <Route path="/admin/models" element={<ModelsPage />} />

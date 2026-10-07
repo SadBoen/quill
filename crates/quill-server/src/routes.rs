@@ -6,6 +6,7 @@ use axum::Router;
 use crate::api_admin;
 use crate::api_chat;
 use crate::api_chat_stream;
+use crate::api_channels;
 use crate::api_auth;
 use crate::api_backup;
 use crate::api_dispatch;
@@ -263,6 +264,27 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/admin/models", get(api_providers::pool));
 
     let authed_misc = Router::new()
+        // 通道：列表 / 建改 / 读 / 删，以及微信扫码那两步。
+        // 路由形态对齐 Octop（api/routers/channels.py:118-241），
+        // 差别是它挂在 /agents/{agent_id}/ 下而我们挂在 /api/ 下 ——
+        // 本项目的 agent 就是登录用户自己，多一层 agent_id 只会
+        // 让「这个 id 是不是我的」多出一个能填错的入口。
+        .route(
+            "/api/channels",
+            get(api_channels::list).post(api_channels::upsert),
+        )
+        .route(
+            "/api/channels/{id}",
+            get(api_channels::get_one).delete(api_channels::remove),
+        )
+        .route(
+            "/api/channels/weixin/qrcode/generate",
+            post(api_channels::weixin_qr_generate),
+        )
+        .route(
+            "/api/channels/weixin/qrcode/poll",
+            post(api_channels::weixin_qr_poll),
+        )
         // refresh 必须带令牌：它轮换的是**调用方自己**那一行，
         // 公开的话等于任何人都能来续期别人的会话。
         .route("/api/auth/refresh", post(api_auth::refresh))

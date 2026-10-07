@@ -395,14 +395,18 @@ export const ITEMS = [
     // 用户原话：「通道也搞起来吧，连接一个微信就可以了」+「通道 + 个性化页面一起做」。
     // 起因是 B6-4 —— 参考基准指错了地方。
     //
-    // 已完成：迁移 0009_channels.sql、channels/store.rs、channels/weixin.rs（16 个单测）。
-    // 未完成：api_channels.rs 的 REST 线与长轮询后台任务、前端 personalization 页。
+    // 2026-10-08 已完成：迁移 0009_channels.sql、channels/{store,weixin}.rs、
+    // api_channels.rs（REST + 微信扫码三步 + 长轮询后台任务）、
+    // ui/web/src/channels/（页面 + 8 条判据）。
+    // 判据：channels_http 14 条 + store 5 条 + weixin 11 条 + api_channels 11 条
+    //      + 前端 8 条；变异验证 6 个变异全被抓住。
     //
-    // 之所以要分两批提交：这一批先把「基准错了」这件事钉死（门禁 + 文档），
-    // 让下一批不再可能照着错的参考写。
+    // 仍缺：**没做过真机扫码**。微信那套三步与长轮询全是照公开协议写的，
+    // 判据只覆盖了请求体校验与凭据不外泄，真跑一次才算数。
+    // 另外「个性化」页里的 MBTI / 子智能体 / 启动仪式 / 心跳等页签还没做。
     verify: {
       kind: 'manual',
-      how: '用微信扫码连一次真账号，能收到消息并收到回复；界面点一遍 personalization 各页签',
+      how: '用微信扫一次真账号，能收到消息并收到回复；界面点一遍通道页',
     },
     blocks: [],
   },

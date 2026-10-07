@@ -873,6 +873,107 @@ fn parse_id(raw: &str) -> Result<[u8; 16], ApiError> {
         })
 }
 
+/// 会话 hex id。通道侧要拿着它给 `prepare_turn`，所以出口必须是**大写** ——
+/// 与 GET 列表读路径一致（见本文件 `hex` 的注释：两边口径不同会让前端失配）。
+pub(crate) fn session_hex(id: &[u8; 16]) -> String {
+    hex(id)
+}
+
+/// `parse_id` 的通道侧出口。**报错文案不同**：通道侧拿到非法 id 时的处置是
+/// 「丢掉重建」，不是「叫用户去建会话」，所以不该复用那个带 HTTP 引导的
+/// bad_request —— 那会让服务端日志里出现一条误导性的用户指引。
+pub(crate) fn parse_public_id(raw: &str) -> Result<[u8; 16], ()> {
+    quill_domain::SessionId::parse(raw)
+        .map(|s| *s.as_bytes())
+        .map_err(|_| ())
+}
+
+/// 通道用：这条会话还在不在。
+///
+/// 与 `ensure_session` 刻意分成两个函数：`ensure_session` 缺失时报错并叫用户
+/// 去建会话，而通道那边会话可能被用户删了，得当成「要新建」而不是故障。
+pub(crate) async fn session_exists(
+    db: &crate::db::DbBridge,
+    uid: quill_domain::UserId,
+    sid: [u8; 16],
+) -> Result<bool, ApiError> {
+    let found = db
+        .call(move |pool, _rt| {
+            Box::pin(async move {
+                let r: Result<bool, quill_agent::AgentError> = async {
+                    let n: i64 = sqlx::query_scalar(
+                        "SELECT count(*) FROM sessions WHERE user_id = ? AND id = ? AND deleted_at IS NULL",
+                    )
+                    .bind(uid.as_bytes().to_vec())
+                    .bind(sid.to_vec())
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|e| crate::db::storage_error("查会话", e))?;
+                    Ok(n > 0)
+                }
+                .await;
+                r
+            })
+        })
+        .map_err(storage)?;
+    Ok(found)
+}
+
+/// 通道用：为一个外部通道来件建一条 `solo` 会话。
+///
+/// **不复用 `create`**：那个处理器是 HTTP 端点，要走 `JsonBody` 与响应封装，
+/// 而通道是在后台任务里调的。
+///
+/// **不挂角色**：`create` 之所以会挂通用专家（`resolve_for_session`），是因为
+/// 网页侧栏按角色分组、不挂就归进「默认（未选角色）」，用户会以为自己在跟
+/// 某个角色说话其实没有。通道来件没有那个界面，也不该替用户选角色 ——
+/// 真要指定，由用户在通道设置里选，存进 config。
+pub(crate) async fn create_session_for_channel(
+    db: &crate::db::DbBridge,
+    uid: quill_domain::UserId,
+    title: &str,
+) -> Result<[u8; 16], ApiError> {
+    let id = new_id()?;
+    let now = now_ms();
+    let short = &hex_lower(&id)[..12];
+    let room = format!("room-{short}");
+    let workspace = format!("ws/{short}");
+    let title = title.chars().take(64).collect::<String>();
+
+    db.call(move |pool, _rt| {
+        Box::pin(async move {
+            let r: Result<(), quill_agent::AgentError> = async {
+                sqlx::query(
+                    "INSERT INTO sessions(user_id,id,kind,room_id,title,provider_id,model,state,\
+                     workspace_path,created_at,updated_at,last_active_at) \
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                )
+                .bind(uid.as_bytes().to_vec())
+                .bind(id.to_vec())
+                .bind("solo")
+                .bind(&room)
+                .bind(&title)
+                .bind("local")
+                .bind("")
+                .bind("IDLE")
+                .bind(&workspace)
+                .bind(now)
+                .bind(now)
+                .bind(now)
+                .execute(&pool)
+                .await
+                .map_err(|e| crate::db::storage_error("为通道建会话", e))?;
+                Ok(())
+            }
+            .await;
+            r
+        })
+    })
+    .map_err(storage)?;
+
+    Ok(id)
+}
+
 /// 一轮对话（可能含多次模型调用）的 token 用量累加器。
 ///
 /// ## 为什么需要它

@@ -22,6 +22,9 @@ const NAV_ITEMS = [
   { to: '/devices', icon: 'D', labelKey: 'nav.mcpServers', fallback: 'MCP 服务' },
   { to: '/skills', icon: 'K', labelKey: 'nav.skills', fallback: '技能包' },
   { to: '/automations', icon: 'A', labelKey: 'nav.automations', fallback: '自动化' },
+  // 通道：把智能体接到浏览器之外。图标用 H（channel）而不是 W ——
+  // W 已经是「工作区」了，两个一样的单字母在侧栏里分不清。
+  { to: '/channels', icon: 'H', labelKey: 'nav.channels', fallback: '通道' },
 ] as const
 
 const ADMIN_NAV_ITEMS = [

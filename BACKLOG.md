@@ -911,7 +911,46 @@ octop 的稀疏检出里也没有 `pages/Control` 与 `src/octop/infra/skills`�
 （`_safe_profile_directory` 见 `channels.py:352`、`_pkill_chrome_profile` 见 `:387`）。
 本项目没有浏览器依赖，微信走纯 HTTP，不受影响。
 
-**已完成**：迁移 `0009_channels.sql`、`channels/store.rs`、`channels/weixin.rs`。
+**已完成**：迁移 `0009_channels.sql`、`channels/{store,weixin}.rs`、`api_channels.rs`
+（REST 线 + 微信扫码三步 + 长轮询后台任务）、`ui/web/src/channels/`（页面 + 判据）。
+
+#### 这一轮踩的三个坑（都是判据骗人，不是代码难写）
+
+**1. cargo 按 mtime 判断是否重编 —— 还原后的文件可能更旧**
+
+变异验证用 `Copy-Item` 还原源码时，**还原出来的 mtime 可能比变异期那次编译还旧**，
+于是 cargo 认为「没变过」，直接复用**变异版二进制**。表现是：判据在
+**完全正确的源码**上报出一个不存在的失败。
+
+它让本轮骗了我两次：先是 `channels_are_scoped_to_their_owner` 报「B 看到了 A 的通道」，
+而后是 `unknown_policy_fails_closed` 在源码明明是 `_ => false` 时挂掉。
+两次都靠「加一行代码迫使重编」才现出原形。
+
+**判据脚本现在每次跑之前先 `touch` 被测源文件**，这条不能省。
+
+**2. 多段测试只取最后一段的退出码**
+
+`ch-test.sh` 原来对 lib 单测和 HTTP 判据各跑一次 `cargo test ... | tail -6`，
+只检查最后一条命令的退出码。结果 lib 段已经 FAILED，脚本却拿 HTTP 段的 0
+当成整体通过 —— **判据自己骗了自己**。改成逐段检查 + 任何一段红就整体红。
+
+**3. 纯函数变异只碰得到 `#[cfg(test)]` 里的单测**
+
+`peer_allowed` 的「未知策略必须 fail-closed」是 lib 单测，只跑
+`--test channels_http` 抓不到它。同理 `store` 与 `weixin` 协议层。
+所以变异验证必须跑**三段**：lib（channels::）、lib（api_channels::）、HTTP 判据。
+
+**「变异没抓到」先怀疑判据没覆盖到，再怀疑变异无效** —— 本轮 M3 连着两次
+「没红」，一次是原因 3，另一次是过期二进制。
+
+**4. 变异脚本的备份/还原会吃掉运行期间对源码的修改**
+
+这是上三条之外的第四个，单独记是因为它**直接改生产代码**：脚本在开头备份，
+在 `finally` 里还原。而它要跑十几分钟 —— 这期间我修的两个真 bug（游标抹掉
+会话映射、链式索引 panic）就被还原成了旧版，编译通过、判据全绿，毫无异样。
+
+所以规矩是：**变异验证期间不要同时改被验的文件**。要么等它跑完再改，
+要么把备份改成「按 git HEAD 还原」而不是按时刻还原。
 **未完成**：`api_channels.rs` 的 REST 线与长轮询后台任务、前端 personalization 页。
 
 顺带说明 CSS 基准那侧的情况（**没动**）：`.scripts/fetch-vendor.sh` 只取 goose 与

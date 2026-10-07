@@ -1,0 +1,57 @@
+/* 通道页。只用 index.css 里已有的那套变量，深色主题自动跟随。 */
+
+.channels-page .channel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.channels-page .channel-accounts {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.channels-page .channel-accounts > div {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.channels-page .channel-accounts dt {
+  color: var(--text-muted, inherit);
+  min-width: 4em;
+}
+
+.channels-page .channel-accounts dd {
+  margin: 0;
+}
+
+/* 二维码面板：横向排，窄屏时折行（scan hint + 二维码 + 取消键）。 */
+.channels-page .channel-qr-panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--border, currentColor);
+  border-radius: 8px;
+}
+
+.channels-page .channel-qr-panel img {
+  width: 180px;
+  height: 180px;
+  image-rendering: pixelated;
+}
+
+.channels-page .channel-qr-panel .page-status {
+  flex: 1 1 12em;
+  margin: 0;
+}
+
+/* 两种能力必须对等：下拉框与扫码按钮都要能点到，不能因为某一处
+   disabled 就让人以为整块坏了。 */
+.channels-page .field select {
+  width: 100%;
+  max-width: 24em;
+}

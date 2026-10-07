@@ -4,6 +4,8 @@ pub mod api_auth;
 pub mod api_backup;
 pub mod api_chat;
 pub mod api_chat_stream;
+/// 外部消息通道：REST 线与长轮询后台任务。
+pub mod api_channels;
 pub mod api_dispatch;
 /// 专家市场：从 SkillHub 技能集装成「我的专家」。
 pub mod api_expert_market;

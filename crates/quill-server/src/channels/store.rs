@@ -199,6 +199,35 @@ pub async fn get(
     })
 }
 
+/// 找出这个用户该 kind 的那一条（表上有 UNIQUE(owner_user_id, kind)）。
+///
+/// 供写入路径在 INSERT 之前查冲突：撞约束出来的 sqlx 错误会被兜成
+/// 503「存储不可用」，而同名通道是用户操作冲突，不是存储故障。
+pub async fn get_by_kind(
+    db: &DbBridge,
+    owner: quill_domain::UserId,
+    kind: &str,
+) -> Result<Option<ChannelRow>, ApiError> {
+    let uid = owner.as_bytes().to_vec();
+    let k = kind.to_string();
+    let found = db
+        .call(move |pool, _rt| {
+            Box::pin(async move {
+                let sql = format!("SELECT {COLS} FROM channels WHERE owner_user_id = ? AND kind = ?");
+                sqlx::query(&sql)
+                    .bind(&uid)
+                    .bind(&k)
+                    .fetch_optional(&pool)
+                    .await
+                    .map_err(|e| {
+                        quill_agent::AgentError::Storage { detail: format!("get channel by kind {k}: {e}") }
+                    })
+            })
+        })
+        .map_err(storage)?;
+    Ok(found.as_ref().map(|r| from_row(r)))
+}
+
 /// 建或更新一条通道。
 ///
 /// 冲突键用 `channel_id`，但**不更新 owner/kind**：换主人或换类型应该
