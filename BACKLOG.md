@@ -34,10 +34,25 @@ node scripts/status.mjs --json   # 机器可读
 `bash .scripts/gates.sh` 退出 0 才算活。覆盖：构建 / Rust 全部测试 / 前端
 typecheck·lint·vitest·build / 四道文本门禁。
 
-### B0-3 `cargo fmt` / `cargo clippy` 从未进门禁
-`gates.yml:51` 原话「刻意不开 clippy/rustfmt」。实测：`cargo clippy` 退出 0（仅 warning）、
-`cargo fmt --check` 有 **481 个文件**差异。**这是有意的空白**，不是回归。
-要不要采用 formatting 是**产品决定**，不该顺手做掉。
+### B0-3 `cargo fmt` / `cargo clippy` 还没进门禁
+最高指示第 5 条把 `cargo clippy -D warnings` 与 `cargo fmt --check` 列为门禁的一部分，
+但 CI（`gates.yml:51`）原话是「刻意不开 clippy/rustfmt」，`.scripts/gates.sh` 也不含它们。
+实测：`cargo clippy --workspace --all-targets` 退出 0、零 warning；`cargo fmt --check`
+有 **481 个文件**差异（项目从未采用 rustfmt）。
+要落地第 5 条：先定 `rustfmt.toml` + 一次性全量格式化（**单独一个提交**，免得淹没真实 diff），
+再把两者接进 CI。
+
+### B0-4 HTTP 层取值助手有 5 份 `need_str` / 3 份 `opt_str`，且语义不一致
+以代码为准（`grep -rn "fn need_str\|fn opt_str" crates/quill-server/src/`）：
+- `need_str` 5 份：`api_auth`（会 `trim()` 并拒空串）/ `api_dispatch` / `api_experts` /
+  `api_teams` / `api_bundle`（多一个 `where_` 参数）。
+- `opt_str` 3 份：`api_channels`（报「{key} 必须是字符串」）/ `api_experts`（带「实际收到 {类型}」）/
+  `api_teams`（还多一句「或 null」）。
+
+**这不是纯重复，是语义漂移** —— 硬合并会悄悄改掉用户可见的校验行为与报错文案。
+收口前先定「哪一套是规范语义」（建议：`trim` + 拒空串 + 带类型名 + 带 `where_`），
+再补能钉住新语义的测试。
+（`type_name` 三份逐字节相同，已于 2026-10-08 收口到 `crates/quill-server/src/jsonx.rs`。）
 
 ---
 

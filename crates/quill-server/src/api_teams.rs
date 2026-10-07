@@ -446,16 +446,7 @@ fn opt_str(body: &Value, key: &str) -> Result<Option<String>, ApiError> {
     }
 }
 
-fn type_name(v: &Value) -> &'static str {
-    match v {
-        Value::Null => "null",
-        Value::Bool(_) => "布尔值",
-        Value::Number(_) => "数字",
-        Value::String(_) => "字符串",
-        Value::Array(_) => "数组",
-        Value::Object(_) => "对象",
-    }
-}
+use crate::jsonx::type_name;
 
 fn new_uuid() -> Result<[u8; 16], ApiError> {
     let mut b = [0u8; 16];

@@ -3,17 +3,17 @@ pub mod api_auth;
 /// 备份：导出 / 校验 / 还原的 HTTP 接线。
 pub mod api_backup;
 pub mod api_bundle;
-pub mod api_chat;
-pub mod api_chat_stream;
 /// 外部消息通道：REST 线与长轮询后台任务。
 pub mod api_channels;
+pub mod api_chat;
+pub mod api_chat_stream;
 pub mod api_dispatch;
-/// 专家市场：从 SkillHub 技能集装成「我的专家」。
-/// MBTI 人格：测评、四维光谱、应用到某个专家。
-pub mod api_mbti;
 pub mod api_expert_market;
 pub mod api_experts;
 pub mod api_extensions;
+/// 专家市场：从 SkillHub 技能集装成「我的专家」。
+/// MBTI 人格：测评、四维光谱、应用到某个专家。
+pub mod api_mbti;
 pub mod api_providers;
 pub mod api_teams;
 /// 用户管理：列用户、启停账号。建号与删号**有意不做**，理由见该文件头。
@@ -29,6 +29,7 @@ pub mod dispatch_ledger;
 pub mod error;
 pub mod experts_repo;
 pub mod general_expert;
+pub mod jsonx;
 pub mod llm;
 pub mod llm_providers;
 /// MBTI 人格测评：题库、计分、落库、应用到专家人格正文。
@@ -43,13 +44,13 @@ pub mod ratelimit;
 pub mod routes;
 pub mod server;
 pub mod session_metrics;
-/// SSE 传输层：事件编码与「还没结束的响应体」。
-pub mod sse;
 /// 技能市场的上游客户端（SkillHub）。
 pub mod skillhub;
 /// SkillHub 技能包的解包与安全上限。
 pub mod skillhub_unpack;
 pub mod skills_repo;
+/// SSE 传输层：事件编码与「还没结束的响应体」。
+pub mod sse;
 pub mod state;
 pub mod teams_repo;
 pub mod tools;

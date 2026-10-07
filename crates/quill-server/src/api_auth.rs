@@ -55,9 +55,9 @@ pub(crate) async fn with_control<T, F>(
 where
     F: FnOnce(
             ControlPlane,
-        )
-            -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<T, ControlError>> + Send>>
-        + Send
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<T, ControlError>> + Send>,
+        > + Send
         + 'static,
     T: Send + 'static,
 {
@@ -320,7 +320,9 @@ pub async fn login(
     let db = state.db()?.clone();
     let session = with_control(&db, state.pbkdf2, move |cp| {
         Box::pin(async move {
-            let s = cp.login(&username, &password, Some(ua.as_str()), None).await?;
+            let s = cp
+                .login(&username, &password, Some(ua.as_str()), None)
+                .await?;
             Ok(s)
         })
     })
@@ -343,11 +345,7 @@ pub async fn login(
 /// 打进日志的用户名清洗：攻击者会拿超长/带控制字符的用户名来撑爆日志行。
 fn sanitize(s: &str) -> String {
     const MAX: usize = 32;
-    let cleaned: String = s
-        .chars()
-        .filter(|c| !c.is_control())
-        .take(MAX)
-        .collect();
+    let cleaned: String = s.chars().filter(|c| !c.is_control()).take(MAX).collect();
     if s.chars().filter(|c| !c.is_control()).count() > MAX {
         format!("{cleaned}…")
     } else {
@@ -523,16 +521,7 @@ fn need_str(body: &Value, key: &str) -> Result<String, ApiError> {
     }
 }
 
-fn type_name(v: &Value) -> &'static str {
-    match v {
-        Value::Null => "null",
-        Value::Bool(_) => "布尔值",
-        Value::Number(_) => "数字",
-        Value::String(_) => "字符串",
-        Value::Array(_) => "数组",
-        Value::Object(_) => "对象",
-    }
-}
+use crate::jsonx::type_name;
 
 #[cfg(test)]
 mod tests {
@@ -590,7 +579,11 @@ mod tests {
         assert_eq!(sanitize("a\nb\rc"), "abc");
         let long = "x".repeat(500);
         let s = sanitize(&long);
-        assert!(s.chars().count() <= 33, "日志里的用户名必须有上界：{} 字符", s.chars().count());
+        assert!(
+            s.chars().count() <= 33,
+            "日志里的用户名必须有上界：{} 字符",
+            s.chars().count()
+        );
         assert!(s.ends_with('…'), "截断要看得见，不能让人以为那是完整值");
     }
 

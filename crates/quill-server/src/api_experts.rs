@@ -277,11 +277,7 @@ pub(crate) fn only_keys(body: &Value, allowed: &[&str], route: &str) -> Result<(
 
 /// `label` 是「这里是什么」的自然说法：可以是路由，也可以是
 /// 「第 2 项的 MCP 服务器」这种容器内的位置。
-pub(crate) fn only_keys_at(
-    body: &Value,
-    allowed: &[&str],
-    label: &str,
-) -> Result<(), ApiError> {
+pub(crate) fn only_keys_at(body: &Value, allowed: &[&str], label: &str) -> Result<(), ApiError> {
     let Some(map) = body.as_object() else {
         return Err(ApiError::bad_request(
             "请求体必须是 JSON 对象。\n\
@@ -307,16 +303,7 @@ pub(crate) fn only_keys_at(
     }
 }
 
-fn type_name(v: &Value) -> &'static str {
-    match v {
-        Value::Null => "null",
-        Value::Bool(_) => "布尔值",
-        Value::Number(_) => "数字",
-        Value::String(_) => "字符串",
-        Value::Array(_) => "数组",
-        Value::Object(_) => "对象",
-    }
-}
+use crate::jsonx::type_name;
 
 pub fn map_agent_error<T>(op: &str, r: Result<T, AgentError>) -> Result<T, ApiError> {
     r.map_err(|e| agent_error_to_api(op, e))
@@ -435,7 +422,8 @@ mod tests {
     }
 
     #[test]
-    fn not_found_is_404_and_builtin_is_403() {        let nf = agent_error_to_api(
+    fn not_found_is_404_and_builtin_is_403() {
+        let nf = agent_error_to_api(
             "读取专家",
             AgentError::ExpertNotFound {
                 id: ExpertId::parse("ghost").expect("合法"),
