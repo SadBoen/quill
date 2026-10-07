@@ -1,9 +1,12 @@
-> **这份文件是需求的唯一来源，第 8–26 行是用户原话，不要改写。**
+> **这份文件是需求的唯一来源，下面「用户原话」一节不要改写。**
 > 里程碑与验收判据在 `MILESTONES.md`，操作准则与决策权限在 `WORKING.md`，
-> 待办明细在 `BACKLOG.md`，上游基线在 `UPSTREAM.md`。
-> 2026-10-06 重构：原先混在本文件后半段的「技术原则 / 交付判据 / 协作纪律 / 禁止 / 起步清单」
-> 是执行时补的操作规程，不是需求，已移入 `WORKING.md` —— 混在一起会导致分不清
-> 哪条约束来自用户、哪条是执行者自己发明的。现状快照也不再留在本文件，会过期。
+> 待办「为什么」在 `BACKLOG.md`，上游基线在 `UPSTREAM.md`。
+> **代码事实**在 [`docs/CODE-TRUTH.md`](docs/CODE-TRUTH.md) ——
+> 这里不写任何会过期的状态或环境快照。
+
+---
+
+## 用户原话（唯一可信的需求，不要改写）
 
 我要做一个智能体应用，请帮我从需求拆解到架构设计、技术选型、开发排期和验收标准，输出完整交付方案。
 “我想打造一款属于个人、团队使用的Agent智能体。以Rust语言为主，以goose项目为核心Agent，将octop或其他Agent上比较优秀的功能迁移过来。其中，资料库采用LLM-WIKI的变种，即xu-wiki（我自已的github）项目（请用rust重写）。
@@ -27,15 +30,13 @@ llama.cpp旧了你就更新成最新版本，也可以换其他运行环境，�
 
 ---
 
-## 项目与环境的客观事实（不是需求，会过期）
+## 项目定位（最高指示，不是需求）
 
-项目：quill —— 个人/家庭/小团队自用的 Agent 平台
-代码在 D:\96_CoderWorld\quill（WSL 路径 /mnt/d/96_CoderWorld/quill）
+quill —— 个人 / 家庭 / 小团队自用的 Agent 平台。
+**以 Rust 为实现语言（前端 TS 属壳，不受此限）、以腾讯 octop 为产品外壳、以 goose 为 Agent 内核。**
 
-环境事实（已核实，别再猜）：
-- Rust 在 WSL2，路径 ~/.cargo/bin，不在默认 PATH，先 export PATH="$HOME/.cargo/bin:$PATH"
-- 能用git的命令行窗口就不要用powershell
-- 本机有 llama.cpp（Windows 版，D:\00_ProgramFiles\llama-b11146）
+代码在 `D:\96_CoderWorld\quill`（WSL 路径 `/mnt/d/96_CoderWorld/quill`）。
 
-2026-10-06 备注：本文件原「起步」清单已过期 —— `/api/auth/login` 不再是 501，
-Web 界面与 LLM provider 抽象都已落地。现状看 `BACKLOG.md` 与 `MILESTONES.md`。
+**环境与代码事实一律不写在这里**（会过期）——见 [`docs/CODE-TRUTH.md`](docs/CODE-TRUTH.md)。
+任务拆解、待办「为什么」见 [`BACKLOG.md`](BACKLOG.md)，
+「现在到哪了」跑 `node scripts/status.mjs`。
