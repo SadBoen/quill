@@ -3,8 +3,22 @@ import type { CreateSessionResponse, HealthReport, SendMessageResponse, Session 
 import type { MessageHistory } from './model'
 import type { SessionMetrics } from './sessionMetrics'
 
+/**
+ * 侧栏的会话列表。
+ *
+ * **排除 `team_leader`。** 建团队时 `POST /api/teams` 会顺带插一条这种会话
+ * ——`teams.leader_session_id` 是 NOT NULL 且外键指向 sessions，而派工接口
+ * 强制要 `leader_session_id`，它就是记账的落点，删不掉。
+ *
+ * 但它不该出现在这里：前端没有任何地方按 kind 分组，于是用户看到的是
+ * 「建个团队凭空多出一会话」，点进去还是空的。
+ *
+ * 过滤在后端做而不是这里，理由是那条会话跑起来之后真的有消息：前端藏起来
+ * 会让侧栏的条数和实际数量对不上。详见 crates/quill-server/src/api_chat.rs
+ * 的 `SessionListQuery`。
+ */
 export async function loadSessions(): Promise<Session[]> {
-  const body = await apiJson<{ sessions: Session[] }>('/api/sessions')
+  const body = await apiJson<{ sessions: Session[] }>('/api/sessions?exclude_kind=team_leader')
   return body.sessions
 }
 

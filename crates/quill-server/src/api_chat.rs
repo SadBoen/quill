@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::response::IntoResponse;
 use axum::Json;
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use sqlx::Row;
@@ -29,26 +30,83 @@ fn new_id() -> Result<[u8; 16], ApiError> {
     Ok(b)
 }
 
+/// `GET /api/sessions` 的查询参数。
+///
+/// 只有一个字段，但**不能省**：建团队时 `POST /api/teams` 会顺带插一条
+/// `kind='team_leader'` 的会话（`teams.leader_session_id` 是 NOT NULL 且外键
+/// 指向 sessions，而派工时 `POST /api/dispatch` 强制要 `leader_session_id`）。
+/// 那条会话是**派工记账的落点**，删不掉也不该删。
+///
+/// 它出现在用户侧栏里却是另一回事：前端没有任何 `team_leader` 字样，
+/// 不知道这个 kind，于是一律当普通对话渲染 —— 用户看到的是「建个团队
+/// 凭空多出一会话」。
+///
+/// 所以过滤放在**后端**：那条会话跑起来之后真的有消息，前端藏起来会让
+/// 侧栏计数和实际数量对不上，而「显示的东西必须有真来源」是这条仓库的纪律。
+///
+/// 格式是**逗号分隔**（`?exclude_kind=team_leader,member`）而不是重复键：
+/// `serde_urlencoded` 把重复键解成 `Vec` 需要写成 `?exclude_kind[]=a`，
+/// 方括号在 URL 里既不干净也不好手拼。逗号是这类过滤参数更省事的写法。
+///
+/// 「这整套 team_leader 机制是自创的」—— goose 完全没有多智能体，
+/// octop 的 team 只是专家名册、没有「给团队开会话」这层。详见 BACKLOG B2-3。
+#[derive(Debug, Default, Clone, Deserialize)]
+pub struct SessionListQuery {
+    /// 要排除的 kind，逗号分隔。侧栏传 `team_leader` 即可。
+    #[serde(default)]
+    pub exclude_kind: Option<String>,
+}
+
+impl SessionListQuery {
+    /// 拆成可绑定的列表。空串与全空白都当「不过滤」——
+    /// `?exclude_kind=` 不该退化成 `NOT IN ('')` 而把整张表清空。
+    fn excluded(&self) -> Vec<String> {
+        self.exclude_kind
+            .as_deref()
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+}
+
 pub async fn list(
     State(state): State<AppState>,
     user: AuthUser,
+    Query(q): Query<SessionListQuery>,
 ) -> Result<axum::response::Response, ApiError> {
     let db = state.db()?;
     let uid = user.0.user_id;
+    let excluded = q.excluded();
     let rows = db
         .call(move |pool, _rt| {
             Box::pin(async move {
                 let r: Result<Vec<Value>, quill_agent::AgentError> = async {
-                    let out = sqlx::query(
+                    // 排除条件用 `NOT IN` 的占位符动态拼，不拼字符串 ——
+                    // kind 来自查询参数，拼进去就是注入面。
+                    // 空列表时退化成「不过滤」，而不是 `NOT IN ()` 那种语法错。
+                    let placeholders = vec!["?"; excluded.len()].join(", ");
+                    let sql = format!(
                         "SELECT hex(id) AS id, kind, room_id, title, expert_id, provider_id, \
                          model, state, message_count, created_at, last_active_at \
-                         FROM sessions WHERE user_id = ? AND deleted_at IS NULL \
+                         FROM sessions WHERE user_id = ? AND deleted_at IS NULL{where_clause} \
                          ORDER BY last_active_at DESC LIMIT 100",
-                    )
-                    .bind(uid.as_bytes().to_vec())
-                    .fetch_all(&pool)
-                    .await
-                    .map_err(|e| crate::db::storage_error("列会话", e))?;
+                        where_clause = if excluded.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" AND kind NOT IN ({placeholders})")
+                        },
+                    );
+                    let mut query = sqlx::query(&sql).bind(uid.as_bytes().to_vec());
+                    for kind in &excluded {
+                        query = query.bind(kind.as_str());
+                    }
+                    let out = query
+                        .fetch_all(&pool)
+                        .await
+                        .map_err(|e| crate::db::storage_error("列会话", e))?;
                     Ok(out
                         .into_iter()
                         .map(|row| {

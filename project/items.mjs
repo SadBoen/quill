@@ -212,10 +212,15 @@ export const ITEMS = [
   {
     id: 'B2-3',
     milestone: 'M2',
-    title: '建团队静默多出的那个会话，是否要在侧栏隐藏（产品决定）',
-    // 为什么只能人工：这是产品决定，不是事实。「要不要藏」没有对错，
-    // 机器能做的只有把那个会话渲染出来给人看。
-    verify: { kind: 'manual', how: '为什么只能人工：产品决定，没有对错，机器能做的只是把那个会话渲染出来给人看。建一个团队，看侧栏里那个 team_leader 会话，再定要不要藏' },
+    title: '建团队静默多出的那个会话，不在侧栏露出来',
+    // 产品决定已做（2026-10-07，BACKLOG 有完整理由）：那条会话是派工记账的
+    // 落点，删不掉也不该删，但它属于实现细节、不该让用户点进一个空会话。
+    //
+    // 判据钉的是**过滤真的生效**，而不是「界面上看不见」——后者只能靠眼睛，
+    // 而这条 API 是团队页也要用的全量入口，把侧栏的诉求钉在它身上会连累团队页。
+    // 细节（为什么是逗号分隔、为什么不用重复键、为什么过滤放后端）见
+    // crates/quill-server/src/api_chat.rs 的 SessionListQuery 文档注释。
+    verify: { kind: 'cmd', cmd: 'cargo test -p quill-server --test session_kind_filter_http', cwd: 'wsl' },
     blocks: [],
   },
   {

@@ -507,11 +507,62 @@ team id **直接丢弃**。路由只按 `room_id` + `round` 过滤，于是
 参照 `vendor/goose/crates/goose/src/agents/subagent_handler.rs:46` 的 `run_subagent_task`
 （每个子 agent 独立 config + 独立 session）来做，注明哪些是我们自研。
 
-### B2-3 建团队静默多出一个会话
+### B2-3 建团队静默多出一个会话 —— **2026-10-07 已定：侧栏隐藏，已实现**
 
 `teams.leader_session_id` NOT NULL + 外键指向 `sessions`，所以 `POST /api/teams`
 会在事务里先插一条 `team_leader` 会话，它**真的出现在左侧会话列表**。
 要不要在侧栏隐藏 `kind='team_leader'` 是产品决定；现在如实显示。
+
+**核实过能不能不建：不能，而且也不该。** `POST /api/dispatch` 强制要
+`leader_session_id`，成员还得各带一条 `member_session_id`，
+`dispatch_ledger.rs:63` 把两者写进派工账本 —— 那条会话就是「谁在这一轮说了什么、
+花了多少 token」的落点。要它不存在只能改表结构，那是产品契约变更，
+代价远大于收益。
+
+**产品决定：藏。** 理由是它属于实现细节（满足外键约束的手段），
+不是用户建的对话；露在侧栏里用户点进去看到的是空的，反而困惑。
+
+**已实现**：`GET /api/sessions?exclude_kind=` 支持按 kind 过滤（逗号分隔），
+侧栏请求带 `exclude_kind=team_leader`。过滤放在后端而不是前端，
+是因为那条会话跑起来之后真的有消息，前端藏起来会让侧栏条数和实际数量对不上
+——「显示的东西必须有真来源」是这条仓库的纪律。
+`/api/usage` 那条**不动**：用量统计页按会话列 token，团队跑的花费本来就该算进去。
+
+**⚠ 这套机制是自创的，引用时不能写成「参考上游」**：
+- **goose** 完全没有多智能体这套东西，`team_leader` / `leader_session` 零命中；
+- **octop** 有 teams，但**没有「主持人会话」这个概念**。
+  `manager.py:913` 用 `is_team_agent(row)` 判断一个 agent 是不是团队本身，
+  团队就是**专家的名册**（`drop_member` / `reload`），
+  没有「给团队开一条会话当工作区」这层。
+
+配套判据在 `crates/quill-server/tests/session_kind_filter_http.rs`（8 条，
+做过变异验证）。**上游没得参考，所以钉的是我们自己的契约。**
+
+变异验证里踩了三个坑，全是「判据自己骗人」而不是代码有问题，记下来：
+
+1. **`.filter(|s| !s.is_empty())` 是个伪变异，判据永远抓不到它。**
+   删掉这行之后 `NOT IN ('','team_leader')` 与 `NOT IN ('team_leader')` 结果
+   **完全相同** —— `''` 匹配不到任何行（kind 的 CHECK 限死在
+   `solo`/`team_leader`/`team_member`），SQLite 视它为「这一项没约束」。
+   为了这个变异先后写了两版判据（`,solo`、`,team_leader`），都测不出差别。
+   现在它**不在变异清单里**，判据 `empty_segments_do_not_change_the_result`
+   也改了名并写明「这条现在证明不了什么，别指望它会红」。
+   `filter` 本身保留 —— 防御性的：kind 一旦放宽到允许空串，留着空段就会
+   真的滤掉那些会话。
+2. **想验「空列表别去拼 `NOT IN ()`」，那个变异也是无效的** ——
+   实测 SQLite **接受** `NOT IN ()` 并当成恒真（`.scratch/sq.sh`），
+   拼了也不报错。换成真会炸的形态才验得住：SQL 不带占位符却仍绑 N 个参数。
+3. **变异脚本自己的替换串写错** → 编译失败 → `cargo test` 报 FAILED 但跑的
+   其实是**未变异的代码**，判据被误判成「没抓到」。
+   现在每个变异是独立 `.py` 文件，里面 `assert` 匹配上了才写盘。
+
+**另外记一条操作纪律**：变异脚本碰的是**生产文件**。中途把它 stop 掉时，
+还原没跑到，`.filter` 那行就留在了 `api_chat.rs` 里 —— 直到下一次 grep 才发现。
+现在脚本带 `trap cleanup EXIT INT TERM`，并在结束时做逐字节比对校验。
+
+**判据本身也会骗人，得自己验。** 只测默认形态、全空输入、或者挑一个
+「两种实现结果恰好相同」的用例，判据就是摆设。
+
 
 ### B2-4 teams 的几列建了没人用
 
