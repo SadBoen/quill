@@ -16,6 +16,8 @@ pub mod api_users;
 pub mod api_wiki;
 pub mod auth;
 pub mod body;
+/// 外部消息通道：把智能体接到浏览器之外（微信等）。
+pub mod channels;
 pub mod config;
 pub mod db;
 pub mod dispatch_ledger;

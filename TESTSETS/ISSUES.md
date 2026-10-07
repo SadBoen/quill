@@ -2071,7 +2071,8 @@ GET /api/extensions/mcp
   - 其余 4 个是装饰（`WelcomeQuickCards`/`Markdown`/`RailEdgeControl`）
     或时间轴（`TrajectoryLedger`/`TrajectoryTimeline`/`TurnTimelineRail`），
     `TodoProgressPanel` 是清单不是图表。
-  - 另一个同源参考项目 `vendor/openoctopus-frontend/` 同样没有图表库，
+  - CSS 移植基准 `vendor/openoctopus-frontend/`（`Zpoteiti/OpenOctopus`，
+    **与 Octop 无亲缘关系的另一个项目**，只贡献 `index.css`）同样没有图表库，
     而我此前**从没看过它**。
 - **根本问题在调查方法，不是漏了某一个文件**：
   我用「已知的组件名 → 定向 grep」代替了「全仓扫一遍」。

@@ -71,7 +71,7 @@ if command -v node  >/dev/null 2>&1; then HAVE_NODE=1;  echo "  ✓ node $(node 
 need_text_gate=1
 if [ "$HAVE_NODE" = "0" ]; then
   echo "  → 文本门禁跳过：没有 node。这一段请在有 node 的一侧单独跑："
-  echo "     node .mojibake-check.mjs / .i18n-check.mjs / .vendor-baseline-check.mjs / .library-check.mjs / .upstream-check.mjs"
+  echo "     node .mojibake-check.mjs / .i18n-check.mjs / .vendor-baseline-check.mjs / .octop-baseline-check.mjs / .library-check.mjs / .upstream-check.mjs"
   echo "     node .provenance-check.mjs / .scripts/upstream-check-selftest.mjs / .scripts/provenance-selftest.mjs"
   echo "     node .scripts/upstream-check-selftest.mjs"
   need_text_gate=0
@@ -163,6 +163,23 @@ if [ "$need_text_gate" = "1" ]; then
     grep -E '✗' /tmp/quill-gate-vendor-self.log | head -6 | sed 's/^/    /'
   fi
   run_upstream_gate .library-check.mjs
+
+  # 禁止把 vendor/openoctopus-frontend（Zpoteiti/OpenOctopus，另一个项目）
+  # 当成 Octop 引用。2026-10-08 出过真事故：照它写了几百行通道实现，
+  # 而它里面根本没有微信、没有 personalization。
+  #
+  # 这道门禁自己出过一次「结构完整、有自测、跑得快、永远绿，但扫了 0 个
+  # 文件」的事故（根路径多退了一层 + 扩展名一边带点一边不带点，两个 bug
+  # 互相掩盖）。它是靠变异验证抓出来的 —— 所以自测之外，必须再跑一次
+  # 注入违规引用的变异，见 .scratch/mut-octop-baseline.ps1。
+  run_text_gate .octop-baseline-check.mjs
+  step "文本门禁 · .octop-baseline-check.mjs（自测）"
+  if node .octop-baseline-check.mjs --self-test >/tmp/quill-gate-octop-self.log 2>&1; then
+    tail -1 /tmp/quill-gate-octop-self.log | sed 's/^/  ✓ /'
+  else
+    fail "「别把另一个项目当 Octop」这道判定不可信 —— 它得能证明自己会红"
+    grep -E '✗' /tmp/quill-gate-octop-self.log | head -6 | sed 's/^/    /'
+  fi
   # 上游基线核对：比对 UPSTREAM.md 记的 pin 与本机实际检出。
   # 它核的是「本地检出对不对」，所以同样要真有那份检出才核得了。
   run_upstream_gate .upstream-check.mjs

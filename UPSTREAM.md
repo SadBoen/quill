@@ -133,9 +133,24 @@ git diff HEAD FETCH_HEAD --stat        # 改了哪些文件
 |---|---|---|
 | **vendor（逐字）** | 17 个预设专家的人格 markdown → `ui/web/src/experts/library/` | 必须逐字，保留 MIT 出处 |
 | **只读参考** | 专家页 / 对话页 / 团队页的结构、文案、交互顺序 | 只对齐结构，**不要求代码一致** |
-| **移植基准** | `vendor/openoctopus-frontend/`（另一个项目 OpenOctopus）的 CSS | `ui/web/src/index.css` 逐字节一致，有 sha256 门禁 |
+| **移植基准** | `vendor/openoctopus-frontend/`（**另一个项目** OpenOctopus）的 CSS | `ui/web/src/index.css` 逐字节一致，有 sha256 门禁 |
 
-**注意**：Octop ≠ OpenOctopus，是两个不同项目。前者是设计参考，后者是 CSS 移植基准。
+**Octop ≠ OpenOctopus，两者是无关项目。**
+
+- **Octop** = `github.com/TencentCloud/Octop`，设计参考 + 功能参考，取用它的
+  结构、文案与交互。**功能上的问题（某功能怎么做的、接口长什么样）只认它。**
+- **OpenOctopus** = `github.com/Zpoteiti/OpenOctopus`（MIT, Copyright 2026 Yucheng Zou），
+  只贡献 `index.css` 这一个文件。
+
+**别把后者当前者用。** 2026-10-08 出过真事故：照
+`vendor/openoctopus-frontend/src/channels/api.ts` 写了几百行通道实现，
+而那棵树里没有微信、没有 personalization，功能全在 Octop 那边。
+`node .octop-baseline-check.mjs` 现在会把这种引用报红。
+
+> 附带一条踩过的坑：这道门禁自己第一版是**永远绿的**——
+> 根路径多拼了一层 `'..'` 扫到了仓库外面，同时扩展名一边带点一边不带点
+> 导致一个文件都判不成文本。两个 bug 互相掩盖，输出看着完全正常。
+> 是靠变异验证（注入违规引用看门禁会不会红）抓出来的。
 
 ### MCP transport 枚举：参考命名，不是照抄
 

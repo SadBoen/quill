@@ -833,28 +833,95 @@ octop 的稀疏检出里也没有 `pages/Control` 与 `src/octop/infra/skills`�
 只写裸文件名会让读者落到另一份上，从而误判「上游缺陷」是假的 ——
 这是 2026-10-06 修掉的一处真实引用腐烂。
 
-### B6-4 第三个上游 `vendor/openoctopus-frontend` 没有任何来源记录
+### B6-4 第三个上游 `vendor/openoctopus-frontend` 的来源查到了：它不是 Octop
 
-`ui/web/src/index.css` 必须与 `vendor/openoctopus-frontend/src/index.css` 逐字节一致，
-这是整套样式的地基。但那棵树：
+**2026-10-08 定位（此前只知道「来源没记」）**
 
-- `.scripts/fetch-vendor.sh` **只取 goose 与 octop，从来不取它**；
-- 它没有 `.git`（`git -C vendor/openoctopus-frontend` 会一路往上找到仓库根，
-  于是看起来「有 git」，其实是纯拷贝 —— 这也是 `.upstream-check.mjs` 里特意警告过的陷阱）；
-- **它来自哪个仓库、哪个版本，全项目任何地方都没记。**
+来源是 **`github.com/Zpoteiti/OpenOctopus`**（MIT，Copyright 2026 Yucheng Zou，
+`frontend/` 目录，pin `682b22cc22b50f1900fec6212cafb9465a2c2ff3`）。
+**与 Octop 没有任何亲缘关系** —— 是一个 21 星的个人版项目，只贡献 `index.css`。
 
-也就是说：这条移植基准只存在于一台机器上，谁 clone 下来都拿不到，
-`UPSTREAM-USAGE.md` 里指着它的那条引用在别处只能报「核不到」。
+真 Octop 是 **`github.com/TencentCloud/Octop`**（本地检出 `.octop-ref/octop/`）。
 
-**为什么不能顺手编一个 pin**：编一个出来比留空更坏 —— 它会让下一个人
-去核一个不存在的地方，正是这个项目吃过的一次亏（2026-10-06 的引用腐烂）。
-所以这条的判据是人工：要问清当初拷贝它的人「这是哪个仓库的哪一版」。
+**这次事故是怎么发生的**
 
-顺带在这一轮修掉的两件相关的事（都已验证）：
+2026-10-08 实现「微信通道」时，照着 `vendor/openoctopus-frontend/src/channels/api.ts`
+写了几百行通道实现。事后核才发现：
+
+- 那棵树整棵搜 `weixin|wechat|iLink|微信|personalization` **零命中**；
+- 它的通道只有 `discord` / `dingtalk` 两个适配器（`src/channels/adapters/`）；
+- 用户开着的 octop 里那个「个性化」页面（含微信扫码、MBTI、九种通道）属于
+  `TencentCloud/Octop` 的 `dashboard/src/pages/Agent/`，在另一个仓库里。
+
+写下来的教训不是「下次核仔细点」，而是**文档里的免责声明会反向授权**：
+
+| 位置 | 原文 | 实际效果 |
+|---|---|---|
+| `UPSTREAM.md:136` | 「**移植基准** vendor/openoctopus-frontend/」 | 「它有正式身份」 |
+| `.vendor-baseline-check.mjs` | 为它建了 sha256 门禁 | 「它被门禁守着，所以可靠」 |
+| `UPSTREAM-USAGE.md:111` | 「注意这是第三个项目，不是 Octop」 | 「已经有人尽过责了」 |
+| B6-4（本条） | 「它来自哪个仓库全项目没记」 | 「这是个已知待办，不用再查」 |
+
+四条各自看都像尽职，合起来的效果是**没人再去问它凭什么在这儿**。
+项目早就知道自己手上多了一个来路不明的第三方，却把它越描越正式。
+
+**修法**
+
+- CSS 基准**保持不动**。`ui/web/src/index.css` 已经与那份文件逐字节一致，
+  改指向等于改一个已落地的产物 —— 那是另一件事，不混进这次。
+- 新增门禁 `.octop-baseline-check.mjs`：全仓扫一遍，任何把
+  `vendor/openoctopus-frontend` 当 Octop 功能参考的引用直接报红。
+  允许出现的位置逐条写明白理由（文件级白名单）。
+- 通道与个性化页面的参考基准**换成 `.octop-ref/octop/`**。
+
+**这道新门禁自己出过一次「永远绿」的事故**（值得单列，因为它就是本项目
+反复吃过的那种亏）：`new URL('.', import.meta.url)` 已经以尾斜杠结尾，
+我又拼了个 `'..'`，于是扫的是仓库的**父目录**；同时扩展名集合里存的是
+`.md`（带点）而 `slice` 出来的是 `md`（不带点），两边永远对不上，于是
+**一个文件都判不成文本**。两个 bug 互相掩盖，结果是：结构完整、有自测、
+跑得飞快、输出 OK，**但从没扫过任何文件**。
+
+是靠变异验证抓出来的（注入一处违规引用，门禁照样报绿）。
+判据得能证明自己会红 —— 这条老规矩又救了一次场。
+
+**为什么这道门禁停在使用者可见的粒度上**：白名单是文件级的。
+第一版想做行级（只放行「解释它是什么」的那几行），但那样白名单会变成一串
+行号，任何人插一行就能绕过，改个行号还要改门禁。所以停在文件级：它拦住的是
+「把这份 vendor 当功能参考」这个真实错误用法，而那种引用只可能出现在源码与
+设计文档里。代价是白名单文件内部不再检查 —— 那几个文件都是说明性的。
+
+### B6-5 通道与个性化页面按 `TencentCloud/Octop` 重做（2026-10-08 起）
+
+起因见 B6-4。用户原话：「通道也搞起来吧，连接一个微信就可以了」
++「通道 + 个性化页面一起做」。
+
+**Octop 侧核到的真结构**（`.octop-ref/octop/`，**只读对齐**）：
+
+| 东西 | 位置 | 要点 |
+|---|---|---|
+| 通道表 | `src/octop/infra/db/repos/channels.py:11-20` | `channel_id` / `agent_id` / `user_id` / `kind` / `name` / `config_json` / `enabled` |
+| 配置类型 | `dashboard/src/api/types/channel.ts:96-106` | 九种：discord/dingtalk/feishu/qq/yuanbao/dashboard/wecom/weixin/octopbot |
+| 微信多账号 | 同上 `:70-84` | `accounts[]`，每账号 `account_id/account_name/base_url/token/bot_uin/user_uin` |
+| 准入策略 | 同上 `:60` | `dm_policy`：`open` / `allowlist` / `pairing` / `disabled` |
+| REST 路由 | `src/octop/api/routers/channels.py:118-241` | `/agents/{agent_id}/channels/{channel_id}` + 各平台 `/qrcode/generate` `/qrcode/poll` |
+| 微信扫码 | `src/octop/infra/gateway/channels/qr_bind.py:102-136` | 调 `octop_gateway.channels.weixin.login_qr`，即同一套 iLink 接口 |
+| 个性化页面 | `dashboard/src/pages/Agent/Personalization/` | 含 `MBTISelector`、`AgentPluginsPanel`、`EditDrawer` |
+
+**刻意不学的**：Octop 的部分通道靠**拉起 Chrome 自动化**完成绑定
+（`_safe_profile_directory` 见 `channels.py:352`、`_pkill_chrome_profile` 见 `:387`）。
+本项目没有浏览器依赖，微信走纯 HTTP，不受影响。
+
+**已完成**：迁移 `0009_channels.sql`、`channels/store.rs`、`channels/weixin.rs`。
+**未完成**：`api_channels.rs` 的 REST 线与长轮询后台任务、前端 personalization 页。
+
+顺带说明 CSS 基准那侧的情况（**没动**）：`.scripts/fetch-vendor.sh` 只取 goose 与
+octop，从来不取它；它没有 `.git`（`git -C vendor/openoctopus-frontend` 会一路往上
+找到仓库根，于是看起来「有 git」，其实是纯拷贝 —— `.upstream-check.mjs` 里特意
+警告过这个陷阱）。它只存在于一台机器上，谁 clone 下来都拿不到。
+
 「index.css 有 sha256 门禁」这句话原本是假的 —— 那道检查只躺在
-`.wsl-css-check.sh` 等四个一次性脚本里，`gates.sh` 与 CI 都没跑。
-现已搬成正经门禁 `.vendor-baseline-check.mjs`，钉哈希而非比对两个文件，
-所以 `vendor/` 不在手边也能核，能进 CI 的 gates-core。
+`.wsl-css-check.sh` 等四个一次性脚本里，`gates.sh` 与 CI 都没跑。现已搬成正经门禁
+`.vendor-baseline-check.mjs`，钉哈希而非比对两个文件，所以 `vendor/` 不在手边也能核。
 另外 `.provenance-check.mjs` 原来把「整棵树没取回来」判成「引用坏了」，
 现已区分「没核」与「坏了」。
 

@@ -371,17 +371,38 @@ export const ITEMS = [
   {
     id: 'B6-4',
     milestone: 'M6',
-    title: 'vendor/openoctopus-frontend 的来源与版本被记下来（现在无处可查）',
-    // 2026-10-08 第一次真跑 CI 才暴露：CI 里那条引用
-    // `vendor/openoctopus-frontend/src/index.css:70` 报「文件读不到」，
-    // 顺着查下去发现 —— 那棵树**从来没人取过**（fetch-vendor.sh 只取 goose 与 octop），
-    // 它没有 .git，是纯拷贝，而它来自哪个仓库、哪个版本**全项目没记**。
+    title: 'vendor/openoctopus-frontend 的来源查到了：它不是 Octop',
+    // 2026-10-08 定位。此前只知道「来源没记」，真去查才发现问题更大：
+    // 那棵树是 `github.com/Zpoteiti/OpenOctopus`（MIT, Copyright 2026 Yucheng Zou），
+    // **与 Octop 无亲缘关系的另一个项目**，只贡献 index.css。
+    // 真 Octop 是 `github.com/TencentCloud/Octop`（本地检出 .octop-ref/octop/）。
     //
-    // 所以判据只能是人工：要问当初拷贝它的人「这是哪个仓库的哪一版」。
-    // 编一个 pin 进去比留空更坏 —— 它会让下一个人去核一个不存在的地方。
+    // 事故：照那棵树写了几百行通道实现，而它里面没有微信、没有 personalization。
+    // 见 BACKLOG B6-4 —— 那里记了「文档里的免责声明会反向授权」这件事本身。
+    //
+    // 判据是自动的：门禁 .octop-baseline-check.mjs 全仓扫一遍，
+    // 任何把它当 Octop 功能参考的引用都报红。
+    verify: {
+      kind: 'script',
+      how: 'node .octop-baseline-check.mjs（另有 --self-test；变异验证见 .scratch/mut-octop-baseline.ps1）',
+    },
+    blocks: [],
+  },
+  {
+    id: 'B6-5',
+    milestone: 'M6',
+    title: '通道与个性化页面按 TencentCloud/Octop 重做',
+    // 用户原话：「通道也搞起来吧，连接一个微信就可以了」+「通道 + 个性化页面一起做」。
+    // 起因是 B6-4 —— 参考基准指错了地方。
+    //
+    // 已完成：迁移 0009_channels.sql、channels/store.rs、channels/weixin.rs（16 个单测）。
+    // 未完成：api_channels.rs 的 REST 线与长轮询后台任务、前端 personalization 页。
+    //
+    // 之所以要分两批提交：这一批先把「基准错了」这件事钉死（门禁 + 文档），
+    // 让下一批不再可能照着错的参考写。
     verify: {
       kind: 'manual',
-      how: '问清 vendor/openoctopus-frontend 来自哪个仓库、哪个 commit，写进 UPSTREAM.md，再让 fetch-vendor.sh 按那个 pin 取',
+      how: '用微信扫码连一次真账号，能收到消息并收到回复；界面点一遍 personalization 各页签',
     },
     blocks: [],
   },

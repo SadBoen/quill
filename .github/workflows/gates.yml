@@ -113,6 +113,15 @@ jobs:
       - name: 移植基准判定的自测
         run: node .vendor-baseline-check.mjs --self-test
 
+      # 禁止把 vendor/openoctopus-frontend（Zpoteiti/OpenOctopus，另一个项目）
+      # 当成 Octop 引用 —— 2026-10-08 照它写过几百行，而它里面没有微信通道。
+      # 真 Octop 是 .octop-ref/octop。
+      - name: 文本门禁 · 别把另一个项目当 Octop
+        run: node .octop-baseline-check.mjs
+
+      - name: 该判定的自测
+        run: node .octop-baseline-check.mjs --self-test
+
       - name: 文本门禁 · 上游判定的自测
         run: node .scripts/upstream-check-selftest.mjs
 

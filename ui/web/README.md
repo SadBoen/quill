@@ -5,8 +5,17 @@ Quill 的单页前端，构建产物输出到 `dist/`，由 `quill-server` 通�
 
 ## 来源
 
-代码 vendor 自 [OpenOctopus](https://github.com/Zpoteiti/OpenOctopus) 的 `frontend/`
-（MIT，Copyright 2026 Yucheng Zou，原许可证见 `LICENSE.OpenOctopus`）。
+前端骨架与设计系统 vendor 自 [OpenOctopus](https://github.com/Zpoteiti/OpenOctopus)
+的 `frontend/`（MIT，Copyright 2026 Yucheng Zou，原许可证见 `LICENSE.OpenOctopus`）。
+
+**而功能与交互参考的是另一个项目 [Octop](https://github.com/TencentCloud/Octop)
+（本地检出 `.octop-ref/octop/`）。**
+
+两者**无关**：OpenOctopus 只贡献 `index.css` 这一个文件（以及整体前端骨架），
+Octop 才是页面结构、交互、文案、以及**后端接口形态**的参考。
+问「某功能怎么做的、接口长什么样」只认 Octop。搞混过一次，代价是照着
+没有那个功能的代码写了一整轮实现 —— `node .octop-baseline-check.mjs`
+现在会把这种引用报红。详见 `UPSTREAM.md` 与 `BACKLOG.md` 的 B6-4。
 
 保留的部分是那套成熟前端轮子：React 19 + Vite 8 + TypeScript 5.9 + TanStack Query +
 react-markdown + i18next 的整体骨架，以及设计系统（`index.css`、`chat/ChatPage.css`）、
