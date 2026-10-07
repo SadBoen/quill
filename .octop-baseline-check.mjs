@@ -82,6 +82,7 @@ const ALLOWED = new Map([
   ['UPSTREAM-USAGE.md', '同上'],
   ['project/items.mjs', 'B6-4 记着它的来源问题'],
   ['BACKLOG.md', 'B6-4 记着它的来源问题'],
+  ['docs/OCTOP-MIGRATION-INVENTORY.md', '迁移清单里要写明它只贡献 CSS、不能当 Octop 功能参考'],
   ['TESTSETS/ISSUES.md', '事故记录：那份 vendor 从哪来、为什么不能当 Octop 用'],
   ['.provenance-check.mjs', '引用分类器要认识这棵树'],
   ['.scripts/provenance-selftest.mjs', '同上（自测）'],

@@ -1,0 +1,471 @@
+﻿序号,octop文件,方法,路径,用途,分类,接goose核心,quill现状,备注
+0,__init__.py,(无端点),,,平台,否,—,聚合，无端点
+1,acp.py,GET,/acp,Get global ACP runners,goose核心,是,未做,外部 CLI agent（opencode/claude_code 等）runner 配置
+2,acp.py,PUT,/acp,Update global ACP runners,goose核心,是,未做,外部 CLI agent（opencode/claude_code 等）runner 配置
+3,acp.py,GET,/acp/{runner_name},Get global ACP runner,goose核心,是,未做,外部 CLI agent（opencode/claude_code 等）runner 配置
+4,acp.py,PUT,/acp/{runner_name},Update global ACP runner,goose核心,是,未做,外部 CLI agent（opencode/claude_code 等）runner 配置
+5,acp.py,DELETE,/acp/{runner_name},Delete global ACP runner,goose核心,是,未做,外部 CLI agent（opencode/claude_code 等）runner 配置
+6,acp.py,GET,/agents/{agent_id}/acp,Get ACP config,goose核心,是,未做,外部 CLI agent（opencode/claude_code 等）runner 配置
+7,acp.py,PUT,/agents/{agent_id}/acp,Update ACP config,goose核心,是,未做,外部 CLI agent（opencode/claude_code 等）runner 配置
+8,acp.py,PUT,/agents/{agent_id}/acp/tool,Update acp_runner tool toggle,goose核心,是,未做,外部 CLI agent（opencode/claude_code 等）runner 配置
+9,acp.py,GET,/agents/{agent_id}/acp/{runner_name},Get ACP runner,goose核心,是,未做,外部 CLI agent（opencode/claude_code 等）runner 配置
+10,acp.py,PUT,/agents/{agent_id}/acp/{runner_name},Update ACP runner,goose核心,是,未做,外部 CLI agent（opencode/claude_code 等）runner 配置
+11,acp.py,DELETE,/agents/{agent_id}/acp/{runner_name},Delete ACP runner,goose核心,是,未做,外部 CLI agent（opencode/claude_code 等）runner 配置
+12,admin.py,GET,/overview,,平台,否,未做,管理台总览/审计/指标
+13,admin.py,GET,/audit-log,,平台,否,未做,管理台总览/审计/指标
+14,admin.py,GET,/metrics,,平台,否,未做,管理台总览/审计/指标
+15,agent_files.py,GET,/agents/{agent_id}/heartbeat-config,,goose核心,是,未做,每 agent 心跳配置 + 每日记忆文件
+16,agent_files.py,PUT,/agents/{agent_id}/heartbeat-config,,goose核心,是,未做,每 agent 心跳配置 + 每日记忆文件
+17,agent_files.py,GET,/agents/{agent_id}/memory/daily,,goose核心,是,未做,每 agent 心跳配置 + 每日记忆文件
+18,agent_files.py,GET,/agents/{agent_id}/memory/daily/{filename},,goose核心,是,未做,每 agent 心跳配置 + 每日记忆文件
+19,agent_files.py,DELETE,/agents/{agent_id}/memory/daily/{filename},,goose核心,是,未做,每 agent 心跳配置 + 每日记忆文件
+20,agent_tools.py,GET,/{agent_id}/tool-settings,List built-in and plugin tools with enable state,goose核心,是,部分,每 agent 工具开关（denylist + 插件工具）
+21,agent_tools.py,PUT,/{agent_id}/tool-settings,Update built-in tool denylist and optional plugin tool flags,goose核心,是,部分,每 agent 工具开关（denylist + 插件工具）
+22,agent_tools.py,PATCH,/{agent_id}/tool-settings/{tool_name},Enable or disable a single built-in or plugin tool,goose核心,是,部分,每 agent 工具开关（denylist + 插件工具）
+23,agents.py,GET,,List agents,goose核心,是,部分,agent 生命周期（quill 叫 expert）
+24,agents.py,POST,,Create agent,goose核心,是,部分,agent 生命周期（quill 叫 expert）
+25,agents.py,POST,/{agent_id}/read,Mark agent read,goose核心,是,部分,agent 生命周期（quill 叫 expert）
+26,agents.py,GET,/{agent_id},Get agent,goose核心,是,部分,agent 生命周期（quill 叫 expert）
+27,agents.py,PATCH,/{agent_id},Update agent,goose核心,是,部分,agent 生命周期（quill 叫 expert）
+28,agents.py,DELETE,/{agent_id},Delete agent,goose核心,是,部分,agent 生命周期（quill 叫 expert）
+29,agents.py,POST,/{agent_id}/avatar,Upload expert avatar,goose核心,是,部分,agent 生命周期（quill 叫 expert）
+30,agents.py,GET,/{agent_id}/avatar,Fetch expert avatar,goose核心,是,部分,agent 生命周期（quill 叫 expert）
+31,agents.py,DELETE,/{agent_id}/avatar,Delete expert avatar,goose核心,是,部分,agent 生命周期（quill 叫 expert）
+32,agents.py,POST,/{agent_id}/start,Start agent,goose核心,是,部分,agent 生命周期（quill 叫 expert）
+33,agents.py,POST,/{agent_id}/stop,Stop agent,goose核心,是,部分,agent 生命周期（quill 叫 expert）
+34,agents.py,POST,/{agent_id}/reload,Reload agent,goose核心,是,部分,agent 生命周期（quill 叫 expert）
+35,agents.py,GET,/{agent_id}/status,Agent runtime status,goose核心,是,部分,agent 生命周期（quill 叫 expert）
+36,auth.py,GET,/captcha,Public login captcha config,平台,否,已实现,登录/登出/me/改密（quill 无 register，有意）
+37,auth.py,POST,/login,Sign in,平台,否,已实现,登录/登出/me/改密（quill 无 register，有意）
+38,auth.py,POST,/logout,Sign out,平台,否,已实现,登录/登出/me/改密（quill 无 register，有意）
+39,auth.py,GET,/me,Current user profile,平台,否,已实现,登录/登出/me/改密（quill 无 register，有意）
+40,auth.py,POST,/change-password,Change password,平台,否,已实现,登录/登出/me/改密（quill 无 register，有意）
+41,auth.py,PATCH,/me,Update profile,平台,否,已实现,登录/登出/me/改密（quill 无 register，有意）
+42,auth.py,POST,/me/avatar,Upload the current user's portrait,平台,否,已实现,登录/登出/me/改密（quill 无 register，有意）
+43,auth.py,DELETE,/me/avatar,Remove the current user's portrait,平台,否,已实现,登录/登出/me/改密（quill 无 register，有意）
+44,auth_ldap.py,GET,/ldap/status,LDAP login availability,外部依赖,否,未做,LDAP 目录登录
+45,auth_ldap.py,GET,/ldap/config,Get LDAP directory configuration,外部依赖,否,未做,LDAP 目录登录
+46,auth_ldap.py,PUT,/ldap/config,Upsert LDAP directory configuration,外部依赖,否,未做,LDAP 目录登录
+47,auth_ldap.py,POST,/ldap/config/test,Test LDAP directory connectivity,外部依赖,否,未做,LDAP 目录登录
+48,auth_oauth.py,GET,/oauth/status,SSO login button status,外部依赖,否,未做,OAuth SSO（飞书/钉钉/企微）
+49,auth_oauth.py,POST,/oauth/start,Begin OAuth login,外部依赖,否,未做,OAuth SSO（飞书/钉钉/企微）
+50,auth_oauth.py,GET,/oauth/callback,OAuth identity provider callback,外部依赖,否,未做,OAuth SSO（飞书/钉钉/企微）
+51,auth_oauth.py,POST,/oauth/exchange,Exchange OAuth login code,外部依赖,否,未做,OAuth SSO（飞书/钉钉/企微）
+52,auth_oauth.py,POST,/oauth/bind/start,Begin OAuth account linking,外部依赖,否,未做,OAuth SSO（飞书/钉钉/企微）
+53,auth_oauth.py,POST,/oauth/unbind,Unlink SSO identity,外部依赖,否,未做,OAuth SSO（飞书/钉钉/企微）
+54,auth_oauth.py,GET,/oauth/providers/{kind},Get OAuth provider configuration,外部依赖,否,未做,OAuth SSO（飞书/钉钉/企微）
+55,auth_oauth.py,PUT,/oauth/providers/{kind},Upsert OAuth provider configuration,外部依赖,否,未做,OAuth SSO（飞书/钉钉/企微）
+56,auth_oauth.py,POST,/oauth/providers/{kind}/test,Test OAuth provider connection,外部依赖,否,未做,OAuth SSO（飞书/钉钉/企微）
+57,auth_oidc.py,GET,/oidc/status,OIDC login button status,外部依赖,否,未做,OIDC SSO
+58,auth_oidc.py,POST,/oidc/start,Begin OIDC login,外部依赖,否,未做,OIDC SSO
+59,auth_oidc.py,GET,/oidc/callback,OIDC identity provider callback,外部依赖,否,未做,OIDC SSO
+60,auth_oidc.py,POST,/oidc/exchange,Exchange OIDC login code,外部依赖,否,未做,OIDC SSO
+61,auth_oidc.py,GET,/oidc/config,Get OIDC provider configuration,外部依赖,否,未做,OIDC SSO
+62,auth_oidc.py,PUT,/oidc/config,Upsert OIDC provider configuration,外部依赖,否,未做,OIDC SSO
+63,auth_oidc.py,POST,/oidc/config/test,Test OIDC discovery,外部依赖,否,未做,OIDC SSO
+64,backup.py,GET,/backup/list,List stored backup archives,平台,否,部分,备份/恢复（quill 有 export/verify/restore，admin-only）
+65,backup.py,GET,/backup/status,Whether a backup or restore is in progress,平台,否,部分,备份/恢复（quill 有 export/verify/restore，admin-only）
+66,backup.py,GET,/backup/auto,Get automatic backup settings,平台,否,部分,备份/恢复（quill 有 export/verify/restore，admin-only）
+67,backup.py,PUT,/backup/auto,Update automatic backup settings,平台,否,部分,备份/恢复（quill 有 export/verify/restore，admin-only）
+68,backup.py,POST,/backup/auto/run,Run automatic backup now,平台,否,部分,备份/恢复（quill 有 export/verify/restore，admin-only）
+69,backup.py,POST,/backup/create,Create backup and save to backups dir,平台,否,部分,备份/恢复（quill 有 export/verify/restore，admin-only）
+70,backup.py,GET,/backup/files/{filename},Download a stored backup archive,平台,否,部分,备份/恢复（quill 有 export/verify/restore，admin-only）
+71,backup.py,POST,/backup/files/{filename}/restore,Restore from stored backup,平台,否,部分,备份/恢复（quill 有 export/verify/restore，admin-only）
+72,backup.py,DELETE,/backup/files/{filename},Delete a stored backup,平台,否,部分,备份/恢复（quill 有 export/verify/restore，admin-only）
+73,backup.py,GET,/backup/export,Download selected system backup (ephemeral),平台,否,部分,备份/恢复（quill 有 export/verify/restore，admin-only）
+74,backup.py,POST,/backup/import,Upload backup archive to backups dir,平台,否,部分,备份/恢复（quill 有 export/verify/restore，admin-only）
+75,bridge.py,POST,/bridge/probe,Probe a remote Octop (login + list experts),goose核心,是,未做,远程 octop 实例协作 + 入站 WS
+76,bridge.py,POST,/bridge/connections/{connection_id}/probe,Probe a saved connection (stored password if omitted),goose核心,是,未做,远程 octop 实例协作 + 入站 WS
+77,bridge.py,GET,/bridge/connections,List bridge connections,goose核心,是,未做,远程 octop 实例协作 + 入站 WS
+78,bridge.py,POST,/bridge/connections,Add a bridge connection,goose核心,是,未做,远程 octop 实例协作 + 入站 WS
+79,bridge.py,GET,/bridge/connections/{connection_id},Get a bridge connection,goose核心,是,未做,远程 octop 实例协作 + 入站 WS
+80,bridge.py,POST,/bridge/connections/{connection_id}/connect,Connect / reconnect Bridge WS,goose核心,是,未做,远程 octop 实例协作 + 入站 WS
+81,bridge.py,POST,/bridge/connections/{connection_id}/disconnect,Disconnect Bridge WS,goose核心,是,未做,远程 octop 实例协作 + 入站 WS
+82,bridge.py,PATCH,/bridge/connections/{connection_id},Update bridge connection settings,goose核心,是,未做,远程 octop 实例协作 + 入站 WS
+83,bridge.py,DELETE,/bridge/connections/{connection_id},Delete a bridge connection,goose核心,是,未做,远程 octop 实例协作 + 入站 WS
+84,bridge.py,GET,/bridge/connections/{connection_id}/agents,List remote agents via bridge,goose核心,是,未做,远程 octop 实例协作 + 入站 WS
+85,bridge.py,GET,/bridge/connections/{connection_id}/providers/resolved,List peer resolved models via bridge tunnel,goose核心,是,未做,远程 octop 实例协作 + 入站 WS
+86,bridge.py,GET,/bridge/connections/{connection_id}/providers/active-model,Get peer active model via bridge tunnel,goose核心,是,未做,远程 octop 实例协作 + 入站 WS
+87,bridge.py,GET,/bridge/connections/{connection_id}/knowledge-bases,List peer knowledge bases via bridge tunnel,goose核心,是,未做,远程 octop 实例协作 + 入站 WS
+88,bridge.py,GET,/bridge/connections/{connection_id}/knowledge-bases/capability,Get peer knowledge capability via bridge tunnel,goose核心,是,未做,远程 octop 实例协作 + 入站 WS
+89,bridge.py,GET,/bridge/connections/{connection_id}/browser/env-status,Get peer browser env status via bridge tunnel,goose核心,是,未做,远程 octop 实例协作 + 入站 WS
+90,bridge.py,GET,/bridge/connections/{connection_id}/browser/harness-sessions,List peer browser harness sessions via bridge tunnel,goose核心,是,未做,远程 octop 实例协作 + 入站 WS
+91,bridge.py,POST,/bridge/connections/{connection_id}/browser/sessions/{session_id}/handoff,Handoff peer browser control via bridge tunnel,goose核心,是,未做,远程 octop 实例协作 + 入站 WS
+91,browser/__init__.py,(无端点),,,外部依赖,否,未做,浏览器自动化（拉起 Chromium，录制/回放）
+92,browser/env.py,GET,/browser/env-status,,外部依赖,否,未做,浏览器自动化（拉起 Chromium，录制/回放）
+93,browser/env.py,POST,/browser/install,,外部依赖,否,未做,浏览器自动化（拉起 Chromium，录制/回放）
+94,browser/harness.py,GET,/browser/harness-sessions,,外部依赖,否,未做,浏览器自动化（拉起 Chromium，录制/回放）
+95,browser/harness.py,POST,/browser/sessions/{session_id}/handoff,,外部依赖,否,未做,浏览器自动化（拉起 Chromium，录制/回放）
+96,browser/harness.py,POST,/browser/shutdown,Stop the local Chrome process for an octop-browser profile,外部依赖,否,未做,浏览器自动化（拉起 Chromium，录制/回放）
+97,browser/record_replay.py,GET,/browser/record-replay/status,,外部依赖,否,未做,浏览器自动化（拉起 Chromium，录制/回放）
+98,browser/record_replay.py,POST,/browser/record-replay/start,,外部依赖,否,未做,浏览器自动化（拉起 Chromium，录制/回放）
+99,browser/record_replay.py,POST,/browser/record-replay/stop,,外部依赖,否,未做,浏览器自动化（拉起 Chromium，录制/回放）
+100,browser/record_replay.py,POST,/browser/record-replay/stop-and-generate-skill,,外部依赖,否,未做,浏览器自动化（拉起 Chromium，录制/回放）
+101,browser/record_replay.py,POST,/browser/record-replay/skill-content,,外部依赖,否,未做,浏览器自动化（拉起 Chromium，录制/回放）
+102,browser/record_replay.py,POST,/browser/record-replay/replay,,外部依赖,否,未做,浏览器自动化（拉起 Chromium，录制/回放）
+102,browser/stream.py,(无端点),,,外部依赖,否,未做,浏览器自动化（拉起 Chromium，录制/回放）
+103,browser/uninstall.py,POST,/browser/uninstall,,外部依赖,否,未做,浏览器自动化（拉起 Chromium，录制/回放）
+104,channels.py,GET,/agents/{agent_id}/channels,,外部依赖,否,部分,IM 渠道（quill 只做微信）
+105,channels.py,POST,/agents/{agent_id}/channels,,外部依赖,否,部分,IM 渠道（quill 只做微信）
+106,channels.py,GET,/agents/{agent_id}/channels/{channel_id},,外部依赖,否,部分,IM 渠道（quill 只做微信）
+107,channels.py,PATCH,/agents/{agent_id}/channels/{channel_id},,外部依赖,否,部分,IM 渠道（quill 只做微信）
+108,channels.py,DELETE,/agents/{agent_id}/channels/{channel_id},,外部依赖,否,部分,IM 渠道（quill 只做微信）
+109,channels.py,POST,/agents/{agent_id}/channels/{channel_id}/test,,外部依赖,否,部分,IM 渠道（quill 只做微信）
+110,channels.py,POST,/agents/{agent_id}/channels/probe,,外部依赖,否,部分,IM 渠道（quill 只做微信）
+111,channels.py,POST,/agents/{agent_id}/channels/dingtalk/qrcode/generate,,外部依赖,否,部分,IM 渠道（quill 只做微信）
+112,channels.py,POST,/agents/{agent_id}/channels/dingtalk/qrcode/poll,,外部依赖,否,部分,IM 渠道（quill 只做微信）
+113,channels.py,POST,/agents/{agent_id}/channels/wecom/qrcode/generate,,外部依赖,否,部分,IM 渠道（quill 只做微信）
+114,channels.py,POST,/agents/{agent_id}/channels/wecom/qrcode/poll,,外部依赖,否,部分,IM 渠道（quill 只做微信）
+115,channels.py,POST,/agents/{agent_id}/channels/qq/qrcode/generate,Generate a QQ Bot binding QR code,外部依赖,否,部分,IM 渠道（quill 只做微信）
+116,channels.py,POST,/agents/{agent_id}/channels/qq/qrcode/poll,Poll a QQ Bot binding QR code,外部依赖,否,部分,IM 渠道（quill 只做微信）
+117,channels.py,POST,/agents/{agent_id}/channels/weixin/qrcode/generate,,外部依赖,否,部分,IM 渠道（quill 只做微信）
+118,channels.py,POST,/agents/{agent_id}/channels/weixin/qrcode/poll,,外部依赖,否,部分,IM 渠道（quill 只做微信）
+119,channels.py,POST,/agents/{agent_id}/channels/feishu/bot-creator/start,,外部依赖,否,部分,IM 渠道（quill 只做微信）
+120,channels.py,POST,/agents/{agent_id}/channels/feishu/bot-creator/poll,,外部依赖,否,部分,IM 渠道（quill 只做微信）
+121,channels.py,POST,/agents/{agent_id}/channels/feishu/bot-creator/stop,,外部依赖,否,部分,IM 渠道（quill 只做微信）
+122,channels.py,POST,/agents/{agent_id}/channels/yuanbao/bot-creator/start,,外部依赖,否,部分,IM 渠道（quill 只做微信）
+123,channels.py,POST,/agents/{agent_id}/channels/yuanbao/bot-creator/poll,,外部依赖,否,部分,IM 渠道（quill 只做微信）
+124,channels.py,POST,/agents/{agent_id}/channels/yuanbao/bot-creator/stop,,外部依赖,否,部分,IM 渠道（quill 只做微信）
+124,chat/__init__.py,(无端点),,,goose核心,是,部分,看板聊天（WS turn / 线程 / 轨迹 / HITL）
+125,chat/history.py,GET,/agents/{agent_id}/threads,List threads,goose核心,是,部分,看板聊天（WS turn / 线程 / 轨迹 / HITL）
+126,chat/history.py,GET,/agents/{agent_id}/history-migration/status,Legacy history migration status,goose核心,是,部分,看板聊天（WS turn / 线程 / 轨迹 / HITL）
+127,chat/history.py,POST,/agents/{agent_id}/history-migration/start,Start legacy history migration,goose核心,是,部分,看板聊天（WS turn / 线程 / 轨迹 / HITL）
+128,chat/history.py,POST,/agents/{agent_id}/threads,New thread,goose核心,是,部分,看板聊天（WS turn / 线程 / 轨迹 / HITL）
+129,chat/history.py,GET,/agents/{agent_id}/threads/{thread_id}/context-usage,Context window usage breakdown,goose核心,是,部分,看板聊天（WS turn / 线程 / 轨迹 / HITL）
+130,chat/history.py,GET,/agents/{agent_id}/threads/{thread_id}/history,Thread history,goose核心,是,部分,看板聊天（WS turn / 线程 / 轨迹 / HITL）
+131,chat/history.py,POST,/agents/{agent_id}/threads/{thread_id}/read,Mark thread read,goose核心,是,部分,看板聊天（WS turn / 线程 / 轨迹 / HITL）
+132,chat/history.py,POST,/agents/{agent_id}/threads/{thread_id}/fork,Fork thread from an assistant message,goose核心,是,部分,看板聊天（WS turn / 线程 / 轨迹 / HITL）
+133,chat/history.py,PATCH,/agents/{agent_id}/session,Rebind dashboard session,goose核心,是,部分,看板聊天（WS turn / 线程 / 轨迹 / HITL）
+134,chat/history.py,GET,/agents/{agent_id}/threads/{thread_id}/history/export,Export unrendered conversation history,goose核心,是,部分,看板聊天（WS turn / 线程 / 轨迹 / HITL）
+135,chat/history.py,PATCH,/agents/{agent_id}/threads/{thread_id},Update thread,goose核心,是,部分,看板聊天（WS turn / 线程 / 轨迹 / HITL）
+136,chat/history.py,DELETE,/agents/{agent_id}/threads/{thread_id},Delete thread,goose核心,是,部分,看板聊天（WS turn / 线程 / 轨迹 / HITL）
+136,chat/models.py,(无端点),,,goose核心,是,部分,看板聊天（WS turn / 线程 / 轨迹 / HITL）
+136,chat/notify_ws.py,(无端点),,,goose核心,是,部分,看板聊天（WS turn / 线程 / 轨迹 / HITL）
+137,chat/routes.py,GET,/agents/{agent_id}/chat/welcome,Chat welcome quick cards,goose核心,是,部分,看板聊天（WS turn / 线程 / 轨迹 / HITL）
+138,chat/routes.py,POST,/agents/{agent_id}/chat/hitl/resume,Resume HITL approval (SSE),goose核心,是,部分,看板聊天（WS turn / 线程 / 轨迹 / HITL）
+139,chat/routes.py,POST,/agents/{agent_id}/chat/polish,Polish prompt,goose核心,是,部分,看板聊天（WS turn / 线程 / 轨迹 / HITL）
+139,chat/serialize.py,(无端点),,,goose核心,是,部分,看板聊天（WS turn / 线程 / 轨迹 / HITL）
+139,chat/sse.py,(无端点),,,goose核心,是,部分,看板聊天（WS turn / 线程 / 轨迹 / HITL）
+140,chat/trajectory.py,GET,/agents/{agent_id}/threads/{thread_id}/trajectory,Thread trajectory history,goose核心,是,部分,看板聊天（WS turn / 线程 / 轨迹 / HITL）
+141,chat/trajectory.py,GET,/agents/{agent_id}/threads/{thread_id}/trajectory/events/{event_id},Trajectory event detail,goose核心,是,部分,看板聊天（WS turn / 线程 / 轨迹 / HITL）
+142,chat/trajectory.py,GET,/agents/{agent_id}/threads/{thread_id}/trajectory/metrics,Thread trajectory metrics,goose核心,是,部分,看板聊天（WS turn / 线程 / 轨迹 / HITL）
+143,chat/trajectory.py,GET,/agents/{agent_id}/threads/{thread_id}/trajectory/stream,Live trajectory SSE stream,goose核心,是,部分,看板聊天（WS turn / 线程 / 轨迹 / HITL）
+144,chat/trajectory.py,GET,/agents/{agent_id}/threads/{thread_id}/trajectory/export,Export thread trajectory,goose核心,是,部分,看板聊天（WS turn / 线程 / 轨迹 / HITL）
+144,chat/turn.py,(无端点),,,goose核心,是,部分,看板聊天（WS turn / 线程 / 轨迹 / HITL）
+144,chat/ws.py,(无端点),,,goose核心,是,部分,看板聊天（WS turn / 线程 / 轨迹 / HITL）
+145,connectors.py,GET,/connectors/catalog,Connector catalog,goose核心,是,部分,Connector/MCP 实例（quill 有 MCP，无目录）
+146,connectors.py,GET,/connectors/weknora/detect-local,Detect local WeKnora,goose核心,是,部分,Connector/MCP 实例（quill 有 MCP，无目录）
+147,connectors.py,GET,/connector-instances,List connector instances,goose核心,是,部分,Connector/MCP 实例（quill 有 MCP，无目录）
+148,connectors.py,GET,/connectors/custom-mcp,Get custom MCP servers,goose核心,是,部分,Connector/MCP 实例（quill 有 MCP，无目录）
+149,connectors.py,PUT,/connectors/custom-mcp,Save custom MCP servers,goose核心,是,部分,Connector/MCP 实例（quill 有 MCP，无目录）
+150,connectors.py,PATCH,/connectors/custom-mcp/servers/{server_name},Patch one custom MCP server,goose核心,是,部分,Connector/MCP 实例（quill 有 MCP，无目录）
+151,connectors.py,POST,/connectors/custom-mcp/test,Probe a custom MCP server,goose核心,是,部分,Connector/MCP 实例（quill 有 MCP，无目录）
+152,connectors.py,GET,/connector-instances/{instance_id},Get connector instance,goose核心,是,部分,Connector/MCP 实例（quill 有 MCP，无目录）
+153,connectors.py,POST,/connector-instances,Create connector instance,goose核心,是,部分,Connector/MCP 实例（quill 有 MCP，无目录）
+154,connectors.py,PATCH,/connector-instances/{instance_id},Update connector instance,goose核心,是,部分,Connector/MCP 实例（quill 有 MCP，无目录）
+155,connectors.py,DELETE,/connector-instances/{instance_id},Delete connector,goose核心,是,部分,Connector/MCP 实例（quill 有 MCP，无目录）
+156,connectors.py,POST,/connector-instances/{instance_id}/test,Test connector,goose核心,是,部分,Connector/MCP 实例（quill 有 MCP，无目录）
+157,connectors.py,POST,/connectors/test-credentials,Test credentials,goose核心,是,部分,Connector/MCP 实例（quill 有 MCP，无目录）
+158,connectors.py,GET,/connectors/{kind}/cli-status,Host CLI install status for CLI connectors,goose核心,是,部分,Connector/MCP 实例（quill 有 MCP，无目录）
+159,connectors.py,POST,/connectors/{kind}/install-cli,Install host CLI for CLI connectors (admin),goose核心,是,部分,Connector/MCP 实例（quill 有 MCP，无目录）
+160,connectors.py,POST,/connectors/feishu-cli/user-auth/start,Start Feishu CLI user device-code login,goose核心,是,部分,Connector/MCP 实例（quill 有 MCP，无目录）
+161,connectors.py,POST,/connectors/feishu-cli/user-auth/complete,Complete Feishu CLI user device-code login,goose核心,是,部分,Connector/MCP 实例（quill 有 MCP，无目录）
+162,connectors.py,POST,/connector-instances/{instance_id}/agently-auth/start,Start Agent Mail device authorization,goose核心,是,部分,Connector/MCP 实例（quill 有 MCP，无目录）
+163,connectors.py,GET,/connector-instances/{instance_id}/agently-auth/status,Read Agent Mail authorization status,goose核心,是,部分,Connector/MCP 实例（quill 有 MCP，无目录）
+164,connectors.py,POST,/connector-instances/{instance_id}/agently-auth/logout,Log out of Agent Mail,goose核心,是,部分,Connector/MCP 实例（quill 有 MCP，无目录）
+165,connectors.py,POST,/connector-instances/{instance_id}/agently-auth/refresh,Refresh Agent Mail authorization,goose核心,是,部分,Connector/MCP 实例（quill 有 MCP，无目录）
+166,connectors.py,POST,/connector-instances/{instance_id}/feishu-user-auth/start,Start Feishu user login for an existing connector instance,goose核心,是,部分,Connector/MCP 实例（quill 有 MCP，无目录）
+167,connectors.py,POST,/connector-instances/{instance_id}/feishu-user-auth/complete,Complete Feishu user login for an existing connector instance,goose核心,是,部分,Connector/MCP 实例（quill 有 MCP，无目录）
+168,connectors.py,POST,/connector-instances/{instance_id}/refresh,Refresh OAuth tokens,goose核心,是,部分,Connector/MCP 实例（quill 有 MCP，无目录）
+169,connectors.py,GET,/connectors/auth/{kind}/info,Connector auth info,goose核心,是,部分,Connector/MCP 实例（quill 有 MCP，无目录）
+170,connectors.py,GET,/connectors/auth/{kind}/authorize-url,OAuth authorize URL,goose核心,是,部分,Connector/MCP 实例（quill 有 MCP，无目录）
+171,connectors.py,POST,/connectors/auth/{kind}/exchange-code,Exchange auth code,goose核心,是,部分,Connector/MCP 实例（quill 有 MCP，无目录）
+172,connectors.py,POST,/connectors/oauth/start,Start OAuth flow (unified),goose核心,是,部分,Connector/MCP 实例（quill 有 MCP，无目录）
+173,connectors.py,POST,/connectors/oauth/{kind}/start,Start OAuth flow (legacy),goose核心,是,部分,Connector/MCP 实例（quill 有 MCP，无目录）
+174,connectors.py,GET,/connectors/oauth/callback,OAuth callback,goose核心,是,部分,Connector/MCP 实例（quill 有 MCP，无目录）
+175,connectors.py,GET,/connectors/oauth/pending/{state_id},Poll OAuth result,goose核心,是,部分,Connector/MCP 实例（quill 有 MCP，无目录）
+176,cron.py,GET,/cron/settings,Cron server settings,goose核心,是,未做,定时任务
+177,cron.py,GET,/agents/{agent_id}/cron/examples,Task page example prompts,goose核心,是,未做,定时任务
+178,cron.py,GET,/agents/{agent_id}/cron,List cron jobs,goose核心,是,未做,定时任务
+179,cron.py,POST,/agents/{agent_id}/cron,Create cron job,goose核心,是,未做,定时任务
+180,cron.py,GET,/agents/{agent_id}/cron/{cron_id},Get cron job,goose核心,是,未做,定时任务
+181,cron.py,PATCH,/agents/{agent_id}/cron/{cron_id},Update cron job,goose核心,是,未做,定时任务
+182,cron.py,DELETE,/agents/{agent_id}/cron/{cron_id},Delete cron job,goose核心,是,未做,定时任务
+183,cron.py,POST,/agents/{agent_id}/cron/{cron_id}/run-now,Run cron now,goose核心,是,未做,定时任务
+183,desktop/__init__.py,(无端点),,,外部依赖,否,未做,远程桌面
+184,desktop/install.py,POST,/desktop/install,,外部依赖,否,未做,远程桌面
+185,desktop/settings.py,POST,/desktop/geometry,,外部依赖,否,未做,远程桌面
+186,desktop/settings.py,GET,/desktop/geometry,,外部依赖,否,未做,远程桌面
+187,desktop/status.py,GET,/desktop/status,,外部依赖,否,未做,远程桌面
+187,desktop/stream.py,(无端点),,,外部依赖,否,未做,远程桌面
+188,desktop/uninstall.py,POST,/desktop/uninstall,,外部依赖,否,未做,远程桌面
+189,envs.py,GET,,List global environment variables,平台,否,未做,全局环境变量
+190,envs.py,PUT,,Replace global environment variables,平台,否,未做,全局环境变量
+191,envs.py,DELETE,/{key},Delete one global environment variable,平台,否,未做,全局环境变量
+192,experts.py,GET,/experts/published,List published expert templates,平台,否,部分,专家模板 + 市场（quill 有市场）
+193,experts.py,GET,/experts/published/{expert_id}/avatar,Fetch published expert avatar,平台,否,部分,专家模板 + 市场（quill 有市场）
+194,experts.py,GET,/experts/published/{expert_id},Get published expert template detail,平台,否,部分,专家模板 + 市场（quill 有市场）
+195,experts.py,POST,/agents/{agent_id}/publish-expert,Publish an agent workspace as an expert template,平台,否,部分,专家模板 + 市场（quill 有市场）
+196,experts.py,POST,/experts/published/{expert_id}/refresh,Refresh a published expert snapshot,平台,否,部分,专家模板 + 市场（quill 有市场）
+197,experts.py,DELETE,/experts/published/{expert_id},Unpublish an expert template,平台,否,部分,专家模板 + 市场（quill 有市场）
+198,experts.py,POST,/experts/published/{expert_id}/install,Install a private agent from a published expert,平台,否,部分,专家模板 + 市场（quill 有市场）
+199,experts.py,GET,/experts,,平台,否,部分,专家模板 + 市场（quill 有市场）
+200,experts.py,GET,/experts/hub,List SkillHub expert market cards,平台,否,部分,专家模板 + 市场（quill 有市场）
+201,experts.py,GET,/experts/hub/{slug},Get SkillHub expert market detail,平台,否,部分,专家模板 + 市场（quill 有市场）
+202,experts.py,POST,/experts/hub/{slug}/install,Create an agent from a SkillHub expert market card,平台,否,部分,专家模板 + 市场（quill 有市场）
+203,experts.py,GET,/experts/{expert_id},,平台,否,部分,专家模板 + 市场（quill 有市场）
+204,experts.py,POST,/agents/from-expert/{expert_id},,平台,否,部分,专家模板 + 市场（quill 有市场）
+205,filesystem.py,GET,/defaults,Default root_dir picker bounds for the current user,数据,否,未做,主机文件系统浏览
+206,filesystem.py,GET,/roots,Browse-tree roots available to the current user,数据,否,未做,主机文件系统浏览
+207,filesystem.py,GET,/dirs,,数据,否,未做,主机文件系统浏览
+208,filesystem.py,POST,/probe,,数据,否,未做,主机文件系统浏览
+209,filesystem.py,POST,/ensure-bwrap,Best-effort ensure bubblewrap for scoped root_dir,数据,否,未做,主机文件系统浏览
+210,filesystem.py,GET,/docker-status,Detect whether Docker CLI/daemon are available,数据,否,未做,主机文件系统浏览
+211,filesystem.py,POST,/ensure-docker,Best-effort ensure Docker Engine for sandbox backends,数据,否,未做,主机文件系统浏览
+212,filesystem.py,POST,/mkdir,,数据,否,未做,主机文件系统浏览
+213,filesystem.py,POST,/rename,,数据,否,未做,主机文件系统浏览
+214,health.py,GET,,Health check,平台,否,已实现,健康检查（quill 是 /healthz）
+215,i18n.py,GET,/i18n/tools,Localized agent tool display names,平台,否,未做,工具/技能显示名本地化
+216,i18n.py,GET,/i18n/skills,Localized built-in skill display names,平台,否,未做,工具/技能显示名本地化
+217,internal_mcp.py,POST,/internal/mcp/{kind}/{instance_id},,goose核心,是,未做,托管 connector 的内部 MCP 网关
+218,internal_mcp.py,GET,/internal/mcp/{kind}/{instance_id},,goose核心,是,未做,托管 connector 的内部 MCP 网关
+219,internal_mcp.py,DELETE,/internal/mcp/{kind}/{instance_id},,goose核心,是,未做,托管 connector 的内部 MCP 网关
+219,invites.py,(无端点),,,平台,否,部分,邀请码（quill 存储层有，HTTP 未接）
+220,knowledge_bases.py,GET,/capability,Get knowledge-base feature capability,数据,否,未做,知识库（quill 用 quill-wiki 替代）
+221,knowledge_bases.py,GET,/embedding-options,List knowledge embedding backend options,数据,否,未做,知识库（quill 用 quill-wiki 替代）
+222,knowledge_bases.py,GET,/ocr-options,List knowledge OCR backend options,数据,否,未做,知识库（quill 用 quill-wiki 替代）
+223,knowledge_bases.py,PUT,/feature,Enable or disable knowledge bases,数据,否,未做,知识库（quill 用 quill-wiki 替代）
+224,knowledge_bases.py,POST,/onnx-download,Download a local ONNX embedding model,数据,否,未做,知识库（quill 用 quill-wiki 替代）
+225,knowledge_bases.py,GET,/onnx-download-status,Poll ONNX embedding model download progress,数据,否,未做,知识库（quill 用 quill-wiki 替代）
+226,knowledge_bases.py,POST,/onnx-activate,Enable local ONNX service for a downloaded model,数据,否,未做,知识库（quill 用 quill-wiki 替代）
+227,knowledge_bases.py,POST,/onnx-test,Probe the selected local ONNX embedding model,数据,否,未做,知识库（quill 用 quill-wiki 替代）
+228,knowledge_bases.py,GET,,List visible knowledge bases,数据,否,未做,知识库（quill 用 quill-wiki 替代）
+229,knowledge_bases.py,POST,,Create a knowledge base,数据,否,未做,知识库（quill 用 quill-wiki 替代）
+230,knowledge_bases.py,GET,/default-open,List current user's default-open knowledge-base IDs,数据,否,未做,知识库（quill 用 quill-wiki 替代）
+231,knowledge_bases.py,GET,/{kb_id},Get a visible knowledge base,数据,否,未做,知识库（quill 用 quill-wiki 替代）
+232,knowledge_bases.py,PATCH,/{kb_id},Update knowledge-base settings,数据,否,未做,知识库（quill 用 quill-wiki 替代）
+233,knowledge_bases.py,DELETE,/{kb_id},Delete a knowledge base,数据,否,未做,知识库（quill 用 quill-wiki 替代）
+234,knowledge_bases.py,GET,/{kb_id}/documents,List knowledge-base documents,数据,否,未做,知识库（quill 用 quill-wiki 替代）
+235,knowledge_bases.py,POST,/{kb_id}/folders,Create a knowledge-base folder,数据,否,未做,知识库（quill 用 quill-wiki 替代）
+236,knowledge_bases.py,POST,/{kb_id}/documents/text,Create a markdown or plain-text knowledge document,数据,否,未做,知识库（quill 用 quill-wiki 替代）
+237,knowledge_bases.py,POST,/{kb_id}/documents,Upload a knowledge document,数据,否,未做,知识库（quill 用 quill-wiki 替代）
+238,knowledge_bases.py,GET,/{kb_id}/documents/{doc_id}/preview,Preview extracted document text,数据,否,未做,知识库（quill 用 quill-wiki 替代）
+239,knowledge_bases.py,GET,/{kb_id}/documents/{doc_id}/file,Download or inline-open the original uploaded document,数据,否,未做,知识库（quill 用 quill-wiki 替代）
+240,knowledge_bases.py,GET,/{kb_id}/documents/{doc_id}/content,Read raw editable text for a markdown or plain-text document,数据,否,未做,知识库（quill 用 quill-wiki 替代）
+241,knowledge_bases.py,PUT,/{kb_id}/documents/{doc_id}/content,Update markdown or plain-text document content and reindex,数据,否,未做,知识库（quill 用 quill-wiki 替代）
+242,knowledge_bases.py,POST,/{kb_id}/documents/{doc_id}/rename,Rename a document or folder,数据,否,未做,知识库（quill 用 quill-wiki 替代）
+243,knowledge_bases.py,DELETE,/{kb_id}/documents/{doc_id},Delete a document,数据,否,未做,知识库（quill 用 quill-wiki 替代）
+244,knowledge_bases.py,POST,/{kb_id}/documents/{doc_id}/reindex,Rebuild the index for one knowledge document,数据,否,未做,知识库（quill 用 quill-wiki 替代）
+245,knowledge_bases.py,POST,/{kb_id}/reindex,Reindex all documents in a knowledge base,数据,否,未做,知识库（quill 用 quill-wiki 替代）
+246,mbti.py,GET,/current,,平台,否,已实现,MBTI（quill 已迁移 0010_mbti）
+247,mbti.py,GET,/types,,平台,否,已实现,MBTI（quill 已迁移 0010_mbti）
+248,mbti.py,GET,/types/{code},,平台,否,已实现,MBTI（quill 已迁移 0010_mbti）
+249,mbti.py,GET,/preview/{code},,平台,否,已实现,MBTI（quill 已迁移 0010_mbti）
+250,mbti.py,GET,/test/questions,,平台,否,已实现,MBTI（quill 已迁移 0010_mbti）
+251,mbti.py,POST,/test/submit,,平台,否,已实现,MBTI（quill 已迁移 0010_mbti）
+252,mbti.py,POST,/apply,,平台,否,已实现,MBTI（quill 已迁移 0010_mbti）
+253,media_generation.py,GET,/presets,List built-in media provider presets,外部依赖,否,未做,图像/视频生成设置
+254,media_generation.py,GET,,Get media generation settings,外部依赖,否,未做,图像/视频生成设置
+255,media_generation.py,PUT,,Update media generation settings,外部依赖,否,未做,图像/视频生成设置
+256,media_generation.py,POST,/test,Test a media provider configuration,外部依赖,否,未做,图像/视频生成设置
+257,memory.py,POST,/agents/{agent_id}/memory/atoms/list,,goose核心,是,未做,每 agent 记忆看板（原子/实体/片段/候选）
+258,memory.py,POST,/agents/{agent_id}/memory/raw_events/list,,goose核心,是,未做,每 agent 记忆看板（原子/实体/片段/候选）
+259,memory.py,POST,/agents/{agent_id}/memory/entities/list,,goose核心,是,未做,每 agent 记忆看板（原子/实体/片段/候选）
+260,memory.py,POST,/agents/{agent_id}/memory/episodes/list,,goose核心,是,未做,每 agent 记忆看板（原子/实体/片段/候选）
+261,memory.py,POST,/agents/{agent_id}/memory/journal/list,,goose核心,是,未做,每 agent 记忆看板（原子/实体/片段/候选）
+262,memory.py,POST,/agents/{agent_id}/memory/candidates/list,,goose核心,是,未做,每 agent 记忆看板（原子/实体/片段/候选）
+263,memory.py,GET,/agents/{agent_id}/memory/raw_events/{event_id},,goose核心,是,未做,每 agent 记忆看板（原子/实体/片段/候选）
+264,memory.py,GET,/agents/{agent_id}/memory/candidates/{candidate_id},,goose核心,是,未做,每 agent 记忆看板（原子/实体/片段/候选）
+265,memory.py,GET,/agents/{agent_id}/memory/atoms/{atom_id},,goose核心,是,未做,每 agent 记忆看板（原子/实体/片段/候选）
+266,memory.py,GET,/agents/{agent_id}/memory/entities/{entity_id},,goose核心,是,未做,每 agent 记忆看板（原子/实体/片段/候选）
+267,memory.py,GET,/agents/{agent_id}/memory/episodes/{episode_id},,goose核心,是,未做,每 agent 记忆看板（原子/实体/片段/候选）
+268,memory.py,GET,/agents/{agent_id}/memory/stats/counts,,goose核心,是,未做,每 agent 记忆看板（原子/实体/片段/候选）
+269,memory.py,GET,/agents/{agent_id}/memory/stats/growth,,goose核心,是,未做,每 agent 记忆看板（原子/实体/片段/候选）
+270,memory.py,GET,/agents/{agent_id}/memory/stats/atom_kinds,,goose核心,是,未做,每 agent 记忆看板（原子/实体/片段/候选）
+271,memory.py,GET,/agents/{agent_id}/memory/journal/recent,,goose核心,是,未做,每 agent 记忆看板（原子/实体/片段/候选）
+272,memory.py,POST,/agents/{agent_id}/memory/candidates/{candidate_id}:promote,,goose核心,是,未做,每 agent 记忆看板（原子/实体/片段/候选）
+273,memory.py,POST,/agents/{agent_id}/memory/candidates/{candidate_id}:reject,,goose核心,是,未做,每 agent 记忆看板（原子/实体/片段/候选）
+274,memory.py,POST,/agents/{agent_id}/memory/atoms/{atom_id}:deprecate,,goose核心,是,未做,每 agent 记忆看板（原子/实体/片段/候选）
+275,memory.py,POST,/agents/{agent_id}/memory/atoms,Create a long-term memory,goose核心,是,未做,每 agent 记忆看板（原子/实体/片段/候选）
+276,memory.py,POST,/agents/{agent_id}/memory/atoms/{atom_id}:replace,Correct a long-term memory,goose核心,是,未做,每 agent 记忆看板（原子/实体/片段/候选）
+277,memory.py,GET,/agents/{agent_id}/memory/extract-config,,goose核心,是,未做,每 agent 记忆看板（原子/实体/片段/候选）
+278,memory.py,PUT,/agents/{agent_id}/memory/extract-config,,goose核心,是,未做,每 agent 记忆看板（原子/实体/片段/候选）
+279,memory_portable.py,GET,/memory/portable/sources,,goose核心,是,未做,跨主机记忆迁移
+280,memory_portable.py,POST,/agents/{agent_id}/memory/portable/pack,,goose核心,是,未做,跨主机记忆迁移
+281,memory_portable.py,POST,/agents/{agent_id}/memory/portable/adopt,,goose核心,是,未做,跨主机记忆迁移
+282,memory_portable.py,POST,/agents/{agent_id}/memory/portable/doctor,,goose核心,是,未做,跨主机记忆迁移
+282,mobile/__init__.py,(无端点),,,外部依赖,否,未做,远程 Android
+283,mobile/install.py,POST,/mobile/install,,外部依赖,否,未做,远程 Android
+283,mobile/shell_ws.py,(无端点),,,外部依赖,否,未做,远程 Android
+284,mobile/status.py,GET,/mobile/status,Remote Phone status,外部依赖,否,未做,远程 Android
+285,mobile/status.py,GET,/mobile/devices/{device}/info,Probe connected Android device details via adb,外部依赖,否,未做,远程 Android
+286,mobile/status.py,GET,/mobile/agent-control,Get agent mobile-device binding,外部依赖,否,未做,远程 Android
+287,mobile/status.py,PUT,/mobile/agent-control,Set agent mobile-device binding,外部依赖,否,未做,远程 Android
+287,mobile/stream.py,(无端点),,,外部依赖,否,未做,远程 Android
+288,observability.py,GET,/langfuse,Get Langfuse observability config,外部依赖,否,未做,Langfuse 可观测性
+289,observability.py,PUT,/langfuse,Update Langfuse observability config,外部依赖,否,未做,Langfuse 可观测性
+290,observability.py,POST,/langfuse/test,Test Langfuse connection,外部依赖,否,未做,Langfuse 可观测性
+290,ollama_download_store.py,(无端点),,,外部依赖,否,未做,Ollama 下载任务存储（无路由）
+291,ollama_models.py,GET,,List Ollama models,外部依赖,否,未做,Ollama 模型管理
+292,ollama_models.py,POST,/download,Start a background Ollama model pull,外部依赖,否,未做,Ollama 模型管理
+293,ollama_models.py,GET,/download-status,Get Ollama download tasks,外部依赖,否,未做,Ollama 模型管理
+294,ollama_models.py,DELETE,/download/{task_id},Cancel an Ollama download task,外部依赖,否,未做,Ollama 模型管理
+295,ollama_models.py,DELETE,/{name:path},Delete an Ollama model,外部依赖,否,未做,Ollama 模型管理
+296,ollama_models.py,GET,/service,Get Ollama local service status,外部依赖,否,未做,Ollama 模型管理
+297,ollama_models.py,PUT,/service,Update Ollama local service,外部依赖,否,未做,Ollama 模型管理
+298,onnx_models.py,GET,/catalog,List ONNX catalog,外部依赖,否,未做,本地 ONNX embedding 缓存
+299,onnx_models.py,GET,/models/{model_name:path}/meta,ONNX model size / source metadata,外部依赖,否,未做,本地 ONNX embedding 缓存
+300,onnx_models.py,GET,/status,Get local ONNX service status,外部依赖,否,未做,本地 ONNX embedding 缓存
+301,onnx_models.py,PUT,/config,Enable/disable local ONNX service and select model,外部依赖,否,未做,本地 ONNX embedding 缓存
+302,onnx_models.py,POST,/test,Probe a local ONNX embedding model,外部依赖,否,未做,本地 ONNX embedding 缓存
+303,onnx_models.py,POST,/download,Download a local ONNX embedding model,外部依赖,否,未做,本地 ONNX embedding 缓存
+304,onnx_models.py,GET,/download-status,Poll ONNX model download progress,外部依赖,否,未做,本地 ONNX embedding 缓存
+305,onnx_models.py,DELETE,/local/{model_name:path},Delete a cached local ONNX model,外部依赖,否,未做,本地 ONNX embedding 缓存
+306,plugins.py,GET,,List installed plugins,平台,否,桩(501),插件安装/市场
+307,plugins.py,POST,/reload,Reload plugins from disk (admin),平台,否,桩(501),插件安装/市场
+308,plugins.py,POST,/install,Install plugin from URL (admin),平台,否,桩(501),插件安装/市场
+309,plugins.py,POST,/upload,Install plugin from an uploaded ZIP (admin),平台,否,桩(501),插件安装/市场
+310,plugins.py,GET,/market,List marketplace catalog plugins,平台,否,桩(501),插件安装/市场
+311,plugins.py,POST,/market/{plugin_id}/install,Install a plugin from the marketplace (admin),平台,否,桩(501),插件安装/市场
+312,plugins.py,GET,/market/{plugin_id}/ui/{file_path:path},Serve a marketplace catalog UI asset,平台,否,桩(501),插件安装/市场
+313,plugins.py,PATCH,/{plugin_id},Update plugin settings (admin),平台,否,桩(501),插件安装/市场
+314,plugins.py,DELETE,/{plugin_id},Uninstall plugin (admin),平台,否,桩(501),插件安装/市场
+315,plugins.py,GET,/{plugin_id}/ui/{file_path:path},Serve an installed plugin UI asset,平台,否,桩(501),插件安装/市场
+316,plugins.py,GET,/agents/{agent_id},List installed plugins for an agent,平台,否,桩(501),插件安装/市场
+317,plugins.py,PATCH,/agents/{agent_id},Update agent plugin enablement,平台,否,桩(501),插件安装/市场
+318,plugins.py,GET,/agents/{agent_id}/tools,List plugin tools for an agent,平台,否,桩(501),插件安装/市场
+319,plugins.py,PATCH,/agents/{agent_id}/tools,Update agent plugin tool settings,平台,否,桩(501),插件安装/市场
+320,preferences.py,GET,/preferences,Current user preferences,平台,否,未做,用户偏好（locale 等）
+321,preferences.py,PATCH,/preferences,Update user preferences,平台,否,未做,用户偏好（locale 等）
+322,proactive_care.py,GET,/agents/{agent_id}/proactive-care,Get proactive care push configuration,goose核心,是,未做,主动关怀推送配置
+323,proactive_care.py,PUT,/agents/{agent_id}/proactive-care,Update proactive care push configuration,goose核心,是,未做,主动关怀推送配置
+324,providers.py,GET,/presets,,goose核心,是,部分,Provider（quill 有多供应商 admin）
+325,providers.py,GET,/resolved,,goose核心,是,部分,Provider（quill 有多供应商 admin）
+326,providers.py,GET,/active-model,,goose核心,是,部分,Provider（quill 有多供应商 admin）
+327,providers.py,PUT,/active-model,,goose核心,是,部分,Provider（quill 有多供应商 admin）
+328,providers.py,GET,,,goose核心,是,部分,Provider（quill 有多供应商 admin）
+329,search.py,POST,/{provider_id}/test,Test search provider API key,外部依赖,否,未做,搜索 provider 连通性
+330,security.py,GET,,Get global security policy,平台,否,未做,安全策略 / 命令守卫规则
+331,security.py,PUT,,Update global security policy,平台,否,未做,安全策略 / 命令守卫规则
+332,security.py,GET,/tool-guard/rules,List active command guard rules,平台,否,未做,安全策略 / 命令守卫规则
+333,security.py,GET,/tool-guard/rules/raw,Get editable command guard rules YAML,平台,否,未做,安全策略 / 命令守卫规则
+334,security.py,PUT,/tool-guard/rules/raw,Save command guard rules YAML,平台,否,未做,安全策略 / 命令守卫规则
+335,security.py,POST,/tool-guard/rules/reset,Reset command guard rules to shipped defaults,平台,否,未做,安全策略 / 命令守卫规则
+336,security.py,GET,/defaults,Security defaults and active rule catalogs,平台,否,未做,安全策略 / 命令守卫规则
+337,settings.py,GET,/settings/timezone,Server default timezone,平台,否,部分,进程级设置（quill 有部分于 admin/config）
+338,settings.py,GET,/settings/upload,Server upload size limit,平台,否,部分,进程级设置（quill 有部分于 admin/config）
+339,settings.py,GET,/settings/hitl,Tool human-approval switch,平台,否,部分,进程级设置（quill 有部分于 admin/config）
+340,settings.py,GET,/settings/capabilities,Host feature capabilities,平台,否,部分,进程级设置（quill 有部分于 admin/config）
+341,settings.py,GET,/settings/captcha,Login captcha settings,平台,否,部分,进程级设置（quill 有部分于 admin/config）
+342,settings.py,PUT,/settings/captcha,Update login captcha settings,平台,否,部分,进程级设置（quill 有部分于 admin/config）
+343,setup.py,GET,/setup/presets,List provider presets,平台,否,部分,安装向导（quill 有 setup/status + initial-admin）
+344,setup.py,GET,/setup/validate-token,Check wizard session token,平台,否,部分,安装向导（quill 有 setup/status + initial-admin）
+345,setup.py,GET,/setup/status,Setup wizard status,平台,否,部分,安装向导（quill 有 setup/status + initial-admin）
+346,setup.py,POST,/setup/test-database,Probe control-plane database connectivity,平台,否,部分,安装向导（quill 有 setup/status + initial-admin）
+347,setup.py,POST,/setup/database,Persist control-plane database and bind,平台,否,部分,安装向导（quill 有 setup/status + initial-admin）
+348,setup.py,POST,/setup/begin,Begin setup without wizard password,平台,否,部分,安装向导（quill 有 setup/status + initial-admin）
+349,setup.py,POST,/setup/verify-password,Verify wizard password,平台,否,部分,安装向导（quill 有 setup/status + initial-admin）
+350,setup.py,POST,/setup/initial-admin,Create initial admin,平台,否,部分,安装向导（quill 有 setup/status + initial-admin）
+351,setup.py,POST,/setup/resume-wizard,Issue a fresh wizard token mid-setup,平台,否,部分,安装向导（quill 有 setup/status + initial-admin）
+352,setup.py,POST,/setup/test-provider,Test provider draft connectivity,平台,否,部分,安装向导（quill 有 setup/status + initial-admin）
+353,setup.py,POST,/setup/finish,Finish setup wizard,平台,否,部分,安装向导（quill 有 setup/status + initial-admin）
+354,skill_packages.py,GET,,List global skill packages,goose核心,是,部分,实例级全局 skill 包
+355,skill_packages.py,GET,/hub/search,Search SkillHub for installing into packages,goose核心,是,部分,实例级全局 skill 包
+356,skill_packages.py,GET,/hub/rankings,SkillHub rankings for installing into packages,goose核心,是,部分,实例级全局 skill 包
+357,skill_packages.py,POST,,Create a global skill package,goose核心,是,部分,实例级全局 skill 包
+358,skill_packages.py,POST,/from-skillhub,Create a skill package from a SkillHub skillset,goose核心,是,部分,实例级全局 skill 包
+359,skill_packages.py,GET,/{package_id},Get a global skill package and its skills,goose核心,是,部分,实例级全局 skill 包
+360,skill_packages.py,PATCH,/{package_id},Update global skill package metadata,goose核心,是,部分,实例级全局 skill 包
+361,skill_packages.py,DELETE,/{package_id},Delete a global skill package,goose核心,是,部分,实例级全局 skill 包
+362,skill_packages.py,GET,/{package_id}/skills,List skills in a global skill package,goose核心,是,部分,实例级全局 skill 包
+363,skill_packages.py,GET,/{package_id}/skills/{slug},Get a global package skill,goose核心,是,部分,实例级全局 skill 包
+364,skill_packages.py,POST,/{package_id}/skills,Add a skill to a global skill package,goose核心,是,部分,实例级全局 skill 包
+365,skill_packages.py,PUT,/{package_id}/skills/{slug},Replace a global package skill,goose核心,是,部分,实例级全局 skill 包
+366,skill_packages.py,DELETE,/{package_id}/skills/{slug},Delete a global package skill,goose核心,是,部分,实例级全局 skill 包
+367,skill_packages.py,POST,/{package_id}/skills/import,Import a skill URL into a global skill package,goose核心,是,部分,实例级全局 skill 包
+368,skill_packages.py,POST,/{package_id}/skills/hub/install,Install a SkillHub skill into a global skill package,goose核心,是,部分,实例级全局 skill 包
+369,skills.py,GET,/agents/{agent_id}/skills,,goose核心,是,部分,每 agent SKILL.md 库 + SkillHub
+370,skills.py,GET,/agents/{agent_id}/skill-packages,List global skill packages mounted on an agent,goose核心,是,部分,每 agent SKILL.md 库 + SkillHub
+371,skills.py,PUT,/agents/{agent_id}/skill-packages,Replace global skill packages mounted on an agent,goose核心,是,部分,每 agent SKILL.md 库 + SkillHub
+372,skills.py,POST,/agents/{agent_id}/skill-packages/{package_id}/copy,Copy package skills into an agent workspace,goose核心,是,部分,每 agent SKILL.md 库 + SkillHub
+373,skills.py,POST,/agents/{agent_id}/skills/{name}/push-to-package,Copy a workspace skill into a global skill package,goose核心,是,部分,每 agent SKILL.md 库 + SkillHub
+374,skills.py,GET,/agents/{agent_id}/skills/{name},,goose核心,是,部分,每 agent SKILL.md 库 + SkillHub
+375,skills.py,POST,/agents/{agent_id}/skills,,goose核心,是,部分,每 agent SKILL.md 库 + SkillHub
+376,skills.py,PUT,/agents/{agent_id}/skills/{name},,goose核心,是,部分,每 agent SKILL.md 库 + SkillHub
+377,skills.py,POST,/agents/{agent_id}/skills/copy,Copy a workspace skill from another agent,goose核心,是,部分,每 agent SKILL.md 库 + SkillHub
+378,skills.py,POST,/agents/{agent_id}/skills/import,,goose核心,是,部分,每 agent SKILL.md 库 + SkillHub
+379,skills.py,DELETE,/agents/{agent_id}/skills/{name},,goose核心,是,部分,每 agent SKILL.md 库 + SkillHub
+380,skills.py,POST,/agents/{agent_id}/skills/{name}/enable,,goose核心,是,部分,每 agent SKILL.md 库 + SkillHub
+381,skills.py,POST,/agents/{agent_id}/skills/{name}/disable,,goose核心,是,部分,每 agent SKILL.md 库 + SkillHub
+382,skills.py,GET,/skills/hub/search,Search SkillHub without an agent,goose核心,是,部分,每 agent SKILL.md 库 + SkillHub
+383,skills.py,GET,/skills/hub/rankings,SkillHub rankings without an agent,goose核心,是,部分,每 agent SKILL.md 库 + SkillHub
+384,skills.py,GET,/agents/{agent_id}/skills/hub/search,,goose核心,是,部分,每 agent SKILL.md 库 + SkillHub
+385,skills.py,GET,/agents/{agent_id}/skills/hub/rankings,,goose核心,是,部分,每 agent SKILL.md 库 + SkillHub
+386,skills.py,POST,/agents/{agent_id}/skills/hub/install,,goose核心,是,部分,每 agent SKILL.md 库 + SkillHub
+387,slash.py,GET,/slash/commands,List slash commands,goose核心,是,未做,斜杠命令发现
+387,storage_backends.py,(无端点),,,数据,否,未做,存储后端
+388,subagents.py,GET,/subagent-catalog/divisions,List subagent catalog divisions,goose核心,是,未做,子 agent 定义与内置目录
+389,subagents.py,GET,/subagent-catalog,List bundled subagent definitions,goose核心,是,未做,子 agent 定义与内置目录
+390,subagents.py,GET,/subagent-catalog/{slug},Get bundled subagent definition,goose核心,是,未做,子 agent 定义与内置目录
+391,subagents.py,GET,/agents/{agent_id}/subagents,List subagents,goose核心,是,未做,子 agent 定义与内置目录
+392,subagents.py,POST,/agents/{agent_id}/subagents/install,Install catalog subagent,goose核心,是,未做,子 agent 定义与内置目录
+393,teams.py,GET,/teams,List my expert teams,goose核心,是,部分,专家团队（quill 有 CRUD，派工未执行）
+394,teams.py,POST,/teams,Create an expert team,goose核心,是,部分,专家团队（quill 有 CRUD，派工未执行）
+395,teams.py,GET,/teams/template,Preview default team workspace files,goose核心,是,部分,专家团队（quill 有 CRUD，派工未执行）
+396,teams.py,GET,/teams/{team_id},Get an expert team,goose核心,是,部分,专家团队（quill 有 CRUD，派工未执行）
+397,teams.py,PATCH,/teams/{team_id},Update an expert team,goose核心,是,部分,专家团队（quill 有 CRUD，派工未执行）
+398,teams.py,DELETE,/teams/{team_id},Delete an expert team,goose核心,是,部分,专家团队（quill 有 CRUD，派工未执行）
+399,terminal.py,GET,/agents/{agent_id}/terminal/context,,goose核心,是,未做,每 agent 交互式 PTY 终端（WS）
+400,tls.py,GET,/status,TLS and issuance task status,平台,否,未做,TLS / Let's Encrypt
+401,tls.py,POST,/preflight,Check prerequisites for Let's Encrypt issuance,平台,否,未做,TLS / Let's Encrypt
+402,tls.py,POST,/issue,Start Let's Encrypt HTTP-01 issuance,平台,否,未做,TLS / Let's Encrypt
+403,update.py,GET,/status,,平台,否,桩(501),自更新（quill 只有升级前守卫）
+404,update.py,POST,/check,,平台,否,桩(501),自更新（quill 只有升级前守卫）
+405,update.py,PATCH,/settings,,平台,否,桩(501),自更新（quill 只有升级前守卫）
+406,update.py,POST,/upgrade,,平台,否,桩(501),自更新（quill 只有升级前守卫）
+407,update.py,GET,/progress,,平台,否,桩(501),自更新（quill 只有升级前守卫）
+408,update.py,POST,/restart,,平台,否,桩(501),自更新（quill 只有升级前守卫）
+408,update_store.py,(无端点),,,平台,否,未做,升级任务跟踪（无路由）
+409,uploads.py,POST,/agents/{agent_id}/upload,Upload a chat attachment,goose核心,是,未做,聊天附件上传
+410,usage.py,GET,/usage/summary,,平台,否,已实现,Token 用量账本（quill 有 /api/usage）
+411,usage.py,GET,/usage/export.xlsx,Export usage_log detail as Excel,平台,否,已实现,Token 用量账本（quill 有 /api/usage）
+412,user_roles.py,GET,,List role templates,平台,否,未做,角色模板 CRUD
+413,user_roles.py,POST,,Create a role template,平台,否,未做,角色模板 CRUD
+414,user_roles.py,PATCH,/{user_role_id},Update a role template,平台,否,未做,角色模板 CRUD
+415,user_roles.py,DELETE,/{user_role_id},Delete a role template,平台,否,未做,角色模板 CRUD
+416,user_roles.py,POST,/{user_role_id}/avatar,,平台,否,未做,角色模板 CRUD
+417,user_roles.py,GET,/{user_role_id}/avatar,,平台,否,未做,角色模板 CRUD
+418,user_roles.py,DELETE,/{user_role_id}/avatar,,平台,否,未做,角色模板 CRUD
+419,users.py,GET,/permissions,List assignable permission catalog,平台,否,部分,用户 CRUD（quill 只 list/patch）
+420,users.py,GET,,,平台,否,部分,用户 CRUD（quill 只 list/patch）
+421,users.py,POST,,,平台,否,部分,用户 CRUD（quill 只 list/patch）
+422,users.py,POST,/batch,"Batch enable, disable, delete, or set resource policies",平台,否,部分,用户 CRUD（quill 只 list/patch）
+423,users.py,GET,/{user_id},,平台,否,部分,用户 CRUD（quill 只 list/patch）
+424,users.py,PATCH,/{user_id},,平台,否,部分,用户 CRUD（quill 只 list/patch）
+425,users.py,POST,/{user_id}/unlock-login,Clear login lockout,平台,否,部分,用户 CRUD（quill 只 list/patch）
+426,users.py,POST,/{user_id}/reset-password,,平台,否,部分,用户 CRUD（quill 只 list/patch）
+427,users.py,DELETE,/{user_id},,平台,否,部分,用户 CRUD（quill 只 list/patch）
+428,users.py,POST,/{user_id}/avatar,,平台,否,部分,用户 CRUD（quill 只 list/patch）
+429,users.py,GET,/{user_id}/avatar,,平台,否,部分,用户 CRUD（quill 只 list/patch）
+430,users.py,DELETE,/{user_id}/avatar,,平台,否,部分,用户 CRUD（quill 只 list/patch）
+431,voice.py,GET,/presets,,外部依赖,否,未做,语音 STT/TTS
+432,voice.py,GET,/providers,,外部依赖,否,未做,语音 STT/TTS
+433,voice.py,GET,/active,,外部依赖,否,未做,语音 STT/TTS
+434,voice.py,PUT,/active,,外部依赖,否,未做,语音 STT/TTS
+435,voice.py,POST,/stt,,外部依赖,否,未做,语音 STT/TTS
+436,voice.py,POST,/tts,,外部依赖,否,未做,语音 STT/TTS
+437,workspace.py,GET,/agents/{agent_id}/workspace/tree,,数据,否,未做,运行中 agent 工作区读写
+438,workspace.py,GET,/agents/{agent_id}/workspace/file,,数据,否,未做,运行中 agent 工作区读写
+439,workspace.py,PUT,/agents/{agent_id}/workspace/file,,数据,否,未做,运行中 agent 工作区读写
+440,workspace.py,POST,/agents/{agent_id}/workspace/mkdir,Create workspace directory,数据,否,未做,运行中 agent 工作区读写
+441,workspace.py,DELETE,/agents/{agent_id}/workspace/file,Delete workspace file or directory,数据,否,未做,运行中 agent 工作区读写
+442,workspace.py,POST,/agents/{agent_id}/workspace/move,Move or rename a workspace file or directory,数据,否,未做,运行中 agent 工作区读写
+443,workspace.py,POST,/agents/{agent_id}/workspace/upload,,数据,否,未做,运行中 agent 工作区读写
+444,workspace.py,GET,/agents/{agent_id}/workspace/download,,数据,否,未做,运行中 agent 工作区读写
+445,workspace.py,GET,/agents/{agent_id}/workspace/doc,,数据,否,未做,运行中 agent 工作区读写
+446,workspace.py,PUT,/agents/{agent_id}/workspace/doc,,数据,否,未做,运行中 agent 工作区读写
+447,workspace.py,GET,/agents/{agent_id}/media/preview,Preview image or video,数据,否,未做,运行中 agent 工作区读写
+448,workspace.py,GET,/agents/{agent_id}/workspace/glob,,数据,否,未做,运行中 agent 工作区读写
+449,workspace.py,GET,/agents/{agent_id}/workspace/grep,,数据,否,未做,运行中 agent 工作区读写
+450,workspace.py,GET,/agents/{agent_id}/workspace/archive,Download workspace as zip,数据,否,未做,运行中 agent 工作区读写
+451,workspace.py,POST,/agents/{agent_id}/workspace/archive,Import workspace zip,数据,否,未做,运行中 agent 工作区读写
