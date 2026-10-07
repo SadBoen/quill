@@ -170,6 +170,7 @@ pub const MIGRATION_0006: &str = include_str!("../migrations/0006_teams.sql");
 pub const MIGRATION_0007: &str = include_str!("../migrations/0007_mcp_transport_alignment.sql");
 pub const MIGRATION_0008: &str = include_str!("../migrations/0008_token_metrics.sql");
 pub const MIGRATION_0009: &str = include_str!("../migrations/0009_channels.sql");
+pub const MIGRATION_0010: &str = include_str!("../migrations/0010_mbti.sql");
 
 pub const MIGRATIONS_TABLES: &[&str] = &[
     "schema_version",
@@ -189,6 +190,7 @@ pub const MIGRATIONS_TABLES: &[&str] = &[
     "admin_config",
     "llm_providers",
     "channels",
+    "mbti_results",
 ];
 
 #[derive(Debug)]
@@ -243,6 +245,11 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 9,
         name: "0009_channels",
         sql: MIGRATION_0009,
+    },
+    Migration {
+        version: 10,
+        name: "0010_mbti",
+        sql: MIGRATION_0010,
     },
 ];
 

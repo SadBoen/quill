@@ -1,0 +1,260 @@
+/* 人格页。只用 index.css 里已有的那套变量，深色主题自动跟随。 */
+
+.mbti-page .mbti-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ---- 答题 ---- */
+
+.mbti-page .mbti-progress {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border, currentColor);
+  overflow: hidden;
+}
+
+.mbti-page .mbti-progress-fill {
+  height: 100%;
+  background: var(--accent, currentColor);
+  transition: width 160ms ease;
+}
+
+.mbti-page .mbti-progress-text {
+  margin: 4px 0 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted, inherit);
+}
+
+/* 答题卡：一行几十个数字要能一眼看出哪几个没做。
+   已答的填实心、当前题加粗——两个信号不能只靠颜色区分。 */
+.mbti-page .mbti-sheet {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+}
+
+.mbti-page .mbti-dot {
+  min-width: 32px;
+  min-height: 32px;
+  padding: 2px 6px;
+  border: 1px solid var(--border, currentColor);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.mbti-page .mbti-dot-done {
+  background: var(--accent, currentColor);
+  color: var(--bg, #fff);
+  border-color: transparent;
+}
+
+.mbti-page .mbti-dot-current {
+  outline: 2px solid var(--text, currentColor);
+  outline-offset: 1px;
+}
+
+.mbti-page .mbti-question-text {
+  margin: 0 0 10px;
+  font-size: 1.05rem;
+  line-height: 1.6;
+}
+
+.mbti-page .mbti-options {
+  display: grid;
+  gap: 8px;
+}
+
+.mbti-page .mbti-option {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 10px 12px;
+  border: 1px solid var(--border, currentColor);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mbti-page .mbti-option-picked {
+  border-color: var(--accent, currentColor);
+  border-width: 2px;
+  padding: 9px 11px;
+}
+
+.mbti-page .mbti-option-letter {
+  font-weight: 600;
+  opacity: 0.7;
+}
+
+.mbti-page .mbti-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+/* ---- 结果 ---- */
+
+.mbti-page .mbti-hero {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 14px;
+  border: 2px solid var(--border, currentColor);
+  border-radius: 10px;
+}
+
+.mbti-page .mbti-symbol {
+  font-size: 2rem;
+  line-height: 1;
+}
+
+.mbti-page .mbti-code {
+  font-size: 1.6rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.mbti-page .mbti-name {
+  font-size: 1.1rem;
+}
+
+.mbti-page .mbti-nickname {
+  margin-left: 8px;
+  font-size: 0.85rem;
+  color: var(--text-muted, inherit);
+}
+
+.mbti-page .mbti-summary {
+  margin: 6px 0 2px;
+}
+
+.mbti-page .mbti-descriptors {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-muted, inherit);
+}
+
+/* 四维光谱：标签 / 条 / 数值三列对齐，长短不一的强度才看得出差别。 */
+.mbti-page .mbti-axes {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.mbti-page .mbti-axis-row {
+  display: grid;
+  grid-template-columns: 3em 1fr 6em;
+  gap: 10px;
+  align-items: center;
+}
+
+.mbti-page .mbti-axis-label {
+  font-weight: 600;
+}
+
+.mbti-page .mbti-axis-track {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--border, currentColor);
+  overflow: hidden;
+}
+
+.mbti-page .mbti-axis-fill {
+  display: block;
+  height: 100%;
+}
+
+.mbti-page .mbti-axis-value {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted, inherit);
+  text-align: right;
+}
+
+.mbti-page .mbti-behavior {
+  margin: 18px 0 0;
+  display: grid;
+  gap: 8px;
+}
+
+.mbti-page .mbti-behavior-row {
+  display: grid;
+  grid-template-columns: 7em 1fr;
+  gap: 10px;
+}
+
+.mbti-page .mbti-behavior-row dt {
+  color: var(--text-muted, inherit);
+}
+
+.mbti-page .mbti-behavior-row dd {
+  margin: 0;
+}
+
+.mbti-page .mbti-actions {
+  display: flex;
+  gap: 10px;
+}
+
+/* ---- 应用 ---- */
+
+.mbti-page .mbti-apply-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.mbti-page .mbti-apply-label {
+  color: var(--text-muted, inherit);
+}
+
+.mbti-page .mbti-applied {
+  margin: 10px 0 0;
+  color: var(--text-muted, inherit);
+}
+
+/* ---- 历史 ---- */
+
+.mbti-page .mbti-history {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.mbti-page .mbti-history-row {
+  display: grid;
+  grid-template-columns: 7em 1fr auto auto;
+  gap: 10px;
+  align-items: baseline;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border, currentColor);
+}
+
+.mbti-page .mbti-history-code {
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+
+.mbti-page .mbti-history-time,
+.mbti-page .mbti-history-applied {
+  font-size: 0.85rem;
+  color: var(--text-muted, inherit);
+}

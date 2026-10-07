@@ -416,9 +416,36 @@ export const ITEMS = [
     //
     // 已完成：ui/web/src/personalization/ 聚合页（6 条判据 + 变异验证），
     // 两处「不许粉饰」：MBTI 明说没做、子智能体明说派工不执行（B2-2）。
+    // —— 其中「MBTI 明说没做」这条已在 B6-6 落地，个性化页那张卡换成真页面。
     verify: {
       kind: 'manual',
       how: '用微信扫一次真账号，能收到消息并收到回复；界面点一遍个性化页各入口',
+    },
+    blocks: [],
+  },
+  {
+    id: 'B6-6',
+    milestone: 'M6',
+    title: '人格（MBTI）：28 题测评 + 四维光谱 + 应用到某个专家',
+    // 起因是 B6-5 里那条「MBTI 明说没做」。用户要求把 Octop 个性化页面的
+    // 功能都学过来，MBTI 是其中唯一一块真的要动数据结构的。
+    //
+    // 核到的上游：mbti_profiles.py（16 型 596 行）、mbti.py 里的 _QUESTIONS
+    // （28 题）、_score_answers（:617-673）、MBTISelector.tsx / MBTITest.tsx。
+    //
+    // 2026-10-08 已完成：mbti/{profiles,questions,score,store,apply}.rs、
+    // api_mbti.rs、迁移 0010_mbti.sql、ui/web/src/mbti/（页面 + 判据）。
+    // 判据：lib 21 条 + HTTP 13 条 + 前端 16 条。
+    //
+    // 三处是「我们的选择」，不是照抄：
+    // 1. 不写 SOUL.md（Octop 的 mbti.py:58），本项目的人格正文是
+    //    experts.instructions；
+    // 2. /api/mbti/apply 强制带 expert_id —— 人格挂在专家上，
+    //    一个用户有多个专家，没有「当前智能体」这个说得清的默认目标；
+    // 3. 存历史（每人最近 20 条 + 原始作答），Octop 只有一个 persona_mbti 字段。
+    verify: {
+      kind: 'auto',
+      how: 'cargo test -p quill-server --lib mbti:: ；--test mbti_http ；ui/web 的 src/mbti',
     },
     blocks: [],
   },

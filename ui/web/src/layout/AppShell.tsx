@@ -28,6 +28,10 @@ const NAV_ITEMS = [
   // 个性化：技能 / 工具 / 子智能体 / 插件 / 记忆 / 通道的索引页。
   // 位置紧跟通道，因为它就是这些页面的总入口 —— 放散了在侧栏里看不出关系。
   { to: '/personalization', icon: 'P', labelKey: 'nav.personalization', fallback: '个性化' },
+  // 人格：28 题测评 + 四维光谱 + 应用到某个专家。
+  // 图标用 G（personality）。它紧跟个性化 —— 个性化页是这些能力的索引，
+  // 这一页是其中唯一一个「做完了」的，位置得让用户一眼看到。
+  { to: '/mbti', icon: 'G', labelKey: 'nav.mbti', fallback: '人格' },
 ] as const
 
 const ADMIN_NAV_ITEMS = [

@@ -8,6 +8,8 @@ pub mod api_chat_stream;
 pub mod api_channels;
 pub mod api_dispatch;
 /// 专家市场：从 SkillHub 技能集装成「我的专家」。
+/// MBTI 人格：测评、四维光谱、应用到某个专家。
+pub mod api_mbti;
 pub mod api_expert_market;
 pub mod api_experts;
 pub mod api_extensions;
@@ -28,6 +30,8 @@ pub mod experts_repo;
 pub mod general_expert;
 pub mod llm;
 pub mod llm_providers;
+/// MBTI 人格测评：题库、计分、落库、应用到专家人格正文。
+pub mod mbti;
 pub mod mcp_client;
 pub mod mcp_repo;
 pub mod middleware;

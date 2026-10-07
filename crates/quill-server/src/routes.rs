@@ -7,6 +7,7 @@ use crate::api_admin;
 use crate::api_chat;
 use crate::api_chat_stream;
 use crate::api_channels;
+use crate::api_mbti;
 use crate::api_auth;
 use crate::api_backup;
 use crate::api_dispatch;
@@ -285,6 +286,15 @@ pub fn build_router(state: AppState) -> Router {
             "/api/channels/weixin/qrcode/poll",
             post(api_channels::weixin_qr_poll),
         )
+        // MBTI 人格：16 型档案、28 道题、测评历史、提交、应用到专家。
+        // 端点对齐 Octop 的 mbti router（api/routers/mbti.py），差别见
+        // api_mbti.rs 的文件头 —— 多一个 history（我们留历史），
+        // apply 强制带 expert_id（人格挂在专家上）。
+        .route("/api/mbti/types", get(api_mbti::types))
+        .route("/api/mbti/questions", get(api_mbti::test_questions))
+        .route("/api/mbti/history", get(api_mbti::history))
+        .route("/api/mbti/test", post(api_mbti::submit))
+        .route("/api/mbti/apply", post(api_mbti::apply_to_expert))
         // refresh 必须带令牌：它轮换的是**调用方自己**那一行，
         // 公开的话等于任何人都能来续期别人的会话。
         .route("/api/auth/refresh", post(api_auth::refresh))

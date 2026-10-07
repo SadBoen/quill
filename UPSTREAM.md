@@ -152,6 +152,29 @@ git diff HEAD FETCH_HEAD --stat        # 改了哪些文件
 > 导致一个文件都判不成文本。两个 bug 互相掩盖，输出看着完全正常。
 > 是靠变异验证（注入违规引用看门禁会不会红）抓出来的。
 
+### 人格（MBTI）：数据逐字搬，落地方式是我们自己的
+
+Octop 的 MBTI 拆在三处，本项目跟着搬：
+
+| Octop | 内容 | 本项目 |
+|---|---|---|
+| `src/octop/infra/agents/persona/mbti_profiles.py` | 16 型档案，596 行 | `crates/quill-server/src/mbti/profiles.rs`（**逐字**） |
+| `src/octop/api/routers/mbti.py:589` 起的 `_QUESTIONS` | 28 题题库 | `mbti/questions.rs`（**逐字**） |
+| `mbti.py:617-673` 的 `_score_answers` | 计分 | `mbti/score.rs`（**只读对齐**） |
+| `mbti.py:58` 的 `_persist_persona` | 写进 agent 的 `SOUL.md` | **不跟**，见下 |
+
+**落地方式不同，这是我们的选择**：本项目没有 SOUL.md 那条链路，人格正文是
+`experts.instructions`。所以 `/api/mbti/apply` 强制带 `expert_id` —— 人格挂在
+**专家**上，一个用户有多个专家，没有「当前智能体」这个说得清的默认目标。
+
+**档案里的民间绰号（`nickname_zh`，如「紫老头」「尺子姐」）照抄不改**。
+它们看着像可以「优化掉」的文案，但那是上游的数据，不是我们的文案。
+
+**计分里最容易被「顺手改对」的一处**：强度百分比不是「选 A 的比例」，
+是 `50 + 占比*35` 再夹到 `[50,85]`。平手时是 68 不是 50；50 只在某轴一题没答时
+出现。判据就钉在这上面 —— 「看起来不合理的公式」往往是对齐上游的结果，
+而不是 bug。
+
 ### MCP transport 枚举：参考命名，不是照抄
 
 `0007_mcp_transport_alignment.sql` 把 `mcp_servers.transport` 对齐成前端发的那套值。

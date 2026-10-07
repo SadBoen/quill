@@ -22,9 +22,9 @@ import './personalization.css'
  * - Octop 的页签都在 `/personalization/*` 下面，本项目把它们留在各自的老地址
  *   （`/skills`、`/devices`…），这边只放链接。老书签、老外链因此继续有效，
  *   而这正是本项目反复处理过的「信息架构改了别让旧链接变 404」。
- * - **没有 MBTI 页签**。Octop 有（`components/MBTISelector.tsx`），但那要一张
- *   四维光谱表 + 28 题测试结果的存储，本项目现在没有。画一个点不动的选择器
- *   是不如不画 —— 所以下面明说「还没做」，而不是给个空壳。
+ * - **MBTI 是本页唯一一个真正做出来的页签**，而且给它单独一页（`/mbti`）而不是
+ *   嵌在这里：它有「测 → 看 → 用」三段流程，塞进索引页会挤。
+ *   Octop 那边它也是独立组件（`components/MBTISelector.tsx`），本页只做索引。
  */
 const SECTIONS = [
   {
@@ -75,6 +75,15 @@ const SECTIONS = [
     descKey: 'personalization.channelsDesc',
     desc: '把智能体接到浏览器之外。在微信上给它发消息，它在那边回你。',
   },
+  {
+    // 顺序放在最后：它是唯一一个「有完整流程」的页签，其余六个都是索引。
+    key: 'mbti',
+    to: '/mbti',
+    titleKey: 'personalization.mbti',
+    title: '人格',
+    descKey: 'personalization.mbtiDesc',
+    desc: '28 道题算出一个人格类型，看四维光谱，选一个专家就把这套说话风格写进它的人格正文。',
+  },
 ] as const
 
 export function PersonalizationPage(): ReactNode {
@@ -103,18 +112,6 @@ export function PersonalizationPage(): ReactNode {
           </Link>
         ))}
       </div>
-
-      {/* 没有 MBTI 页签这件事要写出来。
-          悄悄不列 = 用户以为自己漏看了；画个空的 = 用户点了发现是死的。 */}
-      <section className="personalization-missing">
-        <h2>{t('personalization.mbtiTitle', { defaultValue: 'MBTI' })}</h2>
-        <p className="form-notice">
-          {t('personalization.mbtiMissing', {
-            defaultValue:
-              '还没做。这一页要做的是四维光谱与 28 题测评结果的存储与展示，而本项目现在没有这些数据 —— 画一个点不动的选择器比不画更糟，所以这里只说明它不存在。',
-          })}
-        </p>
-      </section>
     </div>
   )
 }

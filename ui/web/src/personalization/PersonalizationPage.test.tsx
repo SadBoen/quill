@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it } from 'vitest'
 
@@ -28,7 +28,7 @@ function mount() {
 }
 
 describe('个性化页', () => {
-  it('六个页签各自指向真实存在的页面', () => {
+  it('七张卡各自指向真实存在的页面', () => {
     mount()
     const expected: Record<string, string> = {
       skills: '/skills',
@@ -37,6 +37,7 @@ describe('个性化页', () => {
       plugins: '/skills',
       memory: '/memory',
       channels: '/channels',
+      mbti: '/mbti',
     }
     for (const [section, href] of Object.entries(expected)) {
       const link = document.querySelector(`a[data-section="${section}"]`)
@@ -48,32 +49,24 @@ describe('个性化页', () => {
   it('每张卡都有说明，不是一堆光秃秃的标题', () => {
     mount()
     const cards = document.querySelectorAll('.personalization-card')
-    expect(cards.length).toBe(6)
+    expect(cards.length).toBe(7)
     for (const card of Array.from(cards)) {
       const p = card.querySelector('p')
       expect(p?.textContent?.trim().length ?? 0).toBeGreaterThan(8)
     }
   })
 
-  it('MBTI 明说还没做，而不是画一个空选择器', () => {
+  it('MBTI 已经是真页面：卡片能点，且路由真的存在', async () => {
     mount()
-    expect(screen.getByText('MBTI')).toBeTruthy()
-    // 收紧到那一块内部找：子智能体那张卡的说明里也含「还没做」，
-    // 全页 grep 会命中两处 —— 判据自己歧义，报错就与被测行为无关了。
-    const missing = document.querySelector('.personalization-missing')
-    expect(missing?.textContent ?? '').toMatch(/还没做/)
-    // 关键：不能有一个能点却什么都不做的 MBTI 控件
-    expect(document.querySelector('[data-section="mbti"]')).toBeNull()
-    expect(document.querySelector('.personalization-page select')).toBeNull()
-  })
-
-  it('「还没做」那一块不能伪装成可点的卡片', () => {
-    mount()
-    const missing = document.querySelector('.personalization-missing')
-    expect(missing).not.toBeNull()
-    // 它是 section 不是 a —— 用户不会以为点得动
-    expect(missing!.tagName).toBe('SECTION')
-    expect(missing!.querySelector('a')).toBeNull()
+    const card = document.querySelector('[data-section="mbti"]')
+    expect(card).not.toBeNull()
+    expect(card!.tagName).toBe('A')
+    expect(card!.getAttribute('href')).toBe('/mbti')
+    // 路由与侧栏都得有，否则点进去是 404 —— 卡片指对了地方不代表真有那一页。
+    const app = await import('../app/App.tsx?raw')
+    expect(app.default).toContain('path="/mbti"')
+    const shell = await import('../layout/AppShell.tsx?raw')
+    expect(shell.default).toContain("'/mbti'")
   })
 
   it('子智能体那张卡必须说清派工不执行', () => {
