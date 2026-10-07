@@ -23,14 +23,9 @@ pub fn sha256_bytes(bytes: &[u8]) -> String {
     to_hex(&hasher.finalize())
 }
 
+/// 小写 hex。实现收口到 `quill_adapters::ids::to_hex_lower`（全项目唯一出口）。
 pub fn to_hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        out.push(HEX[(b >> 4) as usize] as char);
-        out.push(HEX[(b & 0x0f) as usize] as char);
-    }
-    out
+    quill_adapters::ids::to_hex_lower(bytes)
 }
 
 pub const DIGEST_HEX_LEN: usize = 64;

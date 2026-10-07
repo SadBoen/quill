@@ -120,14 +120,13 @@ pub fn sha256(bytes: &[u8]) -> [u8; 32] {
     arr
 }
 
+/// 小写 hex。实现已收口到 `quill_adapters::ids::to_hex_lower`（全项目唯一出口）。
+///
+/// **解码方向刻意不收口**：下面的 `hex_val` 只认小写，`hex_decode_exact` 因此
+/// 拒绝大写 token —— 那是安全语义（token 必须是小写形态）。`ids::hex_val`
+/// 两种大小写都收，换过去会把「大写 token 也接受」悄悄放进来。
 pub fn hex_encode(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push(char::from(HEX[(b >> 4) as usize]));
-        s.push(char::from(HEX[(b & 0x0f) as usize]));
-    }
-    s
+    quill_adapters::ids::to_hex_lower(bytes)
 }
 
 pub fn hex_decode_exact<const N: usize>(

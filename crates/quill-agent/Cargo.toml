@@ -8,7 +8,6 @@ license = "Apache-2.0"
 [dependencies]
 quill-adapters = { path = "../quill-adapters" }
 quill-domain = { path = "../quill-domain" }
-quill-wiki = { path = "../quill-wiki" }
 
 [dev-dependencies]
 
