@@ -208,7 +208,11 @@ describe('人格页', () => {
     fireEvent.click(await screen.findByRole('button', { name: '看结果' }))
     await waitFor(() => expect(screen.getByText('ESTJ')).toBeTruthy())
     expect(screen.getByRole('button', { name: '重新测一次' })).toBeTruthy()
-  })
+    // 显式超时：这条要真走完 28 题（28 次 findByRole + 点选 + 渲染），
+    // 单跑约 2.3s，全量并发（32 个文件同时跑）时会超过默认的 5s 而被判失败 ——
+    // 那是并发争用导致的假失败，不是被测行为出错。**删减题数会削弱判据**
+    // （必须答满 28 题才出结果正是被测的东西），所以只能给这条放大超时。
+  }, 20000)
 
   it('没选专家时「应用」点不动 —— 宁可不给一个会报错的按钮', async () => {
     const seen = stubFetch({
