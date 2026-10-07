@@ -84,8 +84,12 @@ typecheck·lint·vitest·build / 四道文本门禁。
 
 - `steer` / `abort` 明确返回 `AdapterError::Internal("尚未实现…")` —— 没有
   「运行中追加指令 / 中途取消」这两条通道。返回 `Ok(())` 会是谎话。
-- **成员产出没有落库**：`MemberOutcome` 只回文本，token 用量不进 `messages`
-  也不进台账。所以派工这一轮的消耗在用量页上**看不到**。
+- **成员 token 用量没有记**：`MemberOutcome` 不带 usage，所以这一轮成员烧掉的
+  token 在用量页上**看不到**。产出正文本身是**落了库**的 ——
+  `task_dispatches.result_digest` 存的就是 `{status, scope, output}` 这段 JSON
+  （`dispatch_ledger.rs` 的 `result_payload`），读路径能把它还原成 outcome。
+  （这一条我先写错成「产出没落库」，去读了 `result_payload` 才发现 —— 记下来当例子：
+  **没读过代码的事实别往文档里写**。）
 - **成员用同一个 `round.session`**，没有按成员各开一条独立会话 ——
   `vendor/goose/.../subagent_handler.rs` 的 `run_subagent_task` 是「每子 agent
   独立 config + 独立 session」，我们只对齐了「独立调一次模型」这一层。
