@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 
 import { AccountPage } from '../account/Account'
 import { AdminInstancePage, AdminUsersPage } from '../admin/Admin'
+import { AdminBackupPage } from '../admin/AdminBackup'
 import { AutomationsPage } from '../automations/Automations'
 import { AuthPage, RequireAdmin, RequireAuth } from '../auth/auth'
 import { ChatPage } from '../chat'
@@ -28,8 +29,7 @@ export function AppRoutes(): ReactNode {
             <Route path="/chat/:sessionId" element={<ChatPage />} />
             <Route path="/experts" element={<ExpertsPage />} />
             <Route path="/workspace" element={<WorkspacePage />} />
-            <Route path="/workspace/:workspaceRef" element={<WorkspacePage />} />
-            <Route path="/memory" element={<MemoryPage />} />
+            <Route path="/workspace/:workspaceRef" element={<WorkspacePage />} />            <Route path="/memory" element={<MemoryPage />} />
             <Route path="/usage" element={<UsagePage />} />
             <Route path="/devices" element={<DeviceListPage />} />
             {/* 设备名册后端压根没实现（/api/devices 返回 404），以前这一页摆着一段
@@ -43,6 +43,10 @@ export function AppRoutes(): ReactNode {
             <Route element={<RequireAdmin />}>
               <Route path="/admin/models" element={<ModelsPage />} />
               <Route path="/admin/instance" element={<AdminInstancePage />} />
+              {/* 备份与升级从工作区搬到这里（2026-10-07）。参照 octop：它的备份归
+                  /admin/backend、升级归 /admin/advanced?tab=updates，都在 admin 区，
+                  而它压根没有工作区页（routes/index.tsx:213 把 /workspace 重定向到专家页）。 */}
+              <Route path="/admin/backup" element={<AdminBackupPage />} />
               <Route path="/admin/users" element={<AdminUsersPage />} />
               {/* 「共享 MCP」与「MCP 服务」是同一份数据，已合并到 /devices。
                   老链接仍然能用 —— 书签、外链、别人发给你的地址不该因为改了

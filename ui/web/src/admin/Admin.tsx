@@ -1,7 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { type ReactNode, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Link } from 'react-router-dom'
 
 import { Card, ErrorNotice, PageHeader, StatusBadge } from '../components/Page'
 import {
@@ -14,11 +13,26 @@ import {
   userFailure,
   userFailureLabel,
 } from './api'
+import { AdminTabs } from './AdminTabs'
 
 const USERS_KEY = ['admin-users'] as const
 
-const JEV_ROUTE = 'POST /api/admin/config/jev/check'
-
+/**
+ * 实例设置 —— 现在只**说明**这些配置在哪里改，不画表单。
+ *
+ * 这一页以前有四张卡片（默认人格 / 外部体检服务 / 配额 / 网络抓取），
+ * 每一张的输入框都是 `readOnly`、保存按钮都是 `disabled`，占位一律写「（未接通）」。
+ * 四个点不动的按钮比没有按钮更糟：它们看起来是设置入口，用户会一个一个去试，
+ * 试完发现按不动，只能得出「这功能坏了」的结论 —— 而真相是后端压根没这条路由。
+ *
+ * 项目自己的纪律是「不画没有后端的假开关/假按钮」。`{{route}}` 未登记时
+ * 唯一诚实的做法是**说清楚它没接通、以及真要改该走哪条路**（环境变量 / CLI）。
+ *
+ * 参照 octop：它的 admin 区每一项（`/admin/backend`、`/admin/security`、
+ * `/admin/plugins`、`/admin/advanced`）都是**真能操作的**页面，
+ * 没有一个是这样一张只读展示页（`.octop-ref/octop/dashboard/src/routes/index.tsx:229-237`）。
+ * 等 quill 真接上这些配置，这一页再把表单加回来。
+ */
 export function AdminInstancePage(): ReactNode {
   const { t } = useTranslation()
   return (
@@ -30,57 +44,60 @@ export function AdminInstancePage(): ReactNode {
         actions={<AdminTabs />}
       />
       <div className="settings-stack">
-        <Card title={t('admin.defaultSoul', { defaultValue: '默认人格' })} description={t('admin.defaultSoulDescription', { defaultValue: '每个用户的第一份 SOUL 模板。' })}>
-          <form className="form-grid" onSubmit={(event) => event.preventDefault()}>
-            <label className="full-row">
-              {t('admin.defaultSoul', { defaultValue: '默认人格' })}
-              <textarea name="default_soul" rows={6} maxLength={32000} readOnly placeholder={t('admin.notAvailable', { defaultValue: '（未接通）' })} />
-            </label>
-            <div className="form-actions full-row">
-              <button className="primary-button" disabled>{t('admin.saveDefaultSoul', { defaultValue: '保存默认人格' })}</button>
-            </div>
-          </form>
-          <p className="field-help full-row">{settingsNotice(t, ADMIN_CONFIG_ROUTE, 'default_soul')}</p>
-        </Card>
-        <Card title={t('admin.jevTitle', { defaultValue: '外部体检服务' })} description={t('admin.jevDescription', { defaultValue: '上游用来校验 provider 凭据的外部服务。' })}>
-          <p className="field-help full-row">
-            {t('admin.jevNotWired', {
-              defaultValue: 'quill 没有接入任何外部体检服务：{{route}} 未登记，因此这里不显示任何可用性状态。下一步：若仍需要这条能力，再实现 {{route}}。',
-              route: JEV_ROUTE,
+        <Card
+          title={t('admin.instanceNotWiredTitle', { defaultValue: '这一页还没有可改的配置' })}
+          description={t('admin.instanceNotWiredDescription', {
+            defaultValue: '下面这些配置项后端都还没有对应的读写接口，所以这里既不画输入框，也不画保存按钮。',
+          })}
+        >
+          <p className="field-help full-row" role="status">
+            {t('admin.instanceNotWired', {
+              defaultValue:
+                '以前这里有四张卡片：默认人格、外部体检服务、配额、网络抓取。它们的输入框全是只读、保存按钮全是禁用 —— 四个点不动的按钮看起来是设置入口，用户试完只会以为功能坏了，而真相是 {{route}} 在 quill 里没有登记。下一步：实现 {{route}} 的读写之后再把表单加回来。',
+              route: ADMIN_CONFIG_ROUTE,
             })}
           </p>
-        </Card>
-        <Card title={t('admin.quotas', { defaultValue: '配额' })} description={t('admin.quotasDescription', { defaultValue: '个人与共享空间的容量上限。' })}>
-          <form className="form-grid" onSubmit={(event) => event.preventDefault()}>
-            <label>
-              {t('admin.personalQuota', { defaultValue: '个人配额 (MiB)' })}
-              <input name="quota_mib" type="number" min="0" step="any" readOnly placeholder={t('admin.notAvailable', { defaultValue: '（未接通）' })} />
-            </label>
-            <label>
-              {t('admin.sharedQuota', { defaultValue: '共享配额 (MiB)' })}
-              <input name="shared_quota_mib" type="number" min="0" step="any" readOnly placeholder={t('admin.notAvailable', { defaultValue: '（未接通）' })} />
-            </label>
-            <div className="form-actions full-row">
-              <button className="primary-button" disabled>{t('admin.saveQuotas', { defaultValue: '保存配额' })}</button>
+          <dl className="detail-grid">
+            <div>
+              <dt>{t('admin.defaultSoul', { defaultValue: '默认人格' })}</dt>
+              <dd>{notWired(t, 'default_soul')}</dd>
             </div>
-          </form>
-          <p className="field-help full-row">{settingsNotice(t, ADMIN_CONFIG_ROUTE, 'quota_bytes')}</p>
-        </Card>
-        <Card title={t('admin.webFetch', { defaultValue: '网络抓取' })} description={t('admin.webFetchDescription', { defaultValue: '抓取外部网页时的屏蔽名单。' })}>
-          <form className="form-grid" onSubmit={(event) => event.preventDefault()}>
-            <label className="full-row">
-              {t('admin.denylist', { defaultValue: '屏蔽名单' })}
-              <textarea name="web_fetch_denylist" rows={7} readOnly placeholder={t('admin.notAvailable', { defaultValue: '（未接通）' })} />
-            </label>
-            <div className="form-actions full-row">
-              <button className="primary-button" disabled>{t('admin.saveNetwork', { defaultValue: '保存网络策略' })}</button>
+            <div>
+              <dt>{t('admin.quotas', { defaultValue: '配额' })}</dt>
+              <dd>{notWired(t, 'quota_bytes')}</dd>
             </div>
-          </form>
-          <p className="field-help full-row">{settingsNotice(t, ADMIN_CONFIG_ROUTE, 'web_fetch_denylist')}</p>
+            <div>
+              <dt>{t('admin.webFetch', { defaultValue: '网络抓取' })}</dt>
+              <dd>{notWired(t, 'web_fetch_denylist')}</dd>
+            </div>
+            <div>
+              <dt>{t('admin.jevTitle', { defaultValue: '外部体检服务' })}</dt>
+              <dd>{t('admin.jevNotWiredShort', { defaultValue: '未接入任何外部体检服务' })}</dd>
+            </div>
+          </dl>
+          <p className="field-help full-row">
+            {t('admin.instanceWhereToEdit', {
+              defaultValue:
+                '现在能改实例级配置的地方是服务端的启动环境变量，以及 {{doctor}}（打印当前生效的配置与诊断）。',
+              doctor: 'quill doctor',
+            })}
+          </p>
         </Card>
       </div>
     </div>
   )
+}
+
+/** 一格配置的状态。**逐项说清为什么不能改**，而不是统一写「未接通」。 */
+function notWired(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  field: string,
+): string {
+  return t('admin.fieldNotWiredShort', {
+    field,
+    defaultValue: '{{field}}：只读，{{route}} 未登记',
+    route: ADMIN_CONFIG_ROUTE,
+  })
 }
 
 export function AdminUsersPage(): ReactNode {
@@ -223,27 +240,4 @@ export function AdminUsersPage(): ReactNode {
       </Card>
     </div>
   )
-}
-
-function AdminTabs(): ReactNode {
-  const { t } = useTranslation()
-  return (
-    <nav className="inline-tabs" aria-label={t('admin.adminPages', { defaultValue: '管理页面' })}>
-      <Link to="/admin/models">{t('nav.models', { defaultValue: '模型' })}</Link>
-      <Link to="/admin/instance">{t('admin.settings', { defaultValue: '实例设置' })}</Link>
-      <Link to="/admin/users">{t('admin.users', { defaultValue: '用户' })}</Link>
-      {/* 原来这里链到 /admin/mcp「共享 MCP」。它与左侧的「MCP 服务」是同一份数据、
-          同一个接口，只是另一套表单 —— 而 quill 只有实例级一套，「共享」暗示的
-          分用户分享并不存在。两处改一边另一边不跟着变，最终必然漂移，所以指向同一处。 */}
-      <Link to="/devices">{t('nav.mcpServers', { defaultValue: 'MCP 服务' })}</Link>
-    </nav>
-  )
-}
-
-function settingsNotice(t: (key: string, options?: Record<string, unknown>) => string, route: string, field: string): string {
-  return t('admin.settingsNotWired', {
-    defaultValue: '字段 {{field}} 拿不到值：{{route}} 在 quill 里未登记，因此表单保持只读，也不显示任何占位数据。下一步：实现 {{route}} 后再开放保存。',
-    field,
-    route,
-  })
 }

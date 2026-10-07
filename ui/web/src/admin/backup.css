@@ -1,0 +1,78 @@
+/*
+ * 备份与升级的样式。
+ *
+ * 这些规则 2026-10-07 从 workspace.css 搬过来 —— 备份与升级同一天被搬到
+ * admin 区（`/admin/backup`），因为它们是实例运维能力而不是文件浏览的附属品。
+ * 参照 octop：它的备份归 `/admin/backend`、升级归 `/admin/advanced?tab=updates`
+ * （`.octop-ref/octop/dashboard/src/routes/index.tsx:229,236,244`），都在 admin 区。
+ *
+ * 类名从 `oo-workspace-*` 改成 `admin-backup-*`：它们现在活在 admin 页上，
+ * 继续挂 workspace 前缀会让下一个人以为工作区页还在用。
+ *
+ * 配色全部走 `var(--*)` —— 项目规矩，全局样式来自 vendor，本地只在这里落。
+ */
+
+
+
+.admin-backup-form {
+  align-items: end;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(200px, 1fr) auto;
+  margin-bottom: 10px;
+}
+.admin-backup-form label {
+  display: grid;
+  font-size: 11px;
+  font-weight: 700;
+  gap: 7px;
+}
+.admin-backup-form input {
+  background: var(--field);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  min-height: 31px;
+  padding: 0 9px;
+}
+
+.admin-backup-backup-result {
+  background: color-mix(in srgb, var(--success), transparent 92%);
+  border: 1px solid color-mix(in srgb, var(--success), transparent 70%);
+  border-radius: var(--radius);
+  display: grid;
+  gap: 9px;
+  margin-top: 12px;
+  padding: 13px;
+}
+.admin-backup-backup-result .detail-grid { margin: 0; }
+.admin-backup-backup-result code { overflow-wrap: anywhere; }
+
+.admin-backup-excluded-title {
+  font-size: 10px;
+  font-weight: 700;
+  margin: 3px 0 0;
+}
+.admin-backup-excluded-none { color: var(--muted); font-size: 10px; margin: 0; }
+.admin-backup-excluded-list { font-size: 10px; margin: 0; padding-left: 18px; }
+.admin-backup-excluded-list li { margin-top: 4px; overflow-wrap: anywhere; }
+
+.admin-backup-failure {
+  color: var(--danger);
+  font-size: 11px;
+  line-height: 1.55;
+  margin: 10px 0 0;
+}
+
+.admin-backup-restore-note {
+  background: var(--panel-soft);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.6;
+  margin: 14px 0 0;
+  padding: 11px 13px;
+}
+.admin-backup-restore-note strong { color: var(--ink); display: block; font-size: 11px; margin-bottom: 4px; }
+.admin-backup-restore-note code { overflow-wrap: anywhere; }

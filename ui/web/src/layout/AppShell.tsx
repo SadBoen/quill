@@ -27,6 +27,11 @@ const NAV_ITEMS = [
 const ADMIN_NAV_ITEMS = [
   { to: '/admin/models', icon: 'L', labelKey: 'nav.models', fallback: '模型' },
   { to: '/admin/instance', icon: 'S', labelKey: 'admin.settings', fallback: '实例设置' },
+  // 备份与升级原来塞在「工作区」页里。搬到这里是因为它们是实例运维能力，
+  // 而工作区自己的功能是空的（/api/workspace/* 全部未登记）—— 拿备份顶替一个
+  // 空页面，用户就以为备份属于工作区。octop 的做法是备份归 /admin/backend、
+  // 升级归 /admin/advanced?tab=updates，都在 admin 区。
+  { to: '/admin/backup', icon: 'B', labelKey: 'admin.backupTitle', fallback: '备份与升级' },
   { to: '/admin/users', icon: 'U', labelKey: 'admin.users', fallback: '用户' },
   // 这里原来有一项「共享 MCP」。**它和上面的「MCP 服务」操作的是同一份数据**：
   // 同一个 `/api/extensions/mcp`、同一个 `MCP_KEY` 查询缓存，只是两套长得

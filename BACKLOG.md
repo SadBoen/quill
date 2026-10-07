@@ -563,6 +563,51 @@ team id **直接丢弃**。路由只按 `room_id` + `round` 过滤，于是
 **判据本身也会骗人，得自己验。** 只测默认形态、全空输入、或者挑一个
 「两种实现结果恰好相同」的用例，判据就是摆设。
 
+### B2-5 备份与升级塞在工作区里，实例设置是四个点不动的按钮（2026-10-07 已修）
+
+用户实测发现两处信息架构错，查了 octop 才看清根因。
+
+**错一：备份与升级在工作区页。**
+`workspace/api.ts`（当时）第一行注释就写着：「工作区页没有文件接口
+（`/api/workspace/*` 全部未登记），改接真实存在的备份路由」——
+**工作区自己的功能是空的，拿备份来顶替**。用户看到的是「备份属于工作区」。
+
+参照 octop：它**压根没有工作区页** ——
+`{ path: "/workspace", element: <Navigate to="/experts" replace /> }`
+（`.octop-ref/octop/dashboard/src/routes/index.tsx:213`）直接把 `/workspace`
+重定向到专家页。备份归它的 `/admin/backend`（`AdminStoragePage`，`:229`），
+升级归 `/admin/advanced?tab=updates`（`:236,244`），**都在 admin 区**。
+
+**已改**：备份与升级搬到 `/admin/backup`，CSS 从 `workspace.css`
+搬成 `admin/backup.css`（类名 `oo-workspace-*` → `admin-backup-*`）。
+工作区页撤掉三栏骨架 —— **空骨架比一句话更糟**，一个永远空的文件列表框
+看着像「文件加载不出来」，而真相是根本没有这个接口。现在只说一句实话 + 指路。
+
+**错二：「实例设置」四张卡片全是点不动的按钮。**
+默认人格 / 外部体检服务 / 配额 / 网络抓取，四张卡的输入框全 `readOnly`、
+保存按钮全 `disabled`、占位全写「（未接通）」。**四个点不动的按钮比没有按钮更糟**：
+它们看起来是设置入口，用户会一个一个去试，试完只得出「这功能坏了」，
+而真相是 `ADMIN_CONFIG_ROUTE` 在 quill 里压根没登记。
+
+按项目纪律（不画没有后端的假开关/假按钮）改成**逐项说明为什么不能改**，
+并指出真该走哪条路（服务端环境变量 + `quill doctor`）。
+参照 octop：它的 admin 区每一项（`/admin/backend`、`/admin/security`、
+`/admin/plugins`、`/admin/advanced`）都是**真能操作的**页面，
+没有一个是这样一张只读展示页（`routes/index.tsx:229-237`）。
+
+**顺带**：`AdminTabs` 抽成独立文件。备份页搬进 admin 之后立刻出现了两份
+页签定义，两处入口将来加一项必然只改一处 —— 「共享 MCP」就是这么消失的
+（`AppShell.tsx:31-35` 有那条注释）。判据钉住「只能有一份定义」。
+
+**MCP 市场暂不做**（用户 2026-10-07 决定）。后端 MCP 只有
+`GET/POST /api/extensions/mcp`、`DELETE .../{name}`、`PATCH`（501 桩），
+**没有任何市场/注册表路由**。octop 那个 `/connectors` 页不在我们的
+sparse 检出里（`sparse-checkout` 只有 `dashboard/src/pages/Chat` 与
+`pages/Experts`），所以**它到底有没有目录功能没核到** —— 不能照抄，
+要做得自己设计接哪个注册表，那是新增外部依赖。
+
+判据在 `ui/web/src/admin/BackupPlacement.test.tsx`（8 条）。
+
 
 ### B2-4 teams 的几列建了没人用
 

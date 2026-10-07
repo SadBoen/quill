@@ -434,9 +434,15 @@ export const en = {
     },
     workspace: {
       title: 'Workspace',
+      notWiredDescription: 'Browse and edit files in the instance workspace.',
+      notWiredTitle: 'Workspace file routes are not wired up',
+      notWiredCardDescription:
+        'There is no file list, directory tree, or online device on this page — the backend has none of those routes.',
+      backupMoved:
+        'This page used to host backup and upgrade. They are instance operations, not part of the workspace, and have moved to {{link}}.',
       dataRoot: 'Data root',
       exportBackup: 'Export backup',
-      filesNotWired: 'Quill has no workspace file API: {{route}} is not registered on this instance, so none of the three panes below contain any file, directory, or online device (no fake data). Next step: implement {{list}} (list directories) and {{route}} (read and write real text files, including ETag optimistic concurrency), and the browser features wire themselves up automatically.',
+      filesNotWired: 'Quill has no workspace file API: neither {{route}} nor {{list}} is registered on this instance, so this page has no files, directories, or online devices (no fake data). Next step: implement {{list}} (list directories) and {{route}} (read and write real text files, including ETag optimistic concurrency), and the file browser wires itself up.',
       locations: 'Workspace locations',
       serverLocations: 'Server locations',
       noLocations: 'No locations available: Quill does not provide a workspace list yet.',
@@ -542,6 +548,18 @@ export const en = {
     admin: {
       settings: 'Instance settings',
       settingsDescription: 'Quill instance-level configuration is decided by server environment variables; this page is display-only.',
+      backupTitle: 'Backup & upgrade',
+      backupPageDescription:
+        'Backup and upgrade are instance operations. octop files backup under its backend page and upgrade under advanced settings, both in the admin area; it has no workspace page at all, so neither can end up there.',
+      instanceNotWiredTitle: 'Nothing to configure on this page yet',
+      instanceNotWiredDescription:
+        'The backend has no read/write routes for the settings below, so this page draws neither inputs nor save buttons.',
+      instanceNotWired:
+        'This page used to have four cards: default persona, external health check, quotas, and web fetch. Their inputs were all read-only and their save buttons all disabled — four buttons that look like settings entry points but cannot be pressed, so trying them only tells the user the feature is broken, while the truth is {{route}} is not registered in quill. Next step: implement {{route}}, then bring the forms back.',
+      instanceWhereToEdit:
+        'To change instance-level configuration today: the server startup environment variables, and {{doctor}} (prints the configuration in effect plus diagnostics).',
+      fieldNotWiredShort: '{{field}}: read-only, {{route}} not registered',
+      jevNotWiredShort: 'No external health-check service is wired up',
       notAvailable: '(not available)',
       defaultSoul: 'Default persona',
       defaultSoulDescription: 'The first SOUL template for each user.',
@@ -1292,9 +1310,15 @@ export const zhCN = {
     },
     workspace: {
       title: '工作区',
+      notWiredDescription: '浏览与编辑实例工作区里的文件。',
+      notWiredTitle: '工作区文件接口尚未接通',
+      notWiredCardDescription:
+        '这一页没有文件列表、目录树或在线设备 —— 因为后端没有这些接口。',
+      backupMoved:
+        '以前这一页还放着备份与升级。它们是实例运维能力，不属于工作区，已经搬到「{{link}}」。',
       dataRoot: '数据根目录',
       exportBackup: '导出备份',
-      filesNotWired: 'quill 后端没有工作区文件接口：{{route}} 未在本实例登记，所以下面三栏里没有任何文件、目录或在线设备（不做假数据）。下一步：实现 {{list}}（列目录）与 {{route}}（读写真实文本文件，含 ETag 乐观并发），本浏览器的功能就会自动接上。',
+      filesNotWired: 'quill 后端没有工作区文件接口：{{route}} 与 {{list}} 都未在本实例登记，所以这一页没有文件、目录或在线设备（不做假数据）。下一步：实现 {{list}}（列目录）与 {{route}}（读写真实文本文件，含 ETag 乐观并发），文件浏览器就会自动接上。',
       locations: '工作区位置',
       serverLocations: '服务端位置',
       noLocations: '没有可用的位置：quill 尚未提供工作区列表。',
@@ -1615,6 +1639,18 @@ export const zhCN = {
     admin: {
       settings: '实例设置',
       settingsDescription: 'quill 的实例级配置由服务端环境变量决定，页面上只做展示。',
+      backupTitle: '备份与升级',
+      backupPageDescription:
+        '备份与升级是实例运维能力。octop 把备份归「后台」、升级归「高级设置 → 更新」，都在管理区；它没有工作区页，所以这两个功能不会掉进工作区。',
+      instanceNotWiredTitle: '这一页还没有可改的配置',
+      instanceNotWiredDescription:
+        '下面这些配置项后端都还没有对应的读写接口，所以这里既不画输入框，也不画保存按钮。',
+      instanceNotWired:
+        '以前这里有四张卡片：默认人格、外部体检服务、配额、网络抓取。它们的输入框全是只读、保存按钮全是禁用 —— 四个点不动的按钮看起来是设置入口，用户试完只会以为功能坏了，而真相是 {{route}} 在 quill 里没有登记。下一步：实现 {{route}} 的读写之后再把表单加回来。',
+      instanceWhereToEdit:
+        '现在能改实例级配置的地方是服务端的启动环境变量，以及 {{doctor}}（打印当前生效的配置与诊断）。',
+      fieldNotWiredShort: '{{field}}：只读，{{route}} 未登记',
+      jevNotWiredShort: '未接入任何外部体检服务',
       notAvailable: '（未接通）',
       defaultSoul: '默认人格',
       defaultSoulDescription: '每个用户的第一份 SOUL 模板。',

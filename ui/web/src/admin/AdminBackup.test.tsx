@@ -1,10 +1,11 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { MemoryRouter } from 'react-router-dom'
 
 import i18n from '../i18n'
-import { RESTORE_COMMAND } from './api'
-import { WorkspacePage } from './WorkspacePage'
+import { RESTORE_COMMAND } from './backupApi'
+import { AdminBackupPage } from './AdminBackup'
 
 /**
  * 备份这块的红线：**页面上不能出现服务端没返回过的成功。**
@@ -71,10 +72,13 @@ function renderPage(handlers: Record<string, () => Promise<Response>>): {
     }),
   )
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  // 页面里有 PageHeader 与 AdminTabs（都渲染 <Link>），没有 Router 会直接抛。
   render(
-    <QueryClientProvider client={client}>
-      <WorkspacePage />
-    </QueryClientProvider>,
+    <MemoryRouter>
+      <QueryClientProvider client={client}>
+        <AdminBackupPage />
+      </QueryClientProvider>
+    </MemoryRouter>,
   )
   return { requests }
 }
@@ -86,7 +90,7 @@ const UPGRADE_PREPARE_URL = '/api/upgrade/prepare'
 const UPGRADE_HISTORY_URL = '/api/upgrade/history'
 
 /**
- * 页面默认的备份名，跟 `WorkspacePage.tsx` 的 `defaultBackupName()` 同一套算法。
+ * 页面默认的备份名，跟 `AdminBackup.tsx` 的 `defaultBackupName()` 同一套算法。
  *
  * 这里**不能写死日期**。页面按「今天」算，测试写死 `backup-2026-10-06` 就等于
  * 给这条断言装了个隐形截止日：跨过那天之后它会开始红，而红的原因跟被测行为

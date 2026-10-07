@@ -1,7 +1,18 @@
 import { ApiError, apiJson } from '../api/client'
 
 /**
- * 工作区页没有文件接口（`/api/workspace/*` 全部未登记），改接真实存在的备份路由。
+ * 备份与升级的接口。
+ *
+ * **为什么在 admin 而不是工作区**：这两个是实例运维能力，不是文件浏览的附属品。
+ * 参照 octop —— 它的备份归 `/admin/backend`（`AdminStoragePage`）、
+ * 升级归 `/admin/advanced?tab=updates`（`routes/index.tsx:229,236,244`），
+ * 都在 admin 区；而 octop **压根没有工作区页**，
+ * `{ path: "/workspace", element: <Navigate to="/experts" replace /> }`（`:213`）
+ * 直接把 `/workspace` 重定向走。
+ *
+ * 我们之前把备份塞在工作区是因为**工作区自己的功能是空的**
+ * （`/api/workspace/*` 全部未登记），拿备份来顶替 ——
+ * 那是「有内容总比空页好」的妥协，代价是让用户以为备份属于工作区。
  *
  * export / verify 已实现（`POST` 返回 201 / 200，字段见下面的类型）。
  * restore 虽然也登记了，但服务端运行期间数据库文件被它自己占着，
