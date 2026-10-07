@@ -1110,6 +1110,51 @@ Tabs（下划线）与 Segmented（分段容器）差在容器归谁。
 **本项目现在有两套页签长相**：专家页下划线式（`.experts-tabs`，既有设计）、
 个性化页分段式（对齐 Octop）。用户只点了后者，前者没动。
 
+**两处是我凭空加的，Octop 里根本没有**（2026-10-08 用户当面指出）：
+1. **侧栏里的「人格」入口**。Octop 的人格是个性化页里的一个页签
+   （`index.tsx:33-41`），主导航里没有这一项。我给它单开侧栏入口，
+   等于凭空造了一个上游没有的东西。已删；`/mbti` 改成重定向到
+   `/personalization?tab=mbti`，见过的链接不至于 404。
+2. **「这一页是围绕某个专家的」这个前提**我第一版也没接上，补了当前专家选择器。
+
+**⚠️ 紧接着的一次自我修正（本条最要紧，见下）**：我第一版把界面上那五签写成
+「这一项不属于任何单个专家」。用户当场反问「octop 对每个专家都可以单独定制的
+吧，你查清楚」。查清了，**用户是对的**：
+
+| 东西 | Octop | 本项目 |
+|---|---|---|
+| agent 是什么 | `agents.py:49` 的 `kind` 默认就是 `expert` —— **agent 就是专家** | 我们叫 expert，它就是 agent |
+| 技能 | 每 agent 挂 `skill_package_ids`（`agents.py:38`） | `skills.user_id` —— 账号级，**没做** |
+| 记忆 | 每 agent 挂 `knowledge_base_ids`（`agents.py:39`） | `wiki_index.user_id` —— 账号级，**没做** |
+| MCP | 每 agent 一份 `mcp_servers`（`agents.py:40`） | 实例级一张表 —— **没做** |
+| 通道 | `channels.agent_id`（`channels.py:15`） | `channels.owner_user_id` —— 账号级，**没做** |
+| 人格 | `persona_mbti`（`agents.py:30`） | `experts.instructions` —— **做了** |
+
+面板文件头也写着：`ChannelsPanel.tsx:2`「Embeddable **per-agent** channels
+grid」、`SkillsTabs.tsx:9`「takes an explicit `agentId` so callers decide
+**which agent's** skills to show」。
+
+**所以错的不是「做不到」，是「没做」** —— 而我把它写成了「本来如此」。
+这正是本文件 B6-4 记过的**免责声明反向授权**：一句措辞得当的免责，
+替一段没写的代码免了责，还让后面看的人以为查过了。
+界面文案已改成「这一项在 Octop 上是按专家分开的，本项目目前还是账号级」，
+判据里加了一条断言：账号级那五签的文案**不许**出现「不属于某个专家」。
+
+**Octop 的挂载模型值得照抄**：技能与知识库是**先有一个用户级的对象**，
+agent 行只存一组 id（`skill_package_ids` / `knowledge_base_ids`）指到它。
+也就是「装一次、挂多处」，而不是给每张表都加 `expert_id` 然后复制 N 份。
+真跟上要按这个形状做，不是给 `skills` 加一列。
+
+**判据要等异步加载**：`listExperts` 走 react-query，同步断言会在 pending
+阶段取值，那时选择器还没画出来 —— 那种失败与被测行为无关。三条新判据都改成
+`await waitFor(...)` 之后才断言。
+
+**又一次踩了 `.ps1` 必须全 ASCII**：变异脚本的 pattern 里带了中文的 `fallback:
+'个性化'`，PowerShell 按 GBK 读脚本把它读坏，于是 `Contains` 永远为 false，
+脚本报 `PATCH-FAILED`。**「脚本说 pattern 没找到」要先怀疑脚本自己**，
+它和「判据报错先怀疑判据」是同一类：工具链的失败长得像被测行为的失败。
+锚点一律用纯 ASCII（`] as const` / `scope: 'account' as Scope,`）。
+
 ---
 
 ## 已完成（留作基线，不再维护细节）

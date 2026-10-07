@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -46,7 +46,7 @@ function json(body: unknown, status = 200): Response {
   })
 }
 
-function stubFetch() {
+function stubFetch(experts = EXPERTS) {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL) => {
@@ -55,11 +55,41 @@ function stubFetch() {
         return json({ questions: [], min_answers: 20 })
       }
       if (url.includes('/api/mbti/history')) return json({ history: [], current: null, keep: 20 })
-      if (url.includes('/api/experts')) return json({ experts: [] })
+      if (url.includes('/api/experts')) return json({ experts })
       return json({})
     }),
   )
 }
+
+/** 两个专家，才测得出「换专家」这件事。 */
+const EXPERTS = [
+  {
+    id: 'keeper',
+    owner: 'x',
+    display_name: '守规矩的',
+    description: '',
+    instructions: '',
+    model: null,
+    visibility: 'private',
+    default_enabled: true,
+    is_builtin: false,
+    is_general: false,
+    source_template: null,
+  },
+  {
+    id: 'cost-analyst',
+    owner: 'x',
+    display_name: '成本分析师',
+    description: '',
+    instructions: '',
+    model: null,
+    visibility: 'private',
+    default_enabled: true,
+    is_builtin: false,
+    is_general: false,
+    source_template: null,
+  },
+]
 
 function mount(initial = '/personalization') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -228,10 +258,92 @@ describe('个性化页', () => {
     mount()
     const app = await import('../app/App.tsx?raw')
     expect(app.default).toContain('path="/personalization"')
-    // 人格仍然有自己的独立地址：内嵌之外还要能直接进
-    expect(app.default).toContain('path="/mbti"')
     const shell = await import('../layout/AppShell.tsx?raw')
     expect(shell.default).toContain("'/personalization'")
-    expect(shell.default).toContain("'/mbti'")
+  })
+
+  it('侧栏里不该有人格这一项 —— Octop 的主导航里没有它', async () => {
+    // Octop 的人格是个性化页里的一个页签（index.tsx:33-41），
+    // 不是主导航的一项。给它单开一个侧栏入口等于凭空造了一个上游没有的东西。
+    const shell = await import('../layout/AppShell.tsx?raw')
+    const main = shell.default.split('ADMIN_NAV_ITEMS')[0]
+    expect(main, '主导航里不该出现 /mbti').not.toContain("'/mbti'")
+  })
+
+  it('页面有「当前专家」，且换专家会改地址', async () => {
+    stubFetch()
+    mount()
+    // 专家列表是异步取的：不等就会在 pending 阶段断言，
+    // 而那一刻选择器根本还没画出来 —— 那种失败与被测行为无关。
+    await waitFor(() =>
+      expect(document.querySelector('[data-expert-picker="true"]')).not.toBeNull(),
+    )
+    const picker = document.querySelector('[data-expert-picker="true"]') as HTMLSelectElement
+    expect(picker, '必须有专家选择器').not.toBeNull()
+    expect(picker.options).toHaveLength(2)
+    // 认不出来的 ?expert= 应落回第一个专家
+    expect(picker.value).toBe('keeper')
+
+    fireEvent.change(picker, { target: { value: 'cost-analyst' } })
+    await waitFor(() => {
+      const now = document.querySelector('[data-expert-picker="true"]') as HTMLSelectElement
+      expect(now?.value).toBe('cost-analyst')
+    })
+  })
+
+  it('每一签都必须标清它是专家级还是账号级', async () => {
+    // 这条是这一页最要紧的：skills / wiki_index / channels 三张表的归属列都是
+    // user_id，没有「某个专家的这一份」。不标的话，用户会以为在配 A 专家，
+    // 实际改的是整个账号。
+    stubFetch()
+    for (const key of UPSTREAM_ORDER) {
+      document.body.innerHTML = ''
+      mount(`/personalization?tab=${key}`)
+      const note = await waitFor(() => {
+        const el = document.querySelector('[data-scope-note]')
+        expect(el, `${key} 那一签没标归属`).not.toBeNull()
+        return el!
+      })
+      expect(['expert', 'account'], `${key} 的归属值非法`).toContain(
+        note.getAttribute('data-scope-note'),
+      )
+    }
+  })
+
+  it('五签标为账号级、两签标为专家级，且文案说的是「本项目还没做到」', async () => {
+    // Octop 那边七签全是 per-agent（agents.py:37-43 那一行的
+    // skill_package_ids / knowledge_base_ids / mcp_servers / persona_mbti）。
+    // 我们只有人格真做了。所以账号级那五签的文案必须说「本项目还没做到」，
+    // 而不是「这一项不属于某个专家」—— 后者把没做说成了如此。
+    stubFetch()
+    const accountLevel: string[] = []
+    const expertLevel: string[] = []
+    for (const key of UPSTREAM_ORDER) {
+      document.body.innerHTML = ''
+      mount(`/personalization?tab=${key}`)
+      const scope = await waitFor(() => {
+        const el = document.querySelector('[data-scope-note]')
+        expect(el, `${key} 没标归属`).not.toBeNull()
+        return el!
+      })
+      if (scope.getAttribute('data-scope-note') === 'account') {
+        accountLevel.push(key)
+        expect(scope.textContent ?? '').toMatch(/本项目|here|account/i)
+        expect(scope.textContent ?? '', `${key} 的文案把「没做」说成了「本来如此」`).not.toMatch(
+          /不属于|does not belong/,
+        )
+      } else {
+        expertLevel.push(key)
+      }
+    }
+    expect(accountLevel.sort()).toEqual(['channels', 'memory', 'plugins', 'skills', 'tools'])
+    expect(expertLevel.sort()).toEqual(['mbti', 'subagents'])
+  })
+
+  it('一个专家都没有时说明白，而不是画一堆点了没用的页签', async () => {
+    stubFetch([])
+    mount()
+    expect(await screen.findByText(/你还没有任何专家/)).toBeTruthy()
+    expect(document.querySelector('[data-expert-picker="true"]')).toBeNull()
   })
 })

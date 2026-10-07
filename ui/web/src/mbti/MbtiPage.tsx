@@ -32,7 +32,14 @@ function langOf(i18nLanguage: string): MbtiLang {
   return i18nLanguage.startsWith('en') ? 'en' : 'zh'
 }
 
-export function MbtiPage({ embedded = false }: { embedded?: boolean }): ReactNode {
+export function MbtiPage({
+  embedded = false,
+  expertId = '',
+}: {
+  embedded?: boolean
+  /** 个性化页当前选中的专家。给了就作为「应用到」的默认目标。 */
+  expertId?: string
+}): ReactNode {
   const { t, i18n } = useTranslation()
   const lang = langOf(i18n.language)
   const qc = useQueryClient()
@@ -158,7 +165,7 @@ export function MbtiPage({ embedded = false }: { embedded?: boolean }): ReactNod
                 </button>
               </div>
 
-              {shown ? <ApplyPanel result={shown} lang={lang} /> : null}
+              {shown ? <ApplyPanel result={shown} lang={lang} expertId={expertId} /> : null}
 
               {history.data && history.data.history.length > 1 ? (
                 <HistoryList rows={history.data.history} keep={history.data.keep} />
@@ -414,10 +421,22 @@ function ProfileCard({
 
 // ------------------------------------------------------------------ 应用
 
-function ApplyPanel({ result, lang }: { result: MbtiResult; lang: MbtiLang }): ReactNode {
+function ApplyPanel({
+  result,
+  lang,
+  expertId: preset,
+}: {
+  result: MbtiResult
+  lang: MbtiLang
+  /** 个性化页当前选中的专家，优先于已应用的那个当默认值。 */
+  expertId?: string
+}): ReactNode {
   const { t } = useTranslation()
   const qc = useQueryClient()
-  const [expertId, setExpertId] = useState(result.applied_expert_id ?? '')
+  // 默认目标：先看已经应用过谁，没有就用页面当前选中的那个专家。
+  // 这么排是因为「已经应用过」是既成事实，而页面选中的是当前意图 ——
+  // 用户切了专家就是要改那个。
+  const [expertId, setExpertId] = useState(result.applied_expert_id || preset || '')
   const experts = useQuery({ queryKey: EXPERTS_KEY, queryFn: listExperts })
 
   const apply = useMutation({

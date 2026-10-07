@@ -5,7 +5,6 @@ import { AccountPage } from '../account/Account'
 import { AdminInstancePage, AdminUsersPage } from '../admin/Admin'
 import { AdminBackupPage } from '../admin/AdminBackup'
 import { ChannelsPage } from '../channels/Channels'
-import { MbtiPage } from '../mbti/MbtiPage'
 import { PersonalizationPage } from '../personalization/PersonalizationPage'
 import { AutomationsPage } from '../automations/Automations'
 import { AuthPage, RequireAdmin, RequireAuth } from '../auth/auth'
@@ -44,9 +43,10 @@ export function AppRoutes(): ReactNode {
             <Route path="/automations" element={<AutomationsPage />} />
             <Route path="/channels" element={<ChannelsPage />} />
             <Route path="/personalization" element={<PersonalizationPage />} />
-            {/* 人格测评与光谱。Octop 把它放在个性化页的一个页签里（MBTISelector.tsx），
-                本项目给它独立一页：它有测 - 看 - 用三段流程，塞进索引页会挤。 */}
-            <Route path="/mbti" element={<MbtiPage />} />
+            // 人格只住在个性化页的「人格」页签里（Octop 也是这么放的，
+            // 它的主导航没有这一项）。这个地址留着是为了「看到过 /mbti 这个
+            // 路径」的人不至于撞 404 —— 直接把人送到那一页签。
+            <Route path="/mbti" element={<Navigate to="/personalization?tab=mbti" replace />} />
             <Route path="/account" element={<AccountPage />} />
             <Route element={<RequireAdmin />}>
               <Route path="/admin/models" element={<ModelsPage />} />

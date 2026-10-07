@@ -411,6 +411,13 @@ export const en = {
       openHere: 'Open "{{name}}"',
       elsewhereNote:
         "This tab's implementation lives on its own page. A second copy here would drift from the original.",
+      whichExpert: 'Configuring which expert',
+      scopeExpert:
+        'This one belongs to "{{name}}" alone: changes land on it and nowhere else.',
+      scopeAccount:
+        'Skills, memory and channels are per-expert on Octop. They are still account-wide here: install once, every expert shares it.',
+      noExpert:
+        'You have no experts yet. Everything on this page hangs off one, so create one on the Experts page first.',
     },
     mbti: {
       title: 'Persona',
@@ -1366,6 +1373,11 @@ export const zhCN = {
       openHere: '打开「{{name}}」',
       elsewhereNote:
         '这一签的实现住在独立页面，不在索引页里再抄一份 —— 抄一份就会两边各改各的。',
+      whichExpert: '配置哪个专家',
+      scopeExpert: '这一项是「{{name}}」自己的：改动只落在它身上。',
+      scopeAccount:
+        '这一项在 Octop 上是按专家分开的（每个专家挂各自的）。本项目目前还是账号级 —— 你装一次，所有专家共用同一份。',
+      noExpert: '你还没有任何专家。这一页的一切都挂在某个专家身上，先到「专家」页建一个。',
     },
     mbti: {
       title: '人格',

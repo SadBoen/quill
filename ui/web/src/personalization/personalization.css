@@ -86,6 +86,44 @@
   }
 }
 
+/* ---- 当前专家 + 归属说明 ---- */
+
+.personalization-page .personalization-scope {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.personalization-page .personalization-scope-label {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.personalization-page .personalization-scope select {
+  max-width: 20em;
+}
+
+.personalization-page .personalization-scope-hint {
+  flex: 1 1 18em;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* 归属不同的两态必须一眼分得出来，而不只是文案不同 ——
+   「这一项是这个专家的」与「这一项是全账号共用的」搞混的后果，
+   是用户以为改了 A 专家其实改了所有。 */
+.personalization-page [data-scope-note='account'] {
+  color: var(--ink);
+  font-weight: 600;
+}
+
 /* ---- 内容区 ---- */
 
 .personalization-page .personalization-panel {

@@ -28,10 +28,10 @@ const NAV_ITEMS = [
   // 个性化：技能 / 工具 / 子智能体 / 插件 / 记忆 / 通道的索引页。
   // 位置紧跟通道，因为它就是这些页面的总入口 —— 放散了在侧栏里看不出关系。
   { to: '/personalization', icon: 'P', labelKey: 'nav.personalization', fallback: '个性化' },
-  // 人格：28 题测评 + 四维光谱 + 应用到某个专家。
-  // 图标用 G（personality）。它紧跟个性化 —— 个性化页是这些能力的索引，
-  // 这一页是其中唯一一个「做完了」的，位置得让用户一眼看到。
-  { to: '/mbti', icon: 'G', labelKey: 'nav.mbti', fallback: '人格' },
+  // 这里原来还有一项「人格」。**删掉**：Octop 的人格是个性化页里的一个页签
+  // （index.tsx:33-41 的 tabs 里有 mbti），它的主导航里没有这一项 ——
+  // 我把它也塞进主导航是照着想象加的，等于凭空造了一个 Octop 没有的入口。
+  // 人格的正经入口是个性化页的「人格」页签。
 ] as const
 
 const ADMIN_NAV_ITEMS = [
