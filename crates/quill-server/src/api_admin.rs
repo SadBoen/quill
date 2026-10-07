@@ -47,8 +47,8 @@ pub async fn put(
 
     let now = now_ms();
     // 0002 里历史存在的 openrouter 落到 llm_providers 时映射成 openai。
-    let protocol = LlmProvider::parse_protocol(incoming.protocol.as_str())
-        .map_err(ApiError::bad_request)?;
+    let protocol =
+        LlmProvider::parse_protocol(incoming.protocol.as_str()).map_err(ApiError::bad_request)?;
 
     let p = match llm_providers::default_provider(&state)? {
         Some(mut cur) => {
@@ -302,10 +302,7 @@ fn i64_to_u32(v: i64, name: &str) -> Result<u32, quill_agent::AgentError> {
 
 /// 给 `server::build_state` 启动时使用：把 env-derived 配置回填到表里。
 /// 返回值用于日志；写失败不致命 — 启动告警里会体现。
-pub fn seed_admin_config_from_env(
-    state: &AppState,
-    env_cfg: &LlmConfig,
-) -> Result<(), ApiError> {
+pub fn seed_admin_config_from_env(state: &AppState, env_cfg: &LlmConfig) -> Result<(), ApiError> {
     let db = state.db()?;
     let now = now_ms();
     let cfg = AdminConfig::from_llm_config(env_cfg, now);
@@ -313,12 +310,11 @@ pub fn seed_admin_config_from_env(
         Box::pin(async move {
             let r: Result<(), quill_agent::AgentError> = async {
                 // 不存在就 INSERT；存在则不动（已存在的 admin 写入覆盖）。
-                let exists: i64 = sqlx::query_scalar(
-                    "SELECT count(*) FROM admin_config WHERE id=1",
-                )
-                .fetch_one(&pool)
-                .await
-                .map_err(|e| crate::db::storage_error("探测 admin_config", e))?;
+                let exists: i64 =
+                    sqlx::query_scalar("SELECT count(*) FROM admin_config WHERE id=1")
+                        .fetch_one(&pool)
+                        .await
+                        .map_err(|e| crate::db::storage_error("探测 admin_config", e))?;
                 if exists == 0 {
                     sqlx::query(
                         "INSERT INTO admin_config(id,protocol,base_url,api_key,model,\

@@ -690,7 +690,10 @@ impl ControlPlane {
     /// **还没有身份**（正在被鉴权），会变成「先有身份才能问自己算不算有身份」。
     /// 也没有套 [`Self::profile_of`]：那个把「查不到」报成 `UserNotFound` 错误，
     /// 鉴权侧需要的是「没有就当令牌无效」这一种结果，不想在这里区分错误码。
-    pub async fn authz_of(&self, id: &UserId) -> Result<Option<(UserRole, UserStatus)>, ControlError> {
+    pub async fn authz_of(
+        &self,
+        id: &UserId,
+    ) -> Result<Option<(UserRole, UserStatus)>, ControlError> {
         Ok(repo::find_profile(&self.pool, id)
             .await?
             .map(|p| (p.role, p.status)))

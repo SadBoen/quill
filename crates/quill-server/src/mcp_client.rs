@@ -143,7 +143,10 @@ pub struct Discovery {
 /// **永远不会 panic**，返回的 `probe` 字段永远完整。
 pub async fn discover(row: &McpServerRow) -> Discovery {
     if let Some(why) = not_probed_reason(row) {
-        return Discovery { probe: Probe::not_probed(row, why), tools: Vec::new() };
+        return Discovery {
+            probe: Probe::not_probed(row, why),
+            tools: Vec::new(),
+        };
     }
 
     let command = row.command.as_deref().unwrap_or("").trim().to_string();
@@ -237,7 +240,11 @@ pub async fn probe(row: &McpServerRow) -> Probe {
 /// 返回值与 `rows` **同序**：调用方按下标对齐，不用按名字再查一遍（名字已归一，
 /// 但按名字查会把「哪台对不上」的错误藏起来）。
 pub async fn probe_all(rows: Vec<McpServerRow>) -> Vec<Probe> {
-    discover_all(rows).await.into_iter().map(|d| d.probe).collect()
+    discover_all(rows)
+        .await
+        .into_iter()
+        .map(|d| d.probe)
+        .collect()
 }
 
 /// `probe_all` 的全量版本：除状态外还带回真正会挂进工具表的工具。
@@ -269,19 +276,21 @@ pub async fn discover_all(rows: Vec<McpServerRow>) -> Vec<Discovery> {
     slots
         .into_iter()
         .zip(names)
-        .map(|(slot, name)| slot.unwrap_or_else(|| Discovery {
-            probe: Probe {
-                name,
-                probed: false,
-                connected: false,
-                tool_count: 0,
-                error: Some("探测任务没能跑完（见服务端日志）".to_string()),
-                protocol_version: None,
-                server_info: None,
-                server_declares_tools: None,
-            },
-            tools: Vec::new(),
-        }))
+        .map(|(slot, name)| {
+            slot.unwrap_or_else(|| Discovery {
+                probe: Probe {
+                    name,
+                    probed: false,
+                    connected: false,
+                    tool_count: 0,
+                    error: Some("探测任务没能跑完（见服务端日志）".to_string()),
+                    protocol_version: None,
+                    server_info: None,
+                    server_declares_tools: None,
+                },
+                tools: Vec::new(),
+            })
+        })
         .collect()
 }
 
@@ -395,7 +404,11 @@ async fn handshake(row: &McpServerRow) -> Result<HandshakeTools, String> {
     if let Some(h) = drain {
         let _ = h.await;
     }
-    Ok(HandshakeTools { tools, info, declares_tools })
+    Ok(HandshakeTools {
+        tools,
+        info,
+        declares_tools,
+    })
 }
 
 /// `tools/list` 最多翻几页。`nextCursor` 存在但翻满了还没完，就当它有问题。
@@ -476,9 +489,11 @@ fn gate(user_key: &str, row: &McpServerRow) -> Arc<tokio::sync::Semaphore> {
         .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    Arc::clone(guard.entry(key).or_insert_with(|| {
-        Arc::new(tokio::sync::Semaphore::new(limit))
-    }))
+    Arc::clone(
+        guard
+            .entry(key)
+            .or_insert_with(|| Arc::new(tokio::sync::Semaphore::new(limit))),
+    )
 }
 
 /// 真的调一次 MCP 工具：`initialize` → `tools/call` → 收正文。
@@ -550,7 +565,11 @@ pub async fn call_tool(
 }
 
 /// `tools/call` 的一次完整往返。**只在这里**收尾进程，握手失败也一样。
-async fn invoke(row: &McpServerRow, remote_name: &str, args: Map<String, Value>) -> Result<String, String> {
+async fn invoke(
+    row: &McpServerRow,
+    remote_name: &str,
+    args: Map<String, Value>,
+) -> Result<String, String> {
     let (transport, stderr, drain) = spawn_stdio(row)?;
     let service = match QuillClient.serve(transport).await {
         Ok(s) => s,
@@ -918,7 +937,10 @@ impl Summary {
             "本轮真的对 {} 台 stdio 服务器发起了 initialize + tools/list，{} 台连通、{} 台失败。",
             self.probed, self.connected, self.failed
         );
-        let connected_with_tools = probes.iter().filter(|p| p.connected && p.tool_count > 0).count();
+        let connected_with_tools = probes
+            .iter()
+            .filter(|p| p.connected && p.tool_count > 0)
+            .count();
         if connected_with_tools > 0 {
             s.push_str(&format!(
                 "其中 {connected_with_tools} 台真的报了工具，工具数见每一行。"
@@ -1146,8 +1168,15 @@ mod tests {
     fn the_probe_budget_never_exceeds_the_ceiling_even_with_a_huge_configured_timeout() {
         // 配置里允许 600 秒。设备页不是批量作业，超出上限就要被截断。
         assert_eq!(probe_budget(1_000).as_millis(), 1_000);
-        assert_eq!(probe_budget(600_000).as_millis(), PROBE_BUDGET_CEILING_MS as u128);
-        assert_eq!(probe_budget(0).as_millis(), 1_000, "非法值也要给一个能跑的下限");
+        assert_eq!(
+            probe_budget(600_000).as_millis(),
+            PROBE_BUDGET_CEILING_MS as u128
+        );
+        assert_eq!(
+            probe_budget(0).as_millis(),
+            1_000,
+            "非法值也要给一个能跑的下限"
+        );
     }
 
     #[test]

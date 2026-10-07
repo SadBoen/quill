@@ -13,9 +13,7 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
-use quill_provider::{
-    BoxFuture, ChatRequest, ChatResponse, ModelInfo, Provider, ProviderStream,
-};
+use quill_provider::{BoxFuture, ChatRequest, ChatResponse, ModelInfo, Provider, ProviderStream};
 use quill_server::auth::{AuthContext, EnvTokenResolver};
 use quill_server::config::Config;
 use quill_server::routes::build_router;
@@ -286,11 +284,7 @@ async fn patching_instructions_keeps_model_and_null_clears_it() {
     );
 
     let resp = build_router(app)
-        .oneshot(req(
-            "GET",
-            "/api/experts/cost-analyst",
-            None,
-        ))
+        .oneshot(req("GET", "/api/experts/cost-analyst", None))
         .await
         .expect("oneshot 失败");
     let v = json(&text(resp).await);
@@ -344,7 +338,10 @@ async fn unknown_persona_field_is_rejected_and_over_long_instructions_is_400_wit
     let body = text(resp).await;
     assert!(body.contains("下一步"), "错误必须带修复方向：{body}");
     assert!(body.contains("20000"), "应给出上限：{body}");
-    assert!(body.contains("next_step"), "响应体结构必须带下一步字段：{body}");
+    assert!(
+        body.contains("next_step"),
+        "响应体结构必须带下一步字段：{body}"
+    );
 
     let resp = build_router(app)
         .oneshot(req(
@@ -471,7 +468,9 @@ async fn an_expert_without_instructions_sends_no_system_message_at_all() {
 
     let sent = rec.last();
     assert!(
-        sent.messages.iter().all(|m| m.role != quill_provider::Role::System),
+        sent.messages
+            .iter()
+            .all(|m| m.role != quill_provider::Role::System),
         "🔴 空人格不得注入空 system 消息（那是给模型发噪声）：{:?}",
         sent.messages
     );
@@ -521,12 +520,17 @@ async fn a_deleted_or_missing_expert_degrades_to_default_persona_and_says_so() {
     let notice = body["expert_notice"]
         .as_str()
         .unwrap_or_else(|| panic!("🔴 专家不可用必须在响应里明说，不能静默降级：{body}"));
-    assert!(notice.contains("doomed-expert"), "提示要点名是哪个专家：{notice}");
+    assert!(
+        notice.contains("doomed-expert"),
+        "提示要点名是哪个专家：{notice}"
+    );
     assert!(notice.contains("下一步"), "提示必须带修复方向：{notice}");
 
     let sent = rec.last();
     assert!(
-        sent.messages.iter().all(|m| m.role != quill_provider::Role::System),
+        sent.messages
+            .iter()
+            .all(|m| m.role != quill_provider::Role::System),
         "🔴 专家已删时不得把旧人格继续注入：{:?}",
         sent.messages
     );

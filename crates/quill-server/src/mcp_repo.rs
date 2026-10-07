@@ -163,10 +163,7 @@ pub async fn replace_all(
             for s in incoming.iter_mut() {
                 s.name = normalize_name(&s.name).map_err(invariant_broken)?;
             }
-            let mut tx = pool
-                .begin()
-                .await
-                .map_err(|e| storage_error(OP_WRITE, e))?;
+            let mut tx = pool.begin().await.map_err(|e| storage_error(OP_WRITE, e))?;
 
             // 库里现有的（name → 指纹）。指纹要留着：下面靠它判断这行是不是
             // 白写。只取 name 会让「内容没变就别动 updated_at」这条优化落空。
@@ -214,21 +211,25 @@ pub async fn replace_all(
                 if existing.get(&s.name) == Some(&hash) {
                     continue;
                 }
-                let args_json = serde_json::to_string(&s.args)
-                    .map_err(|e| storage_error(OP_WRITE, e))?;
+                let args_json =
+                    serde_json::to_string(&s.args).map_err(|e| storage_error(OP_WRITE, e))?;
                 let env_json = serde_json::to_string(
-                    &s.env.into_iter().collect::<std::collections::BTreeMap<_, _>>(),
+                    &s.env
+                        .into_iter()
+                        .collect::<std::collections::BTreeMap<_, _>>(),
                 )
                 .map_err(|e| storage_error(OP_WRITE, e))?;
                 let headers_json = serde_json::to_string(
-                    &s.headers.into_iter().collect::<std::collections::BTreeMap<_, _>>(),
+                    &s.headers
+                        .into_iter()
+                        .collect::<std::collections::BTreeMap<_, _>>(),
                 )
                 .map_err(|e| storage_error(OP_WRITE, e))?;
                 let caps_json = match &s.enabled_capabilities {
                     None => None,
-                    Some(v) => Some(
-                        serde_json::to_string(v).map_err(|e| storage_error(OP_WRITE, e))?,
-                    ),
+                    Some(v) => {
+                        Some(serde_json::to_string(v).map_err(|e| storage_error(OP_WRITE, e))?)
+                    }
                 };
 
                 // 软删过的同名行要先复活：主键是 (user_id, name)，直接 INSERT
@@ -272,9 +273,7 @@ pub async fn replace_all(
                 .map_err(|e| storage_error(OP_WRITE, e))?;
             }
 
-            tx.commit()
-                .await
-                .map_err(|e| storage_error(OP_WRITE, e))?;
+            tx.commit().await.map_err(|e| storage_error(OP_WRITE, e))?;
 
             // 回读，让调用方拿到「库里现在的样子」而不是「我们以为写进去的样子」。
             let rows = sqlx::query(LIST_SQL)
@@ -295,7 +294,13 @@ pub fn normalize_name(raw: &str) -> Result<String, String> {
     let t = raw.trim().to_lowercase();
     let out: String = t
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     let out = out.trim_matches('-').to_string();
     if out.is_empty() || out.len() > 64 {
@@ -484,7 +489,10 @@ mod tests {
         if s.is_empty() || s.len() > 64 {
             return false;
         }
-        if !s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') {
+        if !s
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        {
             return false;
         }
         let b = s.as_bytes();

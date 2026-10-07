@@ -123,7 +123,10 @@ pub fn aggregate(rows: &[MessageUsage]) -> SessionMetrics {
     };
 
     // (5) 缓存：至少一条上报过才有话说。
-    let reported_cache: Vec<i64> = assistants.iter().filter_map(|r| r.cache_read_tokens).collect();
+    let reported_cache: Vec<i64> = assistants
+        .iter()
+        .filter_map(|r| r.cache_read_tokens)
+        .collect();
     let cache_read_tokens = if reported_cache.is_empty() {
         None
     } else {
@@ -246,7 +249,12 @@ pub fn context_used_percent(used: i64, max: i64) -> u32 {
 mod tests {
     use super::*;
 
-    fn assistant(input: i64, output: i64, turn_ms: Option<i64>, cache: Option<i64>) -> MessageUsage {
+    fn assistant(
+        input: i64,
+        output: i64,
+        turn_ms: Option<i64>,
+        cache: Option<i64>,
+    ) -> MessageUsage {
         MessageUsage {
             is_user: false,
             is_assistant: true,
@@ -278,7 +286,12 @@ mod tests {
 
     #[test]
     fn turns_and_steps_come_from_the_matching_roles() {
-        let rows = vec![user(), assistant(100, 20, Some(2000), None), user(), assistant(50, 5, Some(1000), None)];
+        let rows = vec![
+            user(),
+            assistant(100, 20, Some(2000), None),
+            user(),
+            assistant(50, 5, Some(1000), None),
+        ];
         let m = aggregate(&rows);
         assert_eq!(m.turns, 2);
         assert_eq!(m.steps, 2);
@@ -312,7 +325,11 @@ mod tests {
         assert_eq!(no_duration.tok_per_s, None, "没量到耗时就不能算速度");
 
         let no_output = aggregate(&[assistant(100, 0, Some(2000), None)]);
-        assert_eq!(no_output.tok_per_s, Some(0.0), "真的是 0 输出，是 0.0 不是 null");
+        assert_eq!(
+            no_output.tok_per_s,
+            Some(0.0),
+            "真的是 0 输出，是 0.0 不是 null"
+        );
     }
 
     #[test]
@@ -389,7 +406,10 @@ mod tests {
 
     #[test]
     fn token_sum_saturates_instead_of_wrapping() {
-        let rows = vec![assistant(i64::MAX, 0, None, None), assistant(i64::MAX, 0, None, None)];
+        let rows = vec![
+            assistant(i64::MAX, 0, None, None),
+            assistant(i64::MAX, 0, None, None),
+        ];
         let m = aggregate(&rows);
         assert_eq!(m.input_tokens, Some(i64::MAX), "回绕成负数比不显示更糟");
     }
@@ -397,13 +417,21 @@ mod tests {
     #[test]
     fn a_nonzero_context_never_rounds_down_to_zero_percent() {
         // 8000 / 32768 = 24%，无所谓。真正的坑是 1 / 32768 = 0.003%。
-        assert_eq!(context_used_percent(1, 32768), 1, "占着 1 token 却显示 0%，像没占");
+        assert_eq!(
+            context_used_percent(1, 32768),
+            1,
+            "占着 1 token 却显示 0%，像没占"
+        );
         assert_eq!(context_used_percent(8000, 32768), 24);
     }
 
     #[test]
     fn an_actually_empty_context_stays_zero_percent() {
-        assert_eq!(context_used_percent(0, 32768), 0, "真没用就是 0%，不抬成 1%");
+        assert_eq!(
+            context_used_percent(0, 32768),
+            0,
+            "真没用就是 0%，不抬成 1%"
+        );
         assert_eq!(context_used_percent(-5, 32768), 0);
     }
 
@@ -430,20 +458,26 @@ mod tests {
         let keys: Vec<&str> = segs.iter().map(|s| s.key).collect();
         assert_eq!(
             keys,
-            vec!["system_prompt", "tool_definitions", "skills", "mcp", "conversation"]
+            vec![
+                "system_prompt",
+                "tool_definitions",
+                "skills",
+                "mcp",
+                "conversation"
+            ]
         );
         // 「没挂技能」是一条要显示的信息，不能因为是 0 就把这一段藏掉。
-        let skills = segs.iter().find(|s| s.key == "skills").expect("skills 段必须在");
+        let skills = segs
+            .iter()
+            .find(|s| s.key == "skills")
+            .expect("skills 段必须在");
         assert_eq!(skills.chars, 0);
     }
 
     #[test]
     fn a_tool_spec_counts_name_description_and_parameters() {
-        let spec = quill_provider::ToolSpec::new(
-            "read_note",
-            "读一个笔记文件",
-        )
-        .with_parameters(serde_json::json!({"type": "object"}));
+        let spec = quill_provider::ToolSpec::new("read_note", "读一个笔记文件")
+            .with_parameters(serde_json::json!({"type": "object"}));
         let chars = tool_spec_chars(&spec);
         assert!(
             chars > "read_note".chars().count() + "读一个笔记文件".chars().count(),

@@ -124,12 +124,14 @@ mod tests {
             })),
         ]);
 
-        let reply = pump_stream(s, "m", &mut |_| {})
-            .await
-            .expect("流应当读完");
+        let reply = pump_stream(s, "m", &mut |_| {}).await.expect("流应当读完");
 
         assert_eq!(
-            reply.tool_calls.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+            reply
+                .tool_calls
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect::<Vec<_>>(),
             vec!["afrexai-qa-test-plan", "list_experts"],
             "工具调用不能因为流式就漏掉 —— 它们要回灌给模型继续下一轮"
         );
@@ -138,12 +140,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_stream_with_no_done_frame_still_yields_a_reply_without_invented_numbers() {
-        let s = stream_of(vec![
-            Ok(StreamDelta::Text("半句".into())),
-        ]);
-        let reply = pump_stream(s, "m", &mut |_| {})
-            .await
-            .expect("流应当读完");
+        let s = stream_of(vec![Ok(StreamDelta::Text("半句".into()))]);
+        let reply = pump_stream(s, "m", &mut |_| {}).await.expect("流应当读完");
 
         assert_eq!(reply.text, "半句");
         assert_eq!(

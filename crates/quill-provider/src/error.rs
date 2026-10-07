@@ -8,43 +8,21 @@ pub const MAX_BODY_CHARS: usize = 500;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderError {
-    NotConfigured {
-        detail: String,
-    },
+    NotConfigured { detail: String },
 
-    Unreachable {
-        url: String,
+    Unreachable { url: String, detail: String },
 
-        detail: String,
-    },
+    Timeout { detail: String },
 
-    Timeout {
-        detail: String,
-    },
+    Status { code: u16, body: String },
 
-    Status {
-        code: u16,
+    ModelNotFound { model: String, detail: String },
 
-        body: String,
-    },
+    MalformedResponse { detail: String },
 
-    ModelNotFound {
-        model: String,
+    UpstreamRejected { detail: String },
 
-        detail: String,
-    },
-
-    MalformedResponse {
-        detail: String,
-    },
-
-    UpstreamRejected {
-        detail: String,
-    },
-
-    InvalidRequest {
-        detail: String,
-    },
+    InvalidRequest { detail: String },
 }
 
 impl ProviderError {
@@ -282,8 +260,10 @@ mod tests {
     #[test]
     fn only_transport_and_5xx_are_retryable() {
         for e in one_of_each() {
-            let expect = matches!(e, ProviderError::Unreachable { .. } | ProviderError::Timeout { .. })
-                || matches!(e, ProviderError::Status { code, .. }
+            let expect = matches!(
+                e,
+                ProviderError::Unreachable { .. } | ProviderError::Timeout { .. }
+            ) || matches!(e, ProviderError::Status { code, .. }
                     if code == 408 || code == 429 || (500..600).contains(&code));
             assert_eq!(e.is_retryable(), expect, "[{}] 重试判定不对", e.code());
         }

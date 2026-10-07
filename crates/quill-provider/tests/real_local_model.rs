@@ -10,8 +10,8 @@ use std::time::Duration;
 // 手动跑：QUILL_TEST_LLM=http://127.0.0.1:18080/v1 cargo test -p quill-provider --test real_local_model
 #[ignore = "需要本机 llama-server 在跑"]
 async fn real_local_model_answers_and_calls_a_tool() {
-    let base = std::env::var("QUILL_TEST_LLM")
-        .unwrap_or_else(|_| "http://127.0.0.1:18080/v1".to_string());
+    let base =
+        std::env::var("QUILL_TEST_LLM").unwrap_or_else(|_| "http://127.0.0.1:18080/v1".to_string());
 
     let Ok(provider) = quill_provider::OpenAiCompatible::new(base, "local", None::<String>) else {
         eprintln!("跳过：provider 构造失败");
@@ -44,8 +44,8 @@ async fn real_local_model_answers_and_calls_a_tool() {
         res.answer()
     );
 
-    let sreq = ChatRequest::new("local", vec![Message::user("说“你好”两个字。")])
-        .with_max_tokens(900);
+    let sreq =
+        ChatRequest::new("local", vec![Message::user("说“你好”两个字。")]).with_max_tokens(900);
     let mut stream = provider.stream(&sreq).await.expect("流式请求应成功");
     let mut text = String::new();
     let mut done = false;

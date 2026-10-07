@@ -101,14 +101,7 @@ fn render(p: &Profile, zh: bool) -> String {
     ));
 
     let labels = if zh {
-        [
-            "回答风格",
-            "闲聊",
-            "遇到分歧",
-            "创意",
-            "情绪",
-            "规划",
-        ]
+        ["回答风格", "闲聊", "遇到分歧", "创意", "情绪", "规划"]
     } else {
         [
             "Answer style",
@@ -188,7 +181,11 @@ mod tests {
         assert!(kept.contains("前面"));
         // 重新 compose 会得到一段完整且只有一个标记的正文。
         let r = compose("前面\n\n<!-- mbti -->\n**MBTI: ESTJ**\n", p(), true);
-        assert_eq!(r.text.matches(BEGIN).count(), 2, "坏的那段留着也算一处，但它没被当成已存在的人格");
+        assert_eq!(
+            r.text.matches(BEGIN).count(),
+            2,
+            "坏的那段留着也算一处，但它没被当成已存在的人格"
+        );
         assert_eq!(r.previous, None);
     }
 

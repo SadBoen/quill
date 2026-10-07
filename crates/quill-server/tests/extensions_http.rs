@@ -258,7 +258,10 @@ async fn a_reachable_stdio_server_is_reported_as_connected_with_its_real_tool_co
         "工具数必须是从 tools/list 数出来的：{st}"
     );
     assert_eq!(st["protocol_version"], serde_json::json!("2025-06-18"));
-    assert_eq!(st["server_info"], serde_json::json!("quill-test-stub 1.0.0"));
+    assert_eq!(
+        st["server_info"],
+        serde_json::json!("quill-test-stub 1.0.0")
+    );
     assert!(st["error"].is_null(), "连上了就不该带错误：{st}");
 
     // note 必须说清「连上了」与「模型调得到」是两条独立的事实。
@@ -315,7 +318,10 @@ async fn a_server_that_cannot_be_spawned_is_reported_as_a_real_failed_probe() {
     );
 
     // 读回来也一样 —— 不能只在 POST 的响应里诚实。
-    assert_eq!(list(&h, TOKEN_A).await["connected"], serde_json::json!(false));
+    assert_eq!(
+        list(&h, TOKEN_A).await["connected"],
+        serde_json::json!(false)
+    );
 }
 
 /// 协议层没铺的传输方式：`probed=false`，原因说「还没铺」而不是「连不上」。
@@ -365,7 +371,13 @@ async fn the_read_only_status_never_leaks_into_the_editable_server_objects() {
     )
     .await;
 
-    let forbidden = ["connected", "probed", "tool_count", "error", "protocol_version"];
+    let forbidden = [
+        "connected",
+        "probed",
+        "tool_count",
+        "error",
+        "protocol_version",
+    ];
     let server = v["servers"][0].as_object().expect("server 必须是对象");
     for key in forbidden {
         assert!(
@@ -374,7 +386,10 @@ async fn the_read_only_status_never_leaks_into_the_editable_server_objects() {
         );
     }
     // 而且 status 与 servers 同序同长，界面才能按下标对齐。
-    assert_eq!(v["servers"].as_array().unwrap().len(), v["status"].as_array().unwrap().len());
+    assert_eq!(
+        v["servers"].as_array().unwrap().len(),
+        v["status"].as_array().unwrap().len()
+    );
     assert_eq!(v["servers"][0]["name"], v["status"][0]["name"]);
 }
 
@@ -439,7 +454,11 @@ async fn a_stdio_server_survives_the_round_trip_field_by_field() {
     .await;
 
     let s = &list(&h, TOKEN_A).await["servers"][0];
-    assert_eq!(s["name"], serde_json::json!("filesystem"), "名字要归一成小写");
+    assert_eq!(
+        s["name"],
+        serde_json::json!("filesystem"),
+        "名字要归一成小写"
+    );
     assert_eq!(s["command"], serde_json::json!("uvx"));
     assert_eq!(
         s["args"],
@@ -449,7 +468,10 @@ async fn a_stdio_server_survives_the_round_trip_field_by_field() {
     assert_eq!(s["env"], serde_json::json!({"A": "1", "B": "2"}));
     assert_eq!(s["description"], serde_json::json!("本地文件系统"));
     assert_eq!(s["max_concurrent_calls"], serde_json::json!(4));
-    assert_eq!(s["enabled_capabilities"], serde_json::json!(["read", "write"]));
+    assert_eq!(
+        s["enabled_capabilities"],
+        serde_json::json!(["read", "write"])
+    );
     assert_eq!(s["timeout_ms"], serde_json::json!(45000));
     assert!(
         s.get("url").is_none(),
@@ -465,9 +487,13 @@ async fn the_capability_three_states_stay_distinguishable_over_http() {
     let h = Harness::new("ext-mcp-caps");
     seed_user(&h.db.bridge(), UID_A);
 
-    for (i, caps) in [serde_json::Value::Null, serde_json::json!([]), serde_json::json!(["read"])]
-        .iter()
-        .enumerate()
+    for (i, caps) in [
+        serde_json::Value::Null,
+        serde_json::json!([]),
+        serde_json::json!(["read"]),
+    ]
+    .iter()
+    .enumerate()
     {
         let mut s = stdio(&format!("s{i}"));
         s["enabled_capabilities"] = caps.clone();
@@ -489,7 +515,10 @@ async fn servers_missing_from_the_next_post_are_soft_deleted() {
         serde_json::json!({"servers": [stdio("a"), stdio("b")]}),
     )
     .await;
-    assert_eq!(list(&h, TOKEN_A).await["servers"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        list(&h, TOKEN_A).await["servers"].as_array().unwrap().len(),
+        2
+    );
 
     let v = save(&h, TOKEN_A, serde_json::json!({"servers": [stdio("a")]})).await;
     let names: Vec<String> = v["servers"]
@@ -536,7 +565,10 @@ async fn re_posting_identical_content_does_not_pretend_something_changed() {
         &h.db.bridge(),
         "SELECT updated_at AS c FROM mcp_servers WHERE name='a'",
     );
-    assert!(after2 > after, "内容真变了却没更新时间戳：{after} → {after2}");
+    assert!(
+        after2 > after,
+        "内容真变了却没更新时间戳：{after} → {after2}"
+    );
 }
 
 #[tokio::test]
@@ -571,7 +603,12 @@ async fn one_user_never_sees_another_users_mcp_servers() {
     let h = Harness::new("ext-mcp-isolation");
     seed_user(&h.db.bridge(), UID_A);
     seed_user(&h.db.bridge(), UID_B);
-    save(&h, TOKEN_A, serde_json::json!({"servers": [stdio("a-secret")]})).await;
+    save(
+        &h,
+        TOKEN_A,
+        serde_json::json!({"servers": [stdio("a-secret")]}),
+    )
+    .await;
 
     let b = list(&h, TOKEN_B).await;
     assert_eq!(
@@ -602,8 +639,7 @@ async fn the_extension_endpoints_refuse_anonymous_callers() {
             .await
             .expect("请求失败");
         assert!(
-            resp.status() == StatusCode::UNAUTHORIZED
-                || resp.status() == StatusCode::FORBIDDEN,
+            resp.status() == StatusCode::UNAUTHORIZED || resp.status() == StatusCode::FORBIDDEN,
             "{method} {path} 未登录时返回了 {}，应当 401/403",
             resp.status()
         );
@@ -619,7 +655,10 @@ async fn post_bad(h: &Harness, body: serde_json::Value) -> String {
     let text = body_text(resp).await;
     assert_eq!(st, StatusCode::BAD_REQUEST, "应当 400：{text}");
     let v = json_of(&text);
-    let msg = v["error"]["detail"].as_str().expect("错误体缺 detail").to_string();
+    let msg = v["error"]["detail"]
+        .as_str()
+        .expect("错误体缺 detail")
+        .to_string();
     assert!(
         msg.contains("下一步"),
         "错误必须带修复动作，不然用户只知道自己错了、不知道怎么改：{msg}"
@@ -799,7 +838,11 @@ async fn a_skill_shows_up_as_a_tool_named_after_its_slug() {
     assert_eq!(s["slug"], serde_json::json!("code-review"));
     assert_eq!(s["tool_name"], serde_json::json!("code-review"));
     assert_eq!(s["kind"], serde_json::json!("workspace"));
-    assert_eq!(s["content_chars"], serde_json::json!(11), "「读 diff 再说话。」11 个字符");
+    assert_eq!(
+        s["content_chars"],
+        serde_json::json!(11),
+        "「读 diff 再说话。」11 个字符"
+    );
     assert!(
         s.get("content_missing").is_none(),
         "文件在磁盘上就不该报缺失"
@@ -1078,7 +1121,10 @@ async fn an_enabled_skill_reaches_the_model_as_a_tool_and_can_be_called() {
     );
     let out = r.call(&call).expect("SKILL 工具必须能执行");
     assert!(out.contains("code-review"), "要说清用的是哪套方法：{out}");
-    assert!(out.contains("审一下 x.rs 里的下拉"), "任务要回给模型：{out}");
+    assert!(
+        out.contains("审一下 x.rs 里的下拉"),
+        "任务要回给模型：{out}"
+    );
     assert!(
         out.contains("第二步：找未处理的下拉"),
         "调用时必须把正文整段给模型，否则它拿不到方法：{out}"
@@ -1172,12 +1218,11 @@ async fn the_schema_itself_forbids_a_skill_from_taking_a_builtin_tools_underscor
     let h = Harness::new("ext-skill-name-check");
     seed_user(&h.db.bridge(), UID_A);
     let b = user_id(UID_A).as_bytes().to_vec();
-    let err = h
-        .db
-        .bridge()
-        .call(move |pool, _rt| {
-            Box::pin(async move {
-                sqlx::query(
+    let err =
+        h.db.bridge()
+            .call(move |pool, _rt| {
+                Box::pin(async move {
+                    sqlx::query(
                     "INSERT INTO skills (user_id, name, version, source, source_ref, description, \
                      enabled, content_hash, install_path, tool_allowlist_json, created_at, \
                      updated_at, deleted_at) VALUES (?,?,'0.1.0','local',NULL,'',\
@@ -1188,10 +1233,10 @@ async fn the_schema_itself_forbids_a_skill_from_taking_a_builtin_tools_underscor
                 .execute(&pool)
                 .await
                 .map_err(|e| storage_error("插入带下划线的 skills 行", e))?;
-                Ok(())
+                    Ok(())
+                })
             })
-        })
-        .expect_err("带下划线的名字必须被 CHECK 拒掉");
+            .expect_err("带下划线的名字必须被 CHECK 拒掉");
     assert!(
         format!("{err}").contains("CHECK constraint failed"),
         "要看到 CHECK 失败，而不是别的错误：{err}"
@@ -1292,10 +1337,7 @@ async fn a_skill_whose_body_vanished_is_reported_unmountable_with_a_reason() {
     let why = item["not_mounted_reason"]
         .as_str()
         .expect("没挂上就必须说原因");
-    assert!(
-        why.contains("正文"),
-        "原因要指向正文丢失：{why}"
-    );
+    assert!(why.contains("正文"), "原因要指向正文丢失：{why}");
     assert!(
         !spec_names(&tool_table(&h, UID_A).await).contains(&"half".to_string()),
         "正文没了就不该进工具表"
@@ -1379,7 +1421,12 @@ async fn mcp_tools_from_a_real_server_reach_the_conversation_tool_table() {
     let h = Harness::new("ext-mcp-into-tools");
     seed_user(&h.db.bridge(), UID_A);
     seed_expert(&h, "cost-analyst").await;
-    save(&h, TOKEN_A, serde_json::json!({"servers": [stdio_stub("notes", &[])]})).await;
+    save(
+        &h,
+        TOKEN_A,
+        serde_json::json!({"servers": [stdio_stub("notes", &[])]}),
+    )
+    .await;
 
     let names = spec_names(&chat_tool_table(&h, UID_A).await);
     for remote in ["read-note", "list-notes", "echo-third"] {
@@ -1390,7 +1437,10 @@ async fn mcp_tools_from_a_real_server_reach_the_conversation_tool_table() {
         );
     }
     // 内置工具**不许**因为 MCP 而消失。
-    assert!(names.contains(&"list_experts".to_string()), "内置工具被顶掉了：{names:?}");
+    assert!(
+        names.contains(&"list_experts".to_string()),
+        "内置工具被顶掉了：{names:?}"
+    );
 }
 
 /// 界面上报的挂载清单与对话里真挂上的**逐个相等**。
@@ -1398,7 +1448,12 @@ async fn mcp_tools_from_a_real_server_reach_the_conversation_tool_table() {
 async fn the_ui_reports_exactly_the_tools_the_conversation_can_really_call() {
     let h = Harness::new("ext-mcp-ui-matches-tools");
     seed_user(&h.db.bridge(), UID_A);
-    save(&h, TOKEN_A, serde_json::json!({"servers": [stdio_stub("notes", &[])]})).await;
+    save(
+        &h,
+        TOKEN_A,
+        serde_json::json!({"servers": [stdio_stub("notes", &[])]}),
+    )
+    .await;
 
     let reported = mounted_of(&list(&h, TOKEN_A).await, "notes");
     let actual = spec_names(&chat_tool_table(&h, UID_A).await)
@@ -1408,18 +1463,27 @@ async fn the_ui_reports_exactly_the_tools_the_conversation_can_really_call() {
 
     let reported_names: Vec<String> = reported.iter().map(|(m, _)| m.clone()).collect();
     assert_eq!(
-        reported_names,
-        actual,
+        reported_names, actual,
         "界面说挂了 {:?}，对话里真有 {:?} —— 两边必须逐个相等",
-        reported_names,
-        actual
+        reported_names, actual
     );
-    assert_eq!(reported.len(), 3, "stub 报 3 个工具（分页翻完）：{reported:?}");
+    assert_eq!(
+        reported.len(),
+        3,
+        "stub 报 3 个工具（分页翻完）：{reported:?}"
+    );
     // 挂载名与原名要能对回去：用户在服务器配置里认的是原名。
     for (mounted, remote) in &reported {
-        assert_eq!(mounted, &format!("notes__{remote}"), "挂载名与原名的对应不对：{reported:?}");
+        assert_eq!(
+            mounted,
+            &format!("notes__{remote}"),
+            "挂载名与原名的对应不对：{reported:?}"
+        );
     }
-    assert_eq!(list(&h, TOKEN_A).await["mounted_count"], serde_json::json!(3));
+    assert_eq!(
+        list(&h, TOKEN_A).await["mounted_count"],
+        serde_json::json!(3)
+    );
 }
 
 /// 能力被关掉：连上了、工具数是 0，**挂上去的也必须是 0**。
@@ -1434,8 +1498,16 @@ async fn a_server_with_the_tools_capability_off_mounts_nothing_and_says_so() {
 
     let v = list(&h, TOKEN_A).await;
     let st = &v["status"][0];
-    assert_eq!(st["connected"], serde_json::json!(true), "握手本身是成功的：{v}");
-    assert_eq!(st["tool_count"], serde_json::json!(0), "模型看不到的工具不该被算进去：{v}");
+    assert_eq!(
+        st["connected"],
+        serde_json::json!(true),
+        "握手本身是成功的：{v}"
+    );
+    assert_eq!(
+        st["tool_count"],
+        serde_json::json!(0),
+        "模型看不到的工具不该被算进去：{v}"
+    );
     assert_eq!(st["mounted"], serde_json::json!(0), "挂上去的必须是 0：{v}");
     assert_eq!(v["mounted_count"], serde_json::json!(0));
 
@@ -1457,7 +1529,11 @@ async fn an_unreachable_server_mounts_nothing_without_pretending_to_have_zero_to
     let v = list(&h, TOKEN_A).await;
     let st = &v["status"][0];
     assert_eq!(st["probed"], serde_json::json!(true), "真的发起了握手：{v}");
-    assert_eq!(st["connected"], serde_json::json!(false), "拉不起来就是连不上：{v}");
+    assert_eq!(
+        st["connected"],
+        serde_json::json!(false),
+        "拉不起来就是连不上：{v}"
+    );
     assert_eq!(st["mounted"], serde_json::json!(0), "挂不上的必须是 0：{v}");
     assert_eq!(v["mounted_count"], serde_json::json!(0));
     assert!(
@@ -1506,7 +1582,12 @@ async fn another_users_mcp_servers_never_reach_your_tool_table() {
     let h = Harness::new("ext-mcp-cross-user");
     seed_user(&h.db.bridge(), UID_A);
     seed_user(&h.db.bridge(), UID_B);
-    save(&h, TOKEN_B, serde_json::json!({"servers": [stdio_stub("secret", &[])]})).await;
+    save(
+        &h,
+        TOKEN_B,
+        serde_json::json!({"servers": [stdio_stub("secret", &[])]}),
+    )
+    .await;
 
     let names = spec_names(&chat_tool_table(&h, UID_A).await);
     assert!(
@@ -1514,7 +1595,10 @@ async fn another_users_mcp_servers_never_reach_your_tool_table() {
         "A 的工具表里出现了 B 配的服务器 —— 跨用户泄露：{names:?}"
     );
     let b_names = spec_names(&chat_tool_table(&h, UID_B).await);
-    assert!(b_names.contains(&"secret__read-note".to_string()), "B 自己应当看得见：{b_names:?}");
+    assert!(
+        b_names.contains(&"secret__read-note".to_string()),
+        "B 自己应当看得见：{b_names:?}"
+    );
 }
 
 // ------------------------------------------------- 技能开关
@@ -1528,7 +1612,11 @@ async fn another_users_mcp_servers_never_reach_your_tool_table() {
 // 停用的技能不挂进对话工具表（`tools::skill_visibility` 第一句），所以
 // **后端做完了而开关没有出口，功能就等于没做**。
 
-async fn patch_skill(h: &Harness, slug: &str, body: serde_json::Value) -> (StatusCode, serde_json::Value) {
+async fn patch_skill(
+    h: &Harness,
+    slug: &str,
+    body: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
     let request = Request::builder()
         .method("PATCH")
         .uri(format!("/api/extensions/skills/{slug}"))
@@ -1536,7 +1624,10 @@ async fn patch_skill(h: &Harness, slug: &str, body: serde_json::Value) -> (Statu
         .header("content-type", "application/json")
         .body(Body::from(body.to_string()))
         .expect("构造请求");
-    let resp = build_router(h.state()).oneshot(request).await.expect("请求失败");
+    let resp = build_router(h.state())
+        .oneshot(request)
+        .await
+        .expect("请求失败");
     let st = resp.status();
     let v = json_of(&body_text(resp).await);
     (st, v)
@@ -1546,7 +1637,11 @@ async fn patch_skill(h: &Harness, slug: &str, body: serde_json::Value) -> (Statu
 async fn toggling_a_skill_really_puts_it_into_the_chat_tool_table() {
     let h = Harness::new("ext-skill-toggle");
     seed_user(&h.db.bridge(), UID_A);
-    post_skill(&h, serde_json::json!({"slug": "later", "content": "一套做法。", "enabled": false})).await;
+    post_skill(
+        &h,
+        serde_json::json!({"slug": "later", "content": "一套做法。", "enabled": false}),
+    )
+    .await;
 
     // 先钉住起点：停用时列表说不可见，工具表里也确实没有它。
     let listed = listed_skills(&h, TOKEN_A).await;
@@ -1576,7 +1671,10 @@ async fn toggling_a_skill_really_puts_it_into_the_chat_tool_table() {
     let (status, _) = patch_skill(&h, "later", serde_json::json!({"enabled": false})).await;
     assert_eq!(status, StatusCode::OK);
     let listed = listed_skills(&h, TOKEN_A).await;
-    assert_eq!(find_skill(&listed, "later")["model_can_see"], serde_json::json!(false));
+    assert_eq!(
+        find_skill(&listed, "later")["model_can_see"],
+        serde_json::json!(false)
+    );
     assert!(!spec_names(&tool_table(&h, UID_A).await).contains(&"later".to_string()));
 }
 
@@ -1603,8 +1701,14 @@ async fn the_list_tells_you_the_text_the_model_actually_sees() {
 
     let listed = listed_skills(&h, TOKEN_A).await;
     let row = find_skill(&listed, "bodyonly");
-    assert_eq!(row["description"], serde_json::json!(""), "这一列确实应该是空的");
-    let seen = row["model_sees_summary"].as_str().expect("必须给界面一个能算的字数");
+    assert_eq!(
+        row["description"],
+        serde_json::json!(""),
+        "这一列确实应该是空的"
+    );
+    let seen = row["model_sees_summary"]
+        .as_str()
+        .expect("必须给界面一个能算的字数");
     assert!(
         seen.contains("从正文开头退回来的说明"),
         "该退回正文开头才对：{seen}"
@@ -1615,7 +1719,12 @@ async fn the_list_tells_you_the_text_the_model_actually_sees() {
     let spec = specs
         .iter()
         .find(|s| s.name == "bodyonly")
-        .unwrap_or_else(|| panic!("工具表里没有 bodyonly：{:?}", specs.iter().map(|s| &s.name).collect::<Vec<_>>()));
+        .unwrap_or_else(|| {
+            panic!(
+                "工具表里没有 bodyonly：{:?}",
+                specs.iter().map(|s| &s.name).collect::<Vec<_>>()
+            )
+        });
     assert_eq!(spec.description, seen, "界面显示的字与模型看到的字必须一致");
 }
 
@@ -1646,14 +1755,20 @@ async fn toggling_a_skill_does_not_rehash_or_erase_it() {
     let chars_before = before["content_chars"].clone();
     let desc_before = before["description"].clone();
     let version_before = before["version"].clone();
-    assert!(chars_before.as_u64().unwrap_or(0) > 0, "正文本该有内容：{before}");
+    assert!(
+        chars_before.as_u64().unwrap_or(0) > 0,
+        "正文本该有内容：{before}"
+    );
 
     patch_skill(&h, "keepme", serde_json::json!({"enabled": true})).await;
 
     let listed = listed_skills(&h, TOKEN_A).await;
     let after = find_skill(&listed, "keepme");
     assert_eq!(after["enabled"], serde_json::json!(true));
-    assert_eq!(after["content_chars"], chars_before, "切一次开关把正文写坏了");
+    assert_eq!(
+        after["content_chars"], chars_before,
+        "切一次开关把正文写坏了"
+    );
     assert_eq!(after["description"], desc_before, "摘要被顺手清了");
     assert_eq!(after["version"], version_before, "版本被顺手改了");
 }
@@ -1664,7 +1779,11 @@ async fn toggling_a_skill_refuses_anything_but_the_enabled_field() {
     // 悄悄把一个技能改成了另一个 —— 而请求会成功返回 200。
     let h = Harness::new("ext-skill-toggle-rejects-extras");
     seed_user(&h.db.bridge(), UID_A);
-    post_skill(&h, serde_json::json!({"slug": "strict", "content": "一套做法。"})).await;
+    post_skill(
+        &h,
+        serde_json::json!({"slug": "strict", "content": "一套做法。"}),
+    )
+    .await;
 
     for bad in [
         serde_json::json!({"enabled": true, "description": "偷改摘要"}),
@@ -1672,15 +1791,15 @@ async fn toggling_a_skill_refuses_anything_but_the_enabled_field() {
     ] {
         let (status, v) = patch_skill(&h, "strict", bad.clone()).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{bad} 应当被拒：{v}");
-        assert!(
-            v["error"]["next_step"].is_string(),
-            "错误必须带下一步：{v}"
-        );
+        assert!(v["error"]["next_step"].is_string(), "错误必须带下一步：{v}");
     }
 
     // 拒完之后技能得原样还在，别把「参数不合法」变成「顺手删了」。
     let listed = listed_skills(&h, TOKEN_A).await;
-    assert_eq!(find_skill(&listed, "strict")["slug"], serde_json::json!("strict"));
+    assert_eq!(
+        find_skill(&listed, "strict")["slug"],
+        serde_json::json!("strict")
+    );
 }
 
 #[tokio::test]
@@ -1696,7 +1815,10 @@ async fn toggling_a_missing_skill_says_so_with_a_next_step() {
     // 「本实例没有路由 {path}」，拿它说「这个技能不存在」会拼出一句病句，
     // 而且把「路径没登记」和「资源没有」混成了一件事。
     assert!(
-        !v["error"]["detail"].as_str().unwrap_or("").contains("本实例没有路由"),
+        !v["error"]["detail"]
+            .as_str()
+            .unwrap_or("")
+            .contains("本实例没有路由"),
         "资源级 404 不该套上路由级的前缀：{v}"
     );
 }
@@ -1939,8 +2061,7 @@ async fn oversize_and_transport_failure_are_two_different_paths_not_one_sentence
 
     assert_eq!(oversize_status, transport_status);
     assert_ne!(
-        oversize["error"]["next_step"],
-        transport["error"]["next_step"],
+        oversize["error"]["next_step"], transport["error"]["next_step"],
         "两档的「下一步」必须分得开：{}",
         oversize["error"]["next_step"]
     );

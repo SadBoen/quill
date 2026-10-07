@@ -442,7 +442,9 @@ mod tests {
     fn a_new_tool_spec_defaults_to_an_empty_object_schema() {
         let spec = ToolSpec::new("read", "读文件");
         assert_eq!(spec.parameters["type"], "object");
-        assert!(spec.parameters["properties"].as_object().is_some_and(|p| p.is_empty()));
+        assert!(spec.parameters["properties"]
+            .as_object()
+            .is_some_and(|p| p.is_empty()));
     }
 
     #[test]

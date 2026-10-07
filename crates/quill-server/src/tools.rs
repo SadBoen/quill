@@ -30,16 +30,21 @@ pub const MAX_TOOL_ROUNDS: usize = 4;
 // 上限本身是个不变量：改成 0 会让工具永不执行，改得太大则每轮都在烧真实模型调用。
 // 用**编译期断言**而不是单测 —— 这条断言在构造上就不会失败（所以 clippy 报
 // assertions_on_constants 是对的），它的价值在于构建时就把改坏的人拦下。
-const _: () = assert!(MAX_TOOL_ROUNDS > 0, "工具往返上限不能是 0，否则工具永远不执行");
-const _: () = assert!(MAX_TOOL_ROUNDS <= 8, "工具往返上限过大：每轮都是一次真实模型调用");
+const _: () = assert!(
+    MAX_TOOL_ROUNDS > 0,
+    "工具往返上限不能是 0，否则工具永远不执行"
+);
+const _: () = assert!(
+    MAX_TOOL_ROUNDS <= 8,
+    "工具往返上限过大：每轮都是一次真实模型调用"
+);
 
 /// 轮次用尽后、去掉工具再问一次时塞给模型的话。
 ///
 /// 措辞要点：**让它把手上已有的信息说出来，而不是要求它「给出正确答案」**。
 /// 工具查不到东西是正常结果（服务器没配、文件不存在、桩只回一句话），
 /// 模型如实说明缺什么才是有用输出；逼它「想办法」只会让它继续要工具。
-pub const FINAL_ANSWER_PROMPT: &str =
-    "不要再调用任何工具了。现在请直接用你手上已有的信息回答：\
+pub const FINAL_ANSWER_PROMPT: &str = "不要再调用任何工具了。现在请直接用你手上已有的信息回答：\
      说清楚你已经查到了什么、哪些信息拿不到、拿不到的原因是什么。\
      **不知道的项目直接写「不知道」。不要给估计值、不要给「大约」、\
      不要凭印象填一个看起来合理的数字。**\
@@ -897,10 +902,7 @@ mod tests {
         // 关掉的那个**必须**一个专家工具都不剩。
         for gone in ["list_experts", "get_expert_detail"] {
             if a.iter().any(|n| n == gone) {
-                assert!(
-                    !b.iter().any(|n| n == gone),
-                    "关掉后仍挂上了 {gone}：{b:?}"
-                );
+                assert!(!b.iter().any(|n| n == gone), "关掉后仍挂上了 {gone}：{b:?}");
             }
         }
         // 别的内置工具一个都不能少 —— 不能为了省预算把工具表掏空。
@@ -920,7 +922,10 @@ mod tests {
         // 收尾调用的措辞是关键：要求它「说出查到了什么、缺什么」，
         // 而不是「想办法给出答案」—— 后者只会让它继续要工具。
         let p = FINAL_ANSWER_PROMPT;
-        assert!(p.contains("不要再调用任何工具"), "要先断掉调工具的念头：{p}");
+        assert!(
+            p.contains("不要再调用任何工具"),
+            "要先断掉调工具的念头：{p}"
+        );
         assert!(p.contains("查到了什么"), "要它把已有的说出来：{p}");
         assert!(p.contains("拿不到"), "要它说清缺什么：{p}");
         // 反编造：这几条是这个提示词存在的理由，少一条都不行。
@@ -929,7 +934,10 @@ mod tests {
         }
         // 不能出现「必须给出正确答案」这类要求 —— 那是查不到数据时的死路。
         for forbidden in ["必须给出正确答案", "想办法", "一定"] {
-            assert!(!p.contains(forbidden), "收尾提示里不该出现「{forbidden}」：{p}");
+            assert!(
+                !p.contains(forbidden),
+                "收尾提示里不该出现「{forbidden}」：{p}"
+            );
         }
     }
 
@@ -946,9 +954,9 @@ mod tests {
         // ISSUE-040：list_experts 返回「显示名（id）」，参数说明也让模型原样传回，
         // 所以这三种形状**必须**都能命中，否则模型会在两个工具之间空转到轮次上限。
         for q in [
-            "成本分析师（cost-analyst）", // 原样返回值
-            "成本分析师",                 // 只传显示名
-            "cost-analyst",              // 只传 id
+            "成本分析师（cost-analyst）",     // 原样返回值
+            "成本分析师",                     // 只传显示名
+            "cost-analyst",                   // 只传 id
             "  成本分析师（cost-analyst）  ", // 带空白
         ] {
             assert!(
@@ -963,8 +971,16 @@ mod tests {
         // 不能为了上面那条把匹配放得过宽：认不出来就得说认不出来。
         assert!(!matches_expert_query("cost-analyst", "成本分析师", ""));
         assert!(!matches_expert_query("cost-analyst", "成本分析师", "   "));
-        assert!(!matches_expert_query("cost-analyst", "成本分析师", "收入分析师"));
-        assert!(!matches_expert_query("cost-analyst", "成本分析师", "（cost-analyst）"));
+        assert!(!matches_expert_query(
+            "cost-analyst",
+            "成本分析师",
+            "收入分析师"
+        ));
+        assert!(!matches_expert_query(
+            "cost-analyst",
+            "成本分析师",
+            "（cost-analyst）"
+        ));
     }
 
     #[test]

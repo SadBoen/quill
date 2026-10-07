@@ -157,14 +157,14 @@ mod tests {
         ] {
             let joined = safe_join(root, bad);
             if let Some(p) = &joined {
-                assert!(
-                    p.starts_with(root),
-                    "{bad:?} 逃出了根目录：{}",
-                    p.display()
-                );
+                assert!(p.starts_with(root), "{bad:?} 逃出了根目录：{}", p.display());
             }
         }
-        assert_eq!(safe_join(root, "/../etc/passwd"), None, "上级目录必须直接拒绝");
+        assert_eq!(
+            safe_join(root, "/../etc/passwd"),
+            None,
+            "上级目录必须直接拒绝"
+        );
         assert_eq!(safe_join(root, "/a/../../etc/passwd"), None);
         assert_eq!(safe_join(root, "/C:/Windows"), None, "盘符必须拒绝");
     }

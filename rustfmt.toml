@@ -1,0 +1,9 @@
+# 采用 rustfmt 的**默认风格** —— 最高指示第 5 条把 `cargo fmt --check` 列为门禁的一部分。
+#
+# 刻意只写必要项：自定义风格越多，越容易在 rustfmt 版本升级时抖动，也越容易在
+# review 时吵「该不该这么排版」。这里只声明 edition，与各 crate 的 Cargo.toml 一致。
+#
+# 采用经过：此前项目从未跑过 fmt（`.github/workflows/gates.yml:51` 原话「刻意不开
+# clippy/rustfmt」），`cargo fmt --all -- --check` 有 481 个文件差异。现已按默认风格
+# 一次性格式化（单独一个提交，免得淹没真实改动），并把 `--check` 接进 CI。
+edition = "2021"

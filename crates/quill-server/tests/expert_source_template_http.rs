@@ -118,7 +118,9 @@ async fn post_creates_a_derived_expert_and_omission_means_no_source() {
     .await;
     assert_eq!(status, StatusCode::CREATED);
     assert!(
-        v.as_object().expect("必须是对象").contains_key("source_template"),
+        v.as_object()
+            .expect("必须是对象")
+            .contains_key("source_template"),
         "省略该字段时也必须出现这个键（缺失会被前端当成后端没做）"
     );
     assert!(
@@ -166,7 +168,10 @@ async fn one_template_can_back_many_experts_and_the_list_endpoint_reads_it_back(
         2,
         "🔴 一个模板派生出的多个专家都必须能从列表接口读回来：{v}"
     );
-    assert!(derived.contains(&"prog-1") && derived.contains(&"prog-2"), "{v}");
+    assert!(
+        derived.contains(&"prog-1") && derived.contains(&"prog-2"),
+        "{v}"
+    );
 }
 
 #[tokio::test]
@@ -242,11 +247,11 @@ async fn an_illegal_source_template_is_400_with_a_next_step() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "非法模板 id 必须 400：{v}");
     let body = v.to_string();
     assert!(body.contains("下一步"), "错误必须带修复方向：{body}");
+    assert!(body.contains("source_template"), "应点名出错的字段：{body}");
     assert!(
-        body.contains("source_template"),
-        "应点名出错的字段：{body}"
+        body.contains("next_step"),
+        "响应体结构必须带下一步字段：{body}"
     );
-    assert!(body.contains("next_step"), "响应体结构必须带下一步字段：{body}");
 
     let (status, v) = post_expert(
         &app,

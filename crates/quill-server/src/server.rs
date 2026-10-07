@@ -23,10 +23,7 @@ pub fn build_state(config: Config) -> (AppState, Vec<crate::config::Warning>) {
             match bridge.migrate_embedded() {
                 Ok(report) if report.changed() => all.push(crate::config::Warning {
                     source: "QUILL_DB_PATH".to_string(),
-                    message: format!(
-                        "已自动应用迁移 {:?}（数据库 {db_path}）。",
-                        report.applied
-                    ),
+                    message: format!("已自动应用迁移 {:?}（数据库 {db_path}）。", report.applied),
                 }),
                 Ok(_) => match bridge.missing_tables() {
                     Ok(missing) if missing.is_empty() => {}
@@ -45,9 +42,7 @@ pub fn build_state(config: Config) -> (AppState, Vec<crate::config::Warning>) {
                 },
                 Err(e) => all.push(crate::config::Warning {
                     source: "QUILL_DB_PATH".to_string(),
-                    message: format!(
-                        "自动迁移失败，专家与派工路由会返回 503。\n{e}"
-                    ),
+                    message: format!("自动迁移失败，专家与派工路由会返回 503。\n{e}"),
                 }),
             }
 
@@ -79,7 +74,8 @@ pub fn build_state(config: Config) -> (AppState, Vec<crate::config::Warning>) {
             // headless 部署的密码账号入口：浏览器首管引导只对「全新实例」可用，
             // 容器/CI/远端机器没人点得了。这里补一条配置驱动的建号通道，
             // **不是注册的替代品** —— `/api/auth/register` 依然不存在。
-            match bridge.ensure_password_users(std::env::var("QUILL_PASSWORD_USERS").ok().as_deref())
+            match bridge
+                .ensure_password_users(std::env::var("QUILL_PASSWORD_USERS").ok().as_deref())
             {
                 Ok(()) => {}
                 Err(problems) => {
@@ -299,12 +295,12 @@ pub async fn serve(state: AppState, addr: SocketAddr) -> Result<(), String> {
         // 让人拿到无限额度。
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
-        .with_graceful_shutdown(async move {
-            shutdown_signal().await;
-            println!("收到关闭信号：停止接受新连接，等待在途请求完成（上限 {timeout:?}）…");
-        })
-        .await
-        .map_err(|e| format!("HTTP 服务异常退出：{e}"))
+    .with_graceful_shutdown(async move {
+        shutdown_signal().await;
+        println!("收到关闭信号：停止接受新连接，等待在途请求完成（上限 {timeout:?}）…");
+    })
+    .await
+    .map_err(|e| format!("HTTP 服务异常退出：{e}"))
 }
 
 async fn shutdown_signal() {

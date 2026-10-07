@@ -74,7 +74,11 @@ impl SseDecoder {
         Ok(events)
     }
 
-    fn consume_line(&mut self, line: &str, events: &mut Vec<SseEvent>) -> Result<(), ProviderError> {
+    fn consume_line(
+        &mut self,
+        line: &str,
+        events: &mut Vec<SseEvent>,
+    ) -> Result<(), ProviderError> {
         if line.is_empty() {
             self.dispatch(events)?;
             return Ok(());
@@ -84,7 +88,8 @@ impl SseDecoder {
         }
         // SSE allows both "data: x" and "data:x"; only one leading space is stripped.
         if let Some(rest) = line.strip_prefix("data:") {
-            self.data.push(rest.strip_prefix(' ').unwrap_or(rest).to_string());
+            self.data
+                .push(rest.strip_prefix(' ').unwrap_or(rest).to_string());
         }
         Ok(())
     }
@@ -163,9 +168,7 @@ mod tests {
     #[test]
     fn the_done_sentinel_is_its_own_event() {
         let mut d = SseDecoder::new();
-        let got = d
-            .push("data: 1\n\ndata: [DONE]\n\n")
-            .expect("不应报错");
+        let got = d.push("data: 1\n\ndata: [DONE]\n\n").expect("不应报错");
         assert_eq!(data(&got), vec!["1"]);
         assert_eq!(got.last(), Some(&SseEvent::Done));
     }
@@ -174,7 +177,9 @@ mod tests {
     fn data_after_done_is_a_classified_error_not_a_panic() {
         let mut d = SseDecoder::new();
         d.push("data: [DONE]\n\n").expect("不应报错");
-        let err = d.push("data: 1\n\n").expect_err("DONE 之后再喂数据必须报错");
+        let err = d
+            .push("data: 1\n\n")
+            .expect_err("DONE 之后再喂数据必须报错");
         assert!(matches!(err, ProviderError::MalformedResponse { .. }));
         assert!(err.to_string().contains("[DONE]"), "文案要点明 DONE：{err}");
     }
@@ -182,9 +187,7 @@ mod tests {
     #[test]
     fn multiple_data_lines_join_into_one_event() {
         let mut d = SseDecoder::new();
-        let got = d
-            .push("data: {\"a\":\ndata: 1}\n\n")
-            .expect("不应报错");
+        let got = d.push("data: {\"a\":\ndata: 1}\n\n").expect("不应报错");
         assert_eq!(data(&got), vec!["{\"a\":\n1}"]);
     }
 

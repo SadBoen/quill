@@ -4,7 +4,10 @@ use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
 use crate::error::{excerpt, ProviderError};
-use crate::types::{ChatRequest, ChatResponse, FinishReason, Message, MessageContent, ToolCall, ToolSpec, TokenUsage};
+use crate::types::{
+    ChatRequest, ChatResponse, FinishReason, Message, MessageContent, TokenUsage, ToolCall,
+    ToolSpec,
+};
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct FunctionDelta {
@@ -91,8 +94,7 @@ pub fn message_to_wire(message: &Message) -> Value {
 }
 
 pub fn tool_call_to_wire(call: &ToolCall) -> Value {
-    let arguments = serde_json::to_string(&call.arguments)
-        .unwrap_or_else(|_| "{}".to_string());
+    let arguments = serde_json::to_string(&call.arguments).unwrap_or_else(|_| "{}".to_string());
     json!({
         "id": call.id,
         "type": "function",
@@ -157,14 +159,15 @@ pub fn upstream_error(value: &Value) -> Option<ProviderError> {
         };
         text.map(|detail| ProviderError::UpstreamRejected { detail })
     });
-    let from_object = (value.get("object").and_then(Value::as_str) == Some("error"))
-        .then(|| ProviderError::UpstreamRejected {
+    let from_object = (value.get("object").and_then(Value::as_str) == Some("error")).then(|| {
+        ProviderError::UpstreamRejected {
             detail: value
                 .get("message")
                 .and_then(Value::as_str)
                 .unwrap_or("服务在流中报了错但没给原因")
                 .to_string(),
-        });
+        }
+    });
     from_error.or(from_object)
 }
 
@@ -198,10 +201,7 @@ pub fn parse_chat_response(value: &Value) -> Result<ChatResponse, ProviderError>
     let tool_calls = parse_tool_calls(message.get("tool_calls"))?;
 
     Ok(ChatResponse {
-        id: value
-            .get("id")
-            .and_then(Value::as_str)
-            .map(String::from),
+        id: value.get("id").and_then(Value::as_str).map(String::from),
         model: value
             .get("model")
             .and_then(Value::as_str)
@@ -245,7 +245,10 @@ fn split_think_block(content: &str) -> (String, String) {
     let after = &content[start + "<think>".len()..];
     let end = after.find("</think>");
     let (inner, rest) = match end {
-        Some(e) => (after[..e].to_string(), after[e + "</think>".len()..].to_string()),
+        Some(e) => (
+            after[..e].to_string(),
+            after[e + "</think>".len()..].to_string(),
+        ),
         None => (after.to_string(), String::new()),
     };
     let mut text = String::with_capacity(content.len());
@@ -292,7 +295,8 @@ pub fn usage_from_value(usage: &Value) -> TokenUsage {
         .and_then(Value::as_u64)
         .map(|v| u32::try_from(v).unwrap_or(u32::MAX));
     let cache_read = openai_cached.or_else(|| read("cache_read_input_tokens"));
-    let cache_write = read("cache_write_input_tokens").or_else(|| read("cache_creation_input_tokens"));
+    let cache_write =
+        read("cache_write_input_tokens").or_else(|| read("cache_creation_input_tokens"));
 
     TokenUsage::new(read("prompt_tokens"), read("completion_tokens"))
         .with_cache(cache_read, cache_write)
@@ -309,9 +313,11 @@ pub fn parse_tool_calls(raw: Option<&Value>) -> Result<Vec<ToolCall>, ProviderEr
     let Some(raw) = raw.filter(|v| !v.is_null()) else {
         return Ok(Vec::new());
     };
-    let items = raw.as_array().ok_or_else(|| ProviderError::MalformedResponse {
-        detail: format!("tool_calls 应该是数组，实际是 {}", kind_of(raw)),
-    })?;
+    let items = raw
+        .as_array()
+        .ok_or_else(|| ProviderError::MalformedResponse {
+            detail: format!("tool_calls 应该是数组，实际是 {}", kind_of(raw)),
+        })?;
     items.iter().map(tool_call_from_wire).collect()
 }
 
@@ -348,11 +354,13 @@ pub fn tool_call_from_parts(
     if trimmed.is_empty() {
         return Ok(ToolCall::new(id, name, json!({})));
     }
-    let parsed: Value = serde_json::from_str(trimmed).map_err(|e| {
-        ProviderError::MalformedResponse {
-            detail: format!("工具「{name}」的参数不是合法 JSON：{e}。原文：{}", excerpt(trimmed)),
-        }
-    })?;
+    let parsed: Value =
+        serde_json::from_str(trimmed).map_err(|e| ProviderError::MalformedResponse {
+            detail: format!(
+                "工具「{name}」的参数不是合法 JSON：{e}。原文：{}",
+                excerpt(trimmed)
+            ),
+        })?;
     if !parsed.is_object() {
         return Err(ProviderError::MalformedResponse {
             detail: format!(
@@ -443,9 +451,10 @@ impl ToolCallAssembler {
 
 /// Parse one SSE payload. `Ok(None)` means "gateway metadata, nothing to consume".
 pub fn parse_stream_chunk(payload: &str) -> Result<Option<StreamChunk>, ProviderError> {
-    let value: Value = serde_json::from_str(payload).map_err(|e| ProviderError::MalformedResponse {
-        detail: format!("流里的一帧不是合法 JSON：{e}。原文：{}", excerpt(payload)),
-    })?;
+    let value: Value =
+        serde_json::from_str(payload).map_err(|e| ProviderError::MalformedResponse {
+            detail: format!("流里的一帧不是合法 JSON：{e}。原文：{}", excerpt(payload)),
+        })?;
 
     if let Some(err) = upstream_error(&value) {
         return Err(err);
@@ -463,11 +472,11 @@ pub fn parse_stream_chunk(payload: &str) -> Result<Option<StreamChunk>, Provider
         return Ok(None);
     }
 
-    serde_json::from_value(value).map(Some).map_err(|e| {
-        ProviderError::MalformedResponse {
+    serde_json::from_value(value)
+        .map(Some)
+        .map_err(|e| ProviderError::MalformedResponse {
             detail: format!("流里的一帧结构不认识：{e}"),
-        }
-    })
+        })
 }
 
 pub fn parse_models_list(value: &Value) -> Result<Vec<crate::types::ModelInfo>, ProviderError> {
@@ -485,10 +494,7 @@ pub fn parse_models_list(value: &Value) -> Result<Vec<crate::types::ModelInfo>, 
             let id = m.get("id").and_then(Value::as_str)?;
             Some(crate::types::ModelInfo {
                 id: id.to_string(),
-                owned_by: m
-                    .get("owned_by")
-                    .and_then(Value::as_str)
-                    .map(String::from),
+                owned_by: m.get("owned_by").and_then(Value::as_str).map(String::from),
             })
         })
         .collect())
@@ -553,8 +559,9 @@ mod tests {
             .with_temperature(0.3)
             .with_max_tokens(64)
             .with_stop(["\n\n".to_string()])
-            .with_tools(vec![ToolSpec::new("read", "读文件")
-                .with_parameters(json!({ "type": "object", "properties": { "p": { "type": "string" } } }))]);
+            .with_tools(vec![ToolSpec::new("read", "读文件").with_parameters(
+                json!({ "type": "object", "properties": { "p": { "type": "string" } } }),
+            )]);
         let body = build_request_body(&req, "wire-model", false);
         assert_eq!(body["temperature"], 0.3);
         assert_eq!(body["max_tokens"], 64);
@@ -690,7 +697,10 @@ mod tests {
             "prompt_tokens_details": { "cached_tokens": 900 },
         }));
         assert_eq!(openai.cache_read, Some(900));
-        assert_eq!(openai.cache_write, None, "OpenAI 形状没有缓存写，不许编一个 0");
+        assert_eq!(
+            openai.cache_write, None,
+            "OpenAI 形状没有缓存写，不许编一个 0"
+        );
         assert_eq!(openai.input, Some(1000));
         assert!((openai.cache_read_ratio().expect("应当能算") - 0.9).abs() < 1e-6);
 
@@ -814,7 +824,11 @@ mod tests {
         );
         let calls = a.take().expect("拼装必须成功");
         let names: Vec<&str> = calls.iter().map(|c| c.name.as_str()).collect();
-        assert_eq!(names, vec!["first", "second"], "必须按 index 排序，不能按到达顺序");
+        assert_eq!(
+            names,
+            vec!["first", "second"],
+            "必须按 index 排序，不能按到达顺序"
+        );
     }
 
     #[test]
@@ -904,11 +918,10 @@ mod tests {
 
     #[test]
     fn a_well_formed_stream_chunk_parses() {
-        let chunk = parse_stream_chunk(
-            r#"{"id":"c1","model":"m","choices":[{"delta":{"content":"你"}}]}"#,
-        )
-        .expect("合法帧必须解析成功")
-        .expect("带 choices 的帧不是元数据");
+        let chunk =
+            parse_stream_chunk(r#"{"id":"c1","model":"m","choices":[{"delta":{"content":"你"}}]}"#)
+                .expect("合法帧必须解析成功")
+                .expect("带 choices 的帧不是元数据");
         assert_eq!(chunk.id.as_deref(), Some("c1"));
         assert_eq!(chunk.choices[0].delta.content.as_deref(), Some("你"));
     }
@@ -933,7 +946,14 @@ mod tests {
         let usage = parse_stream_chunk(r#"{"choices":[],"usage":{"prompt_tokens":2}}"#)
             .expect("usage-only 帧合法")
             .expect("choices 为空仍是真实帧");
-        assert_eq!(usage.usage.as_ref().expect("usage 帧必须带 usage").get("prompt_tokens"), Some(&json!(2)));
+        assert_eq!(
+            usage
+                .usage
+                .as_ref()
+                .expect("usage 帧必须带 usage")
+                .get("prompt_tokens"),
+            Some(&json!(2))
+        );
     }
 
     #[test]

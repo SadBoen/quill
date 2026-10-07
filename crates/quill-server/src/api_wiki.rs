@@ -47,7 +47,10 @@ fn map_wiki(e: quill_wiki::WikiError) -> ApiError {
     }
 }
 
-pub async fn list_pages(State(state): State<AppState>, user: AuthUser) -> Result<Json<Value>, ApiError> {
+pub async fn list_pages(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> Result<Json<Value>, ApiError> {
     let store = store_for(&state, &user);
     let pages = store.list_pages().map_err(map_wiki)?;
     Ok(Json(json!({ "pages": pages })))
@@ -80,7 +83,10 @@ pub async fn get_page(
     Ok(body)
 }
 
-pub async fn read_index(State(state): State<AppState>, user: AuthUser) -> Result<Json<Value>, ApiError> {
+pub async fn read_index(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> Result<Json<Value>, ApiError> {
     let store = store_for(&state, &user);
     let index = store.read_index().map_err(map_wiki)?;
     Ok(Json(json!({
@@ -89,7 +95,10 @@ pub async fn read_index(State(state): State<AppState>, user: AuthUser) -> Result
     })))
 }
 
-pub async fn read_log(State(state): State<AppState>, user: AuthUser) -> Result<Json<Value>, ApiError> {
+pub async fn read_log(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> Result<Json<Value>, ApiError> {
     let store = store_for(&state, &user);
     let log = store.read_log().map_err(map_wiki)?;
     Ok(Json(json!({
@@ -112,10 +121,8 @@ mod tests {
     impl TempRoot {
         fn new(label: &str) -> Self {
             let n = SEQ.fetch_add(1, Ordering::Relaxed);
-            let dir = std::env::temp_dir().join(format!(
-                "quill-wiki-api-{label}-{}-{n}",
-                std::process::id()
-            ));
+            let dir = std::env::temp_dir()
+                .join(format!("quill-wiki-api-{label}-{}-{n}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir)
                 .unwrap_or_else(|e| panic!("创建临时目录 {} 失败：{e}", dir.display()));
@@ -146,7 +153,9 @@ mod tests {
     fn an_absent_page_is_a_404_not_an_empty_success() {
         let root = TempRoot::new("absent");
         let store = store_for(&root, UID_A);
-        let err = store.read_page("nope.md").expect_err("不存在的页面必须报错");
+        let err = store
+            .read_page("nope.md")
+            .expect_err("不存在的页面必须报错");
         assert!(
             matches!(err, quill_wiki::WikiError::NotFound { .. }),
             "实际 {err:?}"
@@ -166,7 +175,11 @@ mod tests {
     fn a_path_escape_is_a_400_that_names_the_offending_path() {
         let root = TempRoot::new("escape");
         let store = store_for(&root, UID_A);
-        let err = map_wiki(store.read_page("../../etc/passwd").expect_err("越界必须被拒"));
+        let err = map_wiki(
+            store
+                .read_page("../../etc/passwd")
+                .expect_err("越界必须被拒"),
+        );
         assert_eq!(err.status(), axum::http::StatusCode::BAD_REQUEST);
         let d = err.detail();
         assert!(d.contains("passwd"), "要点名越界路径：{d}");

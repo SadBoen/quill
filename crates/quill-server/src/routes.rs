@@ -4,16 +4,16 @@ use axum::routing::{get, patch, post, put};
 use axum::Router;
 
 use crate::api_admin;
-use crate::api_chat;
-use crate::api_chat_stream;
-use crate::api_channels;
-use crate::api_mbti;
 use crate::api_auth;
 use crate::api_backup;
+use crate::api_channels;
+use crate::api_chat;
+use crate::api_chat_stream;
 use crate::api_dispatch;
 use crate::api_expert_market;
 use crate::api_experts;
 use crate::api_extensions;
+use crate::api_mbti;
 use crate::api_providers;
 use crate::api_teams;
 use crate::api_users;
@@ -74,10 +74,7 @@ pub fn build_router(state: AppState) -> Router {
                 not_implemented("GET", "/api/experts/export")
             }),
         )
-        .route(
-            "/api/experts/market",
-            get(api_expert_market::list),
-        )
+        .route("/api/experts/market", get(api_expert_market::list))
         .route(
             "/api/experts/market/{slug}/install",
             post(api_expert_market::install),
@@ -109,10 +106,7 @@ pub fn build_router(state: AppState) -> Router {
         );
 
     let sessions = Router::new()
-        .route(
-            "/api/sessions",
-            get(api_chat::list).post(api_chat::create),
-        )
+        .route("/api/sessions", get(api_chat::list).post(api_chat::create))
         .route(
             "/api/sessions/{id}",
             get(api_chat::get_one).delete(api_chat::delete),
@@ -244,10 +238,7 @@ pub fn build_router(state: AppState) -> Router {
         );
 
     let admin = Router::new()
-        .route(
-            "/api/admin/config",
-            get(api_admin::get).put(api_admin::put),
-        )
+        .route("/api/admin/config", get(api_admin::get).put(api_admin::put))
         .route(
             "/api/admin/providers",
             get(api_providers::list).post(api_providers::create),
@@ -260,7 +251,10 @@ pub fn build_router(state: AppState) -> Router {
             "/api/admin/providers/{id}/default",
             put(api_providers::set_default),
         )
-        .route("/api/admin/providers/{id}/models", get(api_providers::models))
+        .route(
+            "/api/admin/providers/{id}/models",
+            get(api_providers::models),
+        )
         .route("/api/admin/models", get(api_providers::pool));
 
     let authed_misc = Router::new()
@@ -376,11 +370,7 @@ async fn healthz(
         (None, None) => json!({ "ready": false, "detail": "存储未装配且无原因记录" }),
     };
     let llm_cfg = state.llm_config_snapshot();
-    let llm_configured = state
-        .llm
-        .read()
-        .map(|g| g.is_some())
-        .unwrap_or(false);
+    let llm_configured = state.llm.read().map(|g| g.is_some()).unwrap_or(false);
     let provider_cache = state.provider_cache_snapshot();
     let mut warnings = state
         .config

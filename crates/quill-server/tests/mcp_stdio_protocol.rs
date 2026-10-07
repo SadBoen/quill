@@ -88,10 +88,7 @@ async fn a_rejected_initialize_is_reported_as_a_failure_with_the_servers_own_wor
     assert!(!p.connected, "被拒绝的握手不是握手成功：{p:?}");
     assert_eq!(p.tool_count, 0);
     let why = p.error.expect("失败必须带原因");
-    assert!(
-        why.contains("initialize"),
-        "要说清卡在哪一步：{why}"
-    );
+    assert!(why.contains("initialize"), "要说清卡在哪一步：{why}");
 }
 
 #[tokio::test]
@@ -144,10 +141,7 @@ async fn the_env_and_cwd_from_the_row_really_reach_the_child_process() {
     assert!(!p.connected, "cwd 不存在就该连不上：{p:?}");
     let why = p.error.expect("失败必须带原因");
     assert!(why.contains("拉起"), "{why}");
-    assert!(
-        why.contains("手动跑一遍"),
-        "错误要带得动手的下一步：{why}"
-    );
+    assert!(why.contains("手动跑一遍"), "错误要带得动手的下一步：{why}");
 }
 
 #[tokio::test]
@@ -205,7 +199,10 @@ async fn a_finished_probe_leaves_no_child_process_behind() {
 
     let r = row("cleanup", &stub(), &["--hold-open", &marker]);
     let p = mcp_client::probe(&r).await;
-    assert!(p.connected, "这一条要先真的连上，才有「连完再断开」可测：{p:?}");
+    assert!(
+        p.connected,
+        "这一条要先真的连上，才有「连完再断开」可测：{p:?}"
+    );
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
@@ -243,14 +240,25 @@ async fn a_finished_probe_leaves_no_child_process_behind() {
 #[tokio::test]
 async fn the_arguments_really_cross_the_wire_and_come_back_echoed() {
     let r = row("echo", &stub(), &["--echo-args"]);
-    let out = mcp_client::call_tool(&r, "u1", "read-note", &serde_json::json!({
-        "path": "会议纪要.md",
-        "页码": 3
-    }))
+    let out = mcp_client::call_tool(
+        &r,
+        "u1",
+        "read-note",
+        &serde_json::json!({
+            "path": "会议纪要.md",
+            "页码": 3
+        }),
+    )
     .await
     .expect("tools/call 应当成功");
-    assert!(out.contains("read-note"), "正文里要能看到被调用的工具名：{out}");
-    assert!(out.contains("会议纪要.md"), "参数内容必须真的到了对端：{out}");
+    assert!(
+        out.contains("read-note"),
+        "正文里要能看到被调用的工具名：{out}"
+    );
+    assert!(
+        out.contains("会议纪要.md"),
+        "参数内容必须真的到了对端：{out}"
+    );
     assert!(out.contains('3'), "数字参数也要过去：{out}");
     // 挂载名与远端原名在这里必须是**不同的两个东西**：协议里发出去的一直是原名，
     // 发挂载名的话服务器会回一个「没有这个工具」。
@@ -307,7 +315,10 @@ async fn a_server_that_dies_on_tools_call_is_not_reported_as_success() {
         .await
         .expect_err("子进程在调用时退出，必须当失败");
     assert!(!err.is_empty(), "失败也要说清是什么错：{err}");
-    assert!(err.contains("下一步"), "面向用户的错误必须带「下一步」：{err}");
+    assert!(
+        err.contains("下一步"),
+        "面向用户的错误必须带「下一步」：{err}"
+    );
 }
 
 /// **同步桥在完全没有运行时的线程上也能用。**
@@ -321,13 +332,9 @@ async fn a_server_that_dies_on_tools_call_is_not_reported_as_success() {
 #[test]
 fn the_sync_bridge_works_on_a_thread_with_no_runtime_at_all() {
     let r = row("bridge", &stub(), &["--echo-args"]);
-    let out = mcp_client::call_tool_blocking(
-        &r,
-        "u1",
-        "read-note",
-        &serde_json::json!({"path": "x.md"}),
-    )
-    .expect("没有运行时的线程上也要能调通");
+    let out =
+        mcp_client::call_tool_blocking(&r, "u1", "read-note", &serde_json::json!({"path": "x.md"}))
+            .expect("没有运行时的线程上也要能调通");
     assert!(out.contains("x.md"), "参数要真的过线：{out}");
 }
 
@@ -343,7 +350,9 @@ fn the_sync_bridge_works_on_a_thread_with_no_runtime_at_all() {
 #[tokio::test]
 async fn two_tools_that_normalize_to_the_same_name_do_not_overwrite_each_other() {
     use quill_server::mcp_client::RemoteTool;
-    use quill_server::tools::{mcp_tool_name, mcp_tool_spec, mcp_tool_visibility, McpToolVisibility};
+    use quill_server::tools::{
+        mcp_tool_name, mcp_tool_spec, mcp_tool_visibility, McpToolVisibility,
+    };
 
     let mk = |n: &str| RemoteTool {
         remote_name: n.to_string(),
@@ -370,7 +379,10 @@ async fn two_tools_that_normalize_to_the_same_name_do_not_overwrite_each_other()
         }
         other => panic!("撞名了却判成可挂载，第二个会顶掉第一个：{other:?}"),
     }
-    assert_eq!(taken[0].name, first.name, "跳过的语义是「不动它」，不是「换掉它」");
+    assert_eq!(
+        taken[0].name, first.name,
+        "跳过的语义是「不动它」，不是「换掉它」"
+    );
 }
 
 /// **服务器自报「我没有 tools 能力」时，工具数按 0 报**，哪怕它的 `tools/list`
@@ -390,7 +402,10 @@ async fn a_server_that_self_reports_no_tools_capability_reports_zero_not_its_lis
     let d = mcp_client::discover(&r).await;
 
     assert!(d.probe.probed, "确实发起了握手：{d:?}");
-    assert!(d.probe.connected, "握手本身是成功的 —— 这是正常状态，不是连接失败：{d:?}");
+    assert!(
+        d.probe.connected,
+        "握手本身是成功的 —— 这是正常状态，不是连接失败：{d:?}"
+    );
     assert_eq!(
         d.probe.server_declares_tools,
         Some(false),
@@ -449,7 +464,11 @@ async fn the_discovery_tool_list_is_exactly_what_the_mount_decision_sees() {
     // 分页必须翻完：stub 首页 2 个 + 游标后 1 个。少翻一页的话这里只有 2，
     // 而 2 看上去也挺像回事。
     assert_eq!(d.tools.len(), 3, "工具列表必须翻完分页：{d:?}");
-    assert_eq!(d.tools.len(), d.probe.tool_count, "条数与上报的必须一致：{d:?}");
+    assert_eq!(
+        d.tools.len(),
+        d.probe.tool_count,
+        "条数与上报的必须一致：{d:?}"
+    );
 
     // 拿一个空的基线表，按 `with_mcp_tools` 的顺序走一遍判定。
     let mut taken: Vec<quill_provider::ToolSpec> = Vec::new();
@@ -466,5 +485,8 @@ async fn the_discovery_tool_list_is_exactly_what_the_mount_decision_sees() {
         .iter()
         .map(|t| mcp_tool_name(&d.probe.name, &t.remote_name).expect("名字应可归一"))
         .collect();
-    assert_eq!(mounted, expected, "三个工具都该挂上，且挂载名与原名一一对应");
+    assert_eq!(
+        mounted, expected,
+        "三个工具都该挂上，且挂载名与原名一一对应"
+    );
 }

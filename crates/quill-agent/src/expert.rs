@@ -296,11 +296,7 @@ impl Expert {
     }
 
     /// `None` 明确表示清除偏好模型（回到实例默认模型）。
-    pub fn set_model(
-        &mut self,
-        actor: &UserId,
-        model: Option<String>,
-    ) -> Result<(), AgentError> {
+    pub fn set_model(&mut self, actor: &UserId, model: Option<String>) -> Result<(), AgentError> {
         self.assert_modifiable(actor)?;
         self.model = check_model(model)?;
         Ok(())
@@ -637,7 +633,8 @@ impl<R: ExpertRepository> ExpertRegistry<R> {
         actor: &UserId,
         id: &ExpertId,
         on: bool,
-    ) -> Result<Expert, AgentError> {        let mut e = self.must_get_owned(actor, id)?;
+    ) -> Result<Expert, AgentError> {
+        let mut e = self.must_get_owned(actor, id)?;
         e.set_default_enabled(actor, on)?;
         self.repo.put(&e)?;
         Ok(e)
@@ -1207,10 +1204,11 @@ mod tests {
         n.model = Some("qwen3-max".into());
         r.create_user_expert(u(1), n).expect("应创建成功");
 
-        let back = r
-            .get_visible(&u(1), &e("cost-analyst"))
-            .expect("应可读");
-        assert_eq!(back.instructions(), "你是一名成本分析师，先问清口径再算数。");
+        let back = r.get_visible(&u(1), &e("cost-analyst")).expect("应可读");
+        assert_eq!(
+            back.instructions(),
+            "你是一名成本分析师，先问清口径再算数。"
+        );
         assert_eq!(back.model(), Some("qwen3-max"));
     }
 
@@ -1246,9 +1244,7 @@ mod tests {
                 "模型名 {bad:?} 必须判红：{err:?}"
             );
         }
-        let got = r
-            .get_visible(&u(1), &e("cost-analyst"))
-            .expect("应可取");
+        let got = r.get_visible(&u(1), &e("cost-analyst")).expect("应可取");
         assert_eq!(got.model(), None, "失败的写入不得改掉原值");
     }
 
@@ -1267,7 +1263,10 @@ mod tests {
             matches!(err, AgentError::ExpertInstructionsInvalid { .. }),
             "超长人格必须判红：{err:?}"
         );
-        assert!(err.to_string().contains("20001"), "文案应给出实际字数：{err}");
+        assert!(
+            err.to_string().contains("20001"),
+            "文案应给出实际字数：{err}"
+        );
     }
 
     #[test]
@@ -1279,9 +1278,7 @@ mod tests {
             .set_instructions(&u(1), &e("cost-analyst"), "人".repeat(MAX_INSTRUCTIONS + 1))
             .expect_err("更新超长也必须判红");
         assert!(matches!(err, AgentError::ExpertInstructionsInvalid { .. }));
-        let got = r
-            .get_visible(&u(1), &e("cost-analyst"))
-            .expect("应可取");
+        let got = r.get_visible(&u(1), &e("cost-analyst")).expect("应可取");
         assert_eq!(
             got.instructions(),
             "你是测试用专家",
@@ -1370,10 +1367,14 @@ mod tests {
     #[test]
     fn source_template_follows_the_frozen_regex_and_nothing_else() {
         let r = registry();
-        r.create_user_expert(u(1), new("prog-1"))
-            .expect("应创建");
+        r.create_user_expert(u(1), new("prog-1")).expect("应创建");
 
-        for ok in ["a", "ai-coding-coach", "tpl-1", &"a".repeat(MAX_SOURCE_TEMPLATE)] {
+        for ok in [
+            "a",
+            "ai-coding-coach",
+            "tpl-1",
+            &"a".repeat(MAX_SOURCE_TEMPLATE),
+        ] {
             let got = r
                 .set_source_template(&u(1), &e("prog-1"), Some(ok.to_string()))
                 .unwrap_or_else(|e| panic!("合法模板 id {ok:?} 必须放行：{e}"));
@@ -1406,7 +1407,10 @@ mod tests {
                 matches!(err, AgentError::ExpertSourceTemplateInvalid { .. }),
                 "模板 id {bad:?} 必须判红：{err:?}"
             );
-            assert!(err.to_string().contains("下一步"), "文案要带修复方向：{err}");
+            assert!(
+                err.to_string().contains("下一步"),
+                "文案要带修复方向：{err}"
+            );
         }
         assert_eq!(
             r.get_visible(&u(1), &e("prog-1"))
@@ -1432,11 +1436,10 @@ mod tests {
         assert_eq!(
             r.set_source_template(&u(2), &e("prog-2"), Some("tpl-1".into()))
                 .unwrap_err(),
-            AgentError::ExpertNotFound {
-                id: e("prog-2")
-            }
+            AgentError::ExpertNotFound { id: e("prog-2") }
         );
-        r.create_builtin_expert(new("builtin-helper")).expect("应创建");
+        r.create_builtin_expert(new("builtin-helper"))
+            .expect("应创建");
         assert_eq!(
             r.set_source_template(&SYSTEM_OWNER, &e("builtin-helper"), Some("tpl-1".into()))
                 .unwrap_err(),

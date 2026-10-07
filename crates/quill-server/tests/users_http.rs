@@ -90,7 +90,13 @@ impl Harness {
         }
     }
 
-    async fn call(&self, method: &str, path: &str, token: &str, body: Option<serde_json::Value>) -> (StatusCode, String) {
+    async fn call(
+        &self,
+        method: &str,
+        path: &str,
+        token: &str,
+        body: Option<serde_json::Value>,
+    ) -> (StatusCode, String) {
         let b = Request::builder()
             .method(method)
             .uri(path)
@@ -107,12 +113,22 @@ impl Harness {
             .await
             .expect("请求失败");
         let status = resp.status();
-        let bytes = resp.into_body().collect().await.expect("读响应体").to_bytes();
-        (status, String::from_utf8(bytes.to_vec()).expect("响应体必须是 UTF-8"))
+        let bytes = resp
+            .into_body()
+            .collect()
+            .await
+            .expect("读响应体")
+            .to_bytes();
+        (
+            status,
+            String::from_utf8(bytes.to_vec()).expect("响应体必须是 UTF-8"),
+        )
     }
 
     async fn users(&self, token: &str, query: &str) -> serde_json::Value {
-        let (status, text) = self.call("GET", &format!("/api/users?{query}"), token, None).await;
+        let (status, text) = self
+            .call("GET", &format!("/api/users?{query}"), token, None)
+            .await;
         assert_eq!(status, StatusCode::OK, "列用户应返回 200：{text}");
         serde_json::from_str(&text).unwrap_or_else(|e| panic!("响应体不是 JSON（{e}）：{text}"))
     }
@@ -127,8 +143,9 @@ impl Harness {
 fn seed(db: &TestDb, uid: &str, username: &str, is_admin: bool) {
     let id = quill_domain::UserId::parse(uid).expect("测试 UID 必须合法");
     let username = username.to_string();
-    let slot: Arc<std::sync::Mutex<Option<Result<quill_control::Provision, quill_control::ControlError>>>> =
-        Arc::new(std::sync::Mutex::new(None));
+    let slot: Arc<
+        std::sync::Mutex<Option<Result<quill_control::Provision, quill_control::ControlError>>>,
+    > = Arc::new(std::sync::Mutex::new(None));
     let writer = Arc::clone(&slot);
     db.bridge()
         .call(move |pool, _rt| {
@@ -193,7 +210,11 @@ async fn listing_users_returns_the_accounts_that_really_exist() {
     let v = h.users(OWNER_TOKEN, "").await;
 
     let users = v["users"].as_array().expect("users 必须是数组");
-    assert_eq!(v["total"].as_u64(), Some(2), "total 必须是过滤后的总数：{v}");
+    assert_eq!(
+        v["total"].as_u64(),
+        Some(2),
+        "total 必须是过滤后的总数：{v}"
+    );
     let names: Vec<&str> = users
         .iter()
         .map(|u| u["username"].as_str().unwrap_or_default())
@@ -208,7 +229,14 @@ async fn listing_users_returns_the_accounts_that_really_exist() {
         .iter()
         .find(|u| u["username"] == "bob")
         .expect("名单里要有 bob");
-    for f in ["id", "username", "display_name", "role", "status", "has_env_token"] {
+    for f in [
+        "id",
+        "username",
+        "display_name",
+        "role",
+        "status",
+        "has_env_token",
+    ] {
         assert!(bob.get(f).is_some(), "每条记录都必须带 {f}：{bob}");
     }
     for f in ["email", "locked", "bytes_used", "quota_bytes"] {
@@ -228,10 +256,7 @@ async fn offset_and_limit_actually_page_through_the_list() {
 
     assert_eq!(first["users"].as_array().map(|a| a.len()), Some(1));
     assert_eq!(second["users"].as_array().map(|a| a.len()), Some(1));
-    assert_eq!(
-        first["total"], second["total"],
-        "翻页不改变总数"
-    );
+    assert_eq!(first["total"], second["total"], "翻页不改变总数");
     assert_ne!(
         first["users"][0]["id"], second["users"][0]["id"],
         "第二页必须给出不同的账号，否则翻页没翻"
@@ -249,7 +274,10 @@ async fn limit_is_capped() {
     let h = Harness::new("users-limit-cap");
     let v = h.users(OWNER_TOKEN, "limit=100000").await;
     let n = v["users"].as_array().map(|a| a.len()).unwrap_or(usize::MAX);
-    assert!(n <= quill_server::api_users::MAX_LIMIT, "limit 未被截断：{n}");
+    assert!(
+        n <= quill_server::api_users::MAX_LIMIT,
+        "limit 未被截断：{n}"
+    );
 }
 
 /// 4. 非 owner 看不了名册。
@@ -257,7 +285,11 @@ async fn limit_is_capped() {
 async fn a_member_cannot_list_users() {
     let h = Harness::new("users-perm");
     let (status, text) = h.call("GET", "/api/users", BOB_TOKEN, None).await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "普通成员列名册必须被拒：{text}");
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "普通成员列名册必须被拒：{text}"
+    );
     assert!(text.contains("forbidden"), "{text}");
 }
 
@@ -361,7 +393,10 @@ async fn disabling_a_password_only_account_reports_no_env_token() {
         .await;
     assert_eq!(status, StatusCode::OK, "{text}");
     let v = json_of(&text);
-    assert_eq!(v["has_env_token"], false, "carol 不该有环境变量令牌：{text}");
+    assert_eq!(
+        v["has_env_token"], false,
+        "carol 不该有环境变量令牌：{text}"
+    );
     assert!(
         v.get("warning").is_none(),
         "没有令牌就没什么可警告的，不许重复喊一遍：{text}"
@@ -440,9 +475,14 @@ async fn creating_and_deleting_accounts_stay_501_and_explain_themselves() {
         )
         .await;
     assert_eq!(s1, StatusCode::NOT_IMPLEMENTED, "{t1}");
-    assert!(t1.contains("QUILL_PASSWORD_USERS"), "建号要走部署配置：{t1}");
+    assert!(
+        t1.contains("QUILL_PASSWORD_USERS"),
+        "建号要走部署配置：{t1}"
+    );
 
-    let (s2, t2) = h.call("DELETE", &format!("/api/users/{bob}"), OWNER_TOKEN, None).await;
+    let (s2, t2) = h
+        .call("DELETE", &format!("/api/users/{bob}"), OWNER_TOKEN, None)
+        .await;
     assert_eq!(s2, StatusCode::NOT_IMPLEMENTED, "{t2}");
     assert!(
         t2.contains("deleted_at"),

@@ -55,11 +55,7 @@ async fn chat_sends_the_model_and_the_messages() {
         .await;
 
     let body = provider_for(&server)
-        .chat(
-            &request()
-                .with_temperature(0.2)
-                .with_max_tokens(32),
-        )
+        .chat(&request().with_temperature(0.2).with_max_tokens(32))
         .await
         .expect("合法响应必须成功");
     assert_eq!(body.text, "ok");
@@ -141,7 +137,10 @@ async fn chat_reports_an_unreachable_server_as_unreachable() {
     );
     assert!(err.is_retryable(), "连不上重试有意义");
     let msg = err.to_string();
-    assert!(msg.contains("/v1/chat/completions"), "要点名打不通的地址：{msg}");
+    assert!(
+        msg.contains("/v1/chat/completions"),
+        "要点名打不通的地址：{msg}"
+    );
     assert!(msg.contains("llama-server"), "要给出最可能的原因：{msg}");
 }
 
@@ -175,7 +174,11 @@ async fn chat_rejects_an_invalid_request_before_any_http_call() {
     assert!(matches!(err, ProviderError::InvalidRequest { .. }));
 
     assert!(
-        server.received_requests().await.unwrap_or_default().is_empty(),
+        server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty(),
         "本地校验失败时不该发请求"
     );
 }
@@ -362,10 +365,7 @@ async fn models_sends_the_api_key_when_one_is_configured() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/v1/models"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!({ "data": [] })),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "data": [] })))
         .mount(&server)
         .await;
 

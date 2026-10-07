@@ -151,7 +151,10 @@ fn row_to_team(row: &SqliteRow, members: Vec<String>) -> Result<TeamRow, quill_a
     })
 }
 
-async fn sql_list(pool: &sqlx::SqlitePool, uid: Vec<u8>) -> Result<Vec<TeamRow>, quill_agent::AgentError> {
+async fn sql_list(
+    pool: &sqlx::SqlitePool,
+    uid: Vec<u8>,
+) -> Result<Vec<TeamRow>, quill_agent::AgentError> {
     let rows = sqlx::query(LIST_SQL)
         .bind(uid.clone())
         .fetch_all(pool)
@@ -211,7 +214,10 @@ async fn sql_get(
     Ok(Some(row_to_team(&r, members)?))
 }
 
-pub async fn list(db: &DbBridge, uid: quill_adapters::UserId) -> Result<Vec<TeamRow>, quill_agent::AgentError> {
+pub async fn list(
+    db: &DbBridge,
+    uid: quill_adapters::UserId,
+) -> Result<Vec<TeamRow>, quill_agent::AgentError> {
     let b = blob_of(&uid);
     db.call(move |pool, _rt| Box::pin(async move { sql_list(&pool, b).await }))
 }
@@ -559,10 +565,7 @@ mod tests {
             );
         }
         for sql in [LIST_SQL, GET_SQL, SOFT_DELETE_SQL, UPDATE_TEAM_SQL] {
-            assert!(
-                !sql.contains("SELECT *"),
-                "必须显式列清单：{sql}"
-            );
+            assert!(!sql.contains("SELECT *"), "必须显式列清单：{sql}");
         }
         assert!(
             LIST_SQL.contains("deleted_at IS NULL") && GET_SQL.contains("deleted_at IS NULL"),

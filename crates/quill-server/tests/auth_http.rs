@@ -223,7 +223,10 @@ async fn initial_admin_rejects_a_short_password_without_writing_a_row() {
         .expect("请求失败");
 
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(common::scalar_i64(&db.bridge(), "SELECT COUNT(*) AS c FROM users"), 0);
+    assert_eq!(
+        common::scalar_i64(&db.bridge(), "SELECT COUNT(*) AS c FROM users"),
+        0
+    );
 }
 
 // ------------------------------------------------------------ 登录
@@ -257,7 +260,10 @@ async fn a_valid_login_returns_a_usable_bearer_token() {
     assert_eq!(resp.status(), StatusCode::OK);
     let v = json_of(&body_text(resp).await);
     assert_eq!(v["token_type"], serde_json::json!("Bearer"));
-    let token = v["access_token"].as_str().expect("缺 access_token").to_string();
+    let token = v["access_token"]
+        .as_str()
+        .expect("缺 access_token")
+        .to_string();
     assert!(v["expires_in"].as_i64().expect("缺 expires_in") > 0);
     assert_eq!(v["user"]["username"], serde_json::json!("alice"));
     assert_eq!(v["user"]["role"], serde_json::json!("owner"));
@@ -539,7 +545,10 @@ async fn refresh_rotates_the_token_and_immediately_kills_the_old_one() {
         .as_str()
         .expect("缺 access_token")
         .to_string();
-    assert_ne!(new, old, "续期必须换一个新令牌，否则叫「续期」不如叫「复读」");
+    assert_ne!(
+        new, old,
+        "续期必须换一个新令牌，否则叫「续期」不如叫「复读」"
+    );
 
     let stale = app
         .oneshot(with_token("GET", "/api/auth/me", &old))
@@ -751,7 +760,11 @@ async fn a_session_token_cannot_reach_admin_only_routes() {
         .oneshot(with_token("GET", "/api/experts", &token))
         .await
         .expect("请求失败");
-    assert_eq!(allowed.status(), StatusCode::OK, "member 仍应能读自己的数据");
+    assert_eq!(
+        allowed.status(),
+        StatusCode::OK,
+        "member 仍应能读自己的数据"
+    );
 }
 
 // ------------------------------------------- 环境变量令牌也要过 users 行
@@ -840,5 +853,9 @@ async fn an_environment_token_takes_its_role_from_the_user_row_not_from_the_conf
         .oneshot(with_token("GET", "/api/experts", "tok-lying-admin"))
         .await
         .expect("请求失败");
-    assert_eq!(allowed.status(), StatusCode::OK, "member 仍应能读自己的数据");
+    assert_eq!(
+        allowed.status(),
+        StatusCode::OK,
+        "member 仍应能读自己的数据"
+    );
 }

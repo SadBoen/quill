@@ -68,8 +68,10 @@ pub async fn list(
     let visible = registry
         .list_visible(&user.0.user_id)
         .map_err(|e| crate::api_experts::agent_error_to_api("列出专家", e))?;
-    let mine: std::collections::HashSet<String> =
-        visible.iter().map(|e| e.id().as_str().to_string()).collect();
+    let mine: std::collections::HashSet<String> = visible
+        .iter()
+        .map(|e| e.id().as_str().to_string())
+        .collect();
 
     let items: Vec<Value> = page
         .items
@@ -165,7 +167,8 @@ pub async fn install(
 
     let mut skills: Vec<Value> = Vec::new();
     for s in &skill_slugs {
-        let entry = match crate::api_extensions::install_one_skill(&state, user.0.user_id, s).await {
+        let entry = match crate::api_extensions::install_one_skill(&state, user.0.user_id, s).await
+        {
             Ok(r) => json!({
                 "slug": r.slug,
                 "status": if r.already_present { "already_present" } else { "installed" },
@@ -240,7 +243,8 @@ mod tests {
         // 迁移 0005 只允许 [a-z0-9-]：写成 `skillhub:xxx` 会被数据库拒掉。
         let v = format!("{MARKET_SOURCE_PREFIX}{}", "pdf-toolkit");
         assert!(
-            v.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
+            v.chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
             "source_template 含 CHECK 不允许的字符：{v}"
         );
         assert!(v.len() <= 64, "source_template 也要过 64 上限：{v}");

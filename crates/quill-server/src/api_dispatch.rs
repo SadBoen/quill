@@ -80,13 +80,9 @@ pub async fn book(
     // 不存在的团队 id 也能拿到 200 与一份空记录。它把 B2-1 从「派工记录
     // 没有消费者」推进到「派工记录也不会凭空记」—— 注意**只是**不再
     // 凭空记，真正派子 agent 仍然是 M2 未完成的部分。
-    let exists = crate::teams_repo::exists_by_id(
-        state.db()?,
-        user.0.user_id,
-        team_id,
-    )
-    .await
-    .map_err(|e| agent_error_to_api("核对团队是否存在", e))?;
+    let exists = crate::teams_repo::exists_by_id(state.db()?, user.0.user_id, team_id)
+        .await
+        .map_err(|e| agent_error_to_api("核对团队是否存在", e))?;
     if !exists {
         return Err(ApiError::entity_not_found(format!(
             "团队 {team} 不存在（已软删的团队同样算不存在）。\
@@ -225,7 +221,9 @@ pub async fn run(
     let room_id = need_str(&body, "room_id")?;
     let round = need_round(&body)?;
     let leader = SessionId::parse(&need_str(&body, "leader_session_id")?).map_err(|e| {
-        ApiError::bad_request(format!("leader_session_id 非法（{e}）：应为 32 位十六进制。"))
+        ApiError::bad_request(format!(
+            "leader_session_id 非法（{e}）：应为 32 位十六进制。"
+        ))
     })?;
 
     let members = body
@@ -251,7 +249,13 @@ pub async fn run(
     for (i, m) in members.iter().enumerate() {
         only_keys(
             m,
-            &["expert", "member", "title", "instructions", "member_session_id"],
+            &[
+                "expert",
+                "member",
+                "title",
+                "instructions",
+                "member_session_id",
+            ],
             "members[]",
         )?;
         let expert = ExpertId::parse(&need_str(m, "expert")?)

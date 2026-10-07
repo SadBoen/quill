@@ -35,7 +35,10 @@ pub const MAX_SKILL_CHARS: usize = 20_000;
 
 // 与专家人格上限（`MAX_INSTRUCTIONS_CHARS` = 20000）同量级。用**编译期断言**钉住 ——
 // 这是常量不变量，原来的单测 assert 在构造上不会失败（clippy 提示是对的）。
-const _: () = assert!(MAX_SKILL_CHARS == 20_000, "SKILL 上限必须与专家人格上限同量级");
+const _: () = assert!(
+    MAX_SKILL_CHARS == 20_000,
+    "SKILL 上限必须与专家人格上限同量级"
+);
 
 pub const COLUMNS: &str = "name, version, source, source_ref, description, enabled, \
      content_hash, install_path, tool_allowlist_json, created_at, updated_at";
@@ -126,8 +129,8 @@ pub async fn upsert(
     hash: Vec<u8>,
 ) -> Result<SkillRow, quill_agent::AgentError> {
     let b = crate::db::blob_of(&uid);
-    let allow = serde_json::to_string(&row.tool_allowlist)
-        .map_err(|e| storage_error(OP_WRITE, e))?;
+    let allow =
+        serde_json::to_string(&row.tool_allowlist).map_err(|e| storage_error(OP_WRITE, e))?;
     db.call(move |pool, _rt| {
         Box::pin(async move {
             let now = now_ms();

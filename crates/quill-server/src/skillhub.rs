@@ -77,7 +77,8 @@ where
     D: serde::Deserializer<'de>,
 {
     let v = Option::<serde_json::Value>::deserialize(d)?;
-    Ok(v.and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default())
+    Ok(v.and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_default())
 }
 
 /// `labels.requires_api_key` 这一类**开关型字段**。
@@ -105,8 +106,7 @@ where
     D: serde::Deserializer<'de>,
 {
     let v = Option::<serde_json::Value>::deserialize(d)?;
-    Ok(v
-        .and_then(|v| serde_json::from_value(v).ok())
+    Ok(v.and_then(|v| serde_json::from_value(v).ok())
         .unwrap_or_default())
 }
 
@@ -309,7 +309,11 @@ async fn get_json(url: &str) -> Result<serde_json::Value, HubError> {
 async fn read_capped(resp: reqwest::Response, label: &str) -> Result<Vec<u8>, HubError> {
     let mut resp = resp;
     let mut buf: Vec<u8> = Vec::new();
-    while let Some(chunk) = resp.chunk().await.map_err(|e| HubError::Fetch(e.to_string()))? {
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|e| HubError::Fetch(e.to_string()))?
+    {
         if buf.len() as u64 + chunk.len() as u64 > MAX_HTTP_BYTES {
             // 数字照旧从上限本身算，不记「读了多少」—— 边界（正好 32 MiB 放行）
             // 与上面的判断是同一处，改这里就等于改了边界。
@@ -396,9 +400,7 @@ pub async fn fetch_skillset(slug: &str) -> Result<HubSkillSet, HubError> {
     let item: HubSkillSet =
         serde_json::from_value(raw).map_err(|e| HubError::Parse(e.to_string()))?;
     if item.slug.trim().is_empty() {
-        return Err(HubError::Parse(format!(
-            "技能集 {safe} 的详情里没有 slug"
-        )));
+        return Err(HubError::Parse(format!("技能集 {safe} 的详情里没有 slug")));
     }
     Ok(item)
 }
@@ -541,15 +543,16 @@ struct ShowcaseEnvelope {
 /// 搜单技能。空查询词会被上游当成 `q=a`（Octop 这么兜的），
 /// 我们照抄 —— 自己编一个默认词是替上游决定它该搜什么。
 pub async fn search_skills(query: &str, limit: u32) -> Result<Vec<HubSkill>, HubError> {
-    let q = if query.trim().is_empty() { "a" } else { query.trim() };
+    let q = if query.trim().is_empty() {
+        "a"
+    } else {
+        query.trim()
+    };
     let size = limit.clamp(1, 100);
-    let url = format!(
-        "{}/api/v1/search?q={}&limit={size}",
-        host(),
-        urlencode(q)
-    );
+    let url = format!("{}/api/v1/search?q={}&limit={size}", host(), urlencode(q));
     let value = get_json(&url).await?;
-    let env: SkillEnvelope = serde_json::from_value(value).map_err(|e| HubError::Parse(e.to_string()))?;
+    let env: SkillEnvelope =
+        serde_json::from_value(value).map_err(|e| HubError::Parse(e.to_string()))?;
     Ok(env.results)
 }
 
@@ -710,7 +713,10 @@ pub async fn showcase_all() -> Result<ShowcaseAll, HubError> {
         .map(|(kind, e)| (kind.clone(), e.message()))
         .collect();
 
-    Ok(ShowcaseAll { sections: by_kind, errors })
+    Ok(ShowcaseAll {
+        sections: by_kind,
+        errors,
+    })
 }
 
 /// 6 个榜单全挂时，把它们各自的结局**合成一个**，且**不丢类**。
@@ -1129,7 +1135,10 @@ mod tests {
         assert_eq!(urlencode("a&b"), "a%26b");
         assert_eq!(urlencode("a?b=c"), "a%3Fb%3Dc");
         assert_eq!(urlencode("a#b"), "a%23b");
-        assert_eq!(urlencode("中文 技能"), "%E4%B8%AD%E6%96%87%20%E6%8A%80%E8%83%BD");
+        assert_eq!(
+            urlencode("中文 技能"),
+            "%E4%B8%AD%E6%96%87%20%E6%8A%80%E8%83%BD"
+        );
         // 未转义的话，URL 会变成「search?q=a」再加一个 `&limit=999」之外的端点。
         assert!(!urlencode("a&b").contains('&'));
     }
@@ -1320,7 +1329,8 @@ mod tests {
 
     /// `labels.requires_api_key` 的真实形态（2026-10-06 实测）：
     /// 值是**字符串** `"true"`，不是布尔。
-    const REAL_LABELS_STRING: &str = r#"{"slug":"a","name":"A","labels":{"requires_api_key":"true"}}"#;
+    const REAL_LABELS_STRING: &str =
+        r#"{"slug":"a","name":"A","labels":{"requires_api_key":"true"}}"#;
     /// 同一字段的另一种形态：布尔。
     const REAL_LABELS_BOOL: &str = r#"{"slug":"a","name":"A","labels":{"requires_api_key":true}}"#;
 
@@ -1345,10 +1355,7 @@ mod tests {
             r#"{"slug":"a","name":"A","labels":{"requires_api_key":"false"}}"#,
         ] {
             let skill: HubSkill = serde_json::from_str(raw).expect("应当能解析");
-            assert!(
-                !skill.labels.requires_api_key(),
-                "不该标成需要密钥：{raw}"
-            );
+            assert!(!skill.labels.requires_api_key(), "不该标成需要密钥：{raw}");
         }
     }
 
@@ -1499,7 +1506,10 @@ mod tests {
             oversize.contains("/api/v1/skillsets/big/download"),
             "要说出是哪个接口：{oversize}"
         );
-        assert!(oversize.contains("下一步"), "每条错误都要有下一步：{oversize}");
+        assert!(
+            oversize.contains("下一步"),
+            "每条错误都要有下一步：{oversize}"
+        );
 
         // 4. 两句必须**真的不同**，不是同一句话的两种写法。
         let transport = HubError::Fetch("connection reset".into()).message();
@@ -1612,10 +1622,7 @@ mod tests {
         );
         let m = err.message();
         for wrong in ["连不上", "检查网络", "先确认网络能到上游", "可达的"] {
-            assert!(
-                !m.contains(wrong),
-                "混因时也不能给网络口径的话：{m}"
-            );
+            assert!(!m.contains(wrong), "混因时也不能给网络口径的话：{m}");
         }
         // 反过来：传输失败那一路**也要说清楚**，否则用户只看到「都太大」，
         // 而其实还有几个是真的够不着。
@@ -1694,7 +1701,8 @@ mod tests {
     }
 
     #[test]
-    fn every_failure_has_a_next_step_and_no_advice_talks_about_the_model_server() {        // 兜底检查：这几条是用户唯一会照着做的内容，
+    fn every_failure_has_a_next_step_and_no_advice_talks_about_the_model_server() {
+        // 兜底检查：这几条是用户唯一会照着做的内容，
         // 一旦混进模型服务的话术，后果比不给建议更糟。
         let all = [
             HubError::Fetch("timeout".into()).message(),
@@ -1703,8 +1711,11 @@ mod tests {
             HubError::Status(500).message(),
             HubError::Status(401).message(),
             HubError::Input("slug".into()).message(),
-            HubError::TooLarge { label: "/api/v1/search".into(), limit: MAX_HTTP_BYTES }
-                .message(),
+            HubError::TooLarge {
+                label: "/api/v1/search".into(),
+                limit: MAX_HTTP_BYTES,
+            }
+            .message(),
         ];
         for m in &all {
             assert!(m.contains("下一步"), "这句没有下一步：{m}");

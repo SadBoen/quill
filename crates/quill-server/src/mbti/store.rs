@@ -90,13 +90,16 @@ pub async fn insert(
     db.call(move |pool, _rt| {
         Box::pin(async move {
             let mut id = [0u8; 16];
-            getrandom::fill(&mut id).map_err(|e| {
-                quill_agent::AgentError::Storage { detail: format!("mbti result id: {e}") }
+            getrandom::fill(&mut id).map_err(|e| quill_agent::AgentError::Storage {
+                detail: format!("mbti result id: {e}"),
             })?;
 
-            let mut tx = pool.begin().await.map_err(|e| {
-                quill_agent::AgentError::Storage { detail: format!("mbti begin: {e}") }
-            })?;
+            let mut tx = pool
+                .begin()
+                .await
+                .map_err(|e| quill_agent::AgentError::Storage {
+                    detail: format!("mbti begin: {e}"),
+                })?;
             let inserted = sqlx::query(
                 "INSERT INTO mbti_results (id, owner_user_id, code, dimensions_json, \
                    answers_json, applied_expert_id, created_at) \
@@ -110,8 +113,8 @@ pub async fn insert(
             .bind(now)
             .execute(&mut *tx)
             .await
-            .map_err(|e| {
-                quill_agent::AgentError::Storage { detail: format!("insert mbti result: {e}") }
+            .map_err(|e| quill_agent::AgentError::Storage {
+                detail: format!("insert mbti result: {e}"),
             })?;
             let row_id = inserted.last_insert_rowid();
 
@@ -125,13 +128,15 @@ pub async fn insert(
             .bind(KEEP_RECORDS)
             .execute(&mut *tx)
             .await
-            .map_err(|e| {
-                quill_agent::AgentError::Storage { detail: format!("prune mbti results: {e}") }
+            .map_err(|e| quill_agent::AgentError::Storage {
+                detail: format!("prune mbti results: {e}"),
             })?;
 
-            tx.commit().await.map_err(|e| {
-                quill_agent::AgentError::Storage { detail: format!("mbti commit: {e}") }
-            })?;
+            tx.commit()
+                .await
+                .map_err(|e| quill_agent::AgentError::Storage {
+                    detail: format!("mbti commit: {e}"),
+                })?;
             Ok::<i64, quill_agent::AgentError>(row_id)
         })
     })
@@ -157,8 +162,8 @@ pub async fn list(
                     .bind(limit)
                     .fetch_all(&pool)
                     .await
-                    .map_err(|e| {
-                        quill_agent::AgentError::Storage { detail: format!("list mbti results: {e}") }
+                    .map_err(|e| quill_agent::AgentError::Storage {
+                        detail: format!("list mbti results: {e}"),
                     })
             })
         })
@@ -191,8 +196,8 @@ pub async fn get_by_row_id(
                     .bind(&uid)
                     .fetch_optional(&pool)
                     .await
-                    .map_err(|e| {
-                        quill_agent::AgentError::Storage { detail: format!("get mbti result: {e}") }
+                    .map_err(|e| quill_agent::AgentError::Storage {
+                        detail: format!("get mbti result: {e}"),
                     })
             })
         })
@@ -225,8 +230,8 @@ pub async fn mark_applied(
             .bind(&uid)
             .execute(&pool)
             .await
-            .map_err(|e| {
-                quill_agent::AgentError::Storage { detail: format!("mark mbti applied: {e}") }
+            .map_err(|e| quill_agent::AgentError::Storage {
+                detail: format!("mark mbti applied: {e}"),
             })?;
             Ok::<(), quill_agent::AgentError>(())
         })

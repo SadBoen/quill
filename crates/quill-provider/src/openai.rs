@@ -11,8 +11,8 @@ use crate::provider::{BoxFuture, Provider, ProviderStream};
 use crate::sse::{SseDecoder, SseEvent};
 use crate::types::{ChatRequest, ChatResponse, ModelInfo, StreamDelta, StreamSummary};
 use crate::wire::{
-    build_request_body, parse_chat_response, parse_models_list, parse_stream_chunk, usage_from_value,
-    StreamChunk, ToolCallAssembler,
+    build_request_body, parse_chat_response, parse_models_list, parse_stream_chunk,
+    usage_from_value, StreamChunk, ToolCallAssembler,
 };
 
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -141,7 +141,10 @@ impl OpenAiCompatible {
 }
 
 async fn read_json(response: Response, url: &str) -> Result<Value, ProviderError> {
-    let text = response.text().await.map_err(|e| classify_transport(url, &e))?;
+    let text = response
+        .text()
+        .await
+        .map_err(|e| classify_transport(url, &e))?;
     serde_json::from_str(&text).map_err(|e| ProviderError::MalformedResponse {
         detail: format!("响应体不是合法 JSON：{e}。原文：{}", excerpt(&text)),
     })
@@ -412,8 +415,7 @@ mod tests {
     #[test]
     fn a_non_http_base_url_is_a_not_configured_error() {
         for bad in ["", "   ", "127.0.0.1:8080", "ftp://x"] {
-            let err = OpenAiCompatible::new(bad, "m", None)
-                .expect_err("非 http base_url 必须被拒");
+            let err = OpenAiCompatible::new(bad, "m", None).expect_err("非 http base_url 必须被拒");
             assert!(matches!(err, ProviderError::NotConfigured { .. }), "{bad}");
         }
     }
@@ -430,7 +432,11 @@ mod tests {
 
     #[test]
     fn a_404_becomes_model_not_found() {
-        let err = classify_status("qwen2.5-3b", 404, r#"{"error":{"message":"no such endpoint"}}"#);
+        let err = classify_status(
+            "qwen2.5-3b",
+            404,
+            r#"{"error":{"message":"no such endpoint"}}"#,
+        );
         assert!(matches!(err, ProviderError::ModelNotFound { model, .. } if model == "qwen2.5-3b"));
     }
 
@@ -442,7 +448,11 @@ mod tests {
 
     #[test]
     fn a_400_about_something_else_stays_a_plain_status() {
-        let err = classify_status("m", 400, r#"{"error":{"message":"'messages' is required"}}"#);
+        let err = classify_status(
+            "m",
+            400,
+            r#"{"error":{"message":"'messages' is required"}}"#,
+        );
         assert!(matches!(err, ProviderError::Status { code: 400, .. }));
     }
 
@@ -505,12 +515,8 @@ mod tests {
             r#"{"id":"c1","model":"m","choices":[{"delta":{"content":"好"}}]}"#,
             r#"{"id":"c1","model":"m","choices":[{"delta":{},"finish_reason":"stop"}]}"#,
         ] {
-            let step = step_event(
-                &SseEvent::Data(payload.into()),
-                &mut tools,
-                &mut summary,
-            )
-            .expect("合法帧不应报错");
+            let step = step_event(&SseEvent::Data(payload.into()), &mut tools, &mut summary)
+                .expect("合法帧不应报错");
             match step {
                 Step::Deltas(ds) => deltas.extend(ds),
                 Step::Stop => panic!("这一帧不是 DONE"),
@@ -548,8 +554,7 @@ mod tests {
             assert!(deltas.is_empty(), "工具调用没拼完不能提前发");
         }
 
-        let last =
-            r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":7,"completion_tokens":2}}"#;
+        let last = r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":7,"completion_tokens":2}}"#;
         match step_event(&SseEvent::Data(last.into()), &mut tools, &mut summary)
             .expect("合法帧不应报错")
         {

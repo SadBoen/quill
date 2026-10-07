@@ -22,13 +22,19 @@ async fn the_local_profile_answers_a_real_question() {
     assert!(!models.is_empty(), "本地服务应当至少报告一个模型");
 
     let got = provider
-        .chat(&ChatRequest::new("", vec![Message::user("用一句话回答：1+1等于几？")])
-            .with_temperature(0.1)
-            .with_max_tokens(900))
+        .chat(
+            &ChatRequest::new("", vec![Message::user("用一句话回答：1+1等于几？")])
+                .with_temperature(0.1)
+                .with_max_tokens(900),
+        )
         .await
         .expect("真实推理必须成功");
 
     eprintln!("answer={:?} usage={:?}", got.answer(), got.usage.total());
     assert!(got.has_answer(), "真机上必须拿到正文");
-    assert!(got.answer().contains('2'), "答案里应含 2，实际 {:?}", got.answer());
+    assert!(
+        got.answer().contains('2'),
+        "答案里应含 2，实际 {:?}",
+        got.answer()
+    );
 }

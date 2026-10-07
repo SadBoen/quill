@@ -614,8 +614,8 @@ mod tests {
     #[test]
     fn sixteen_profiles_cover_every_combination() {
         let want = [
-            "ISTJ", "ISFJ", "INFJ", "INTJ", "ISTP", "ISFP", "INFP", "INTP", "ESTP", "ESFP",
-            "ENFP", "ENTP", "ESTJ", "ESFJ", "ENFJ", "ENTJ",
+            "ISTJ", "ISFJ", "INFJ", "INTJ", "ISTP", "ISFP", "INFP", "INTP", "ESTP", "ESFP", "ENFP",
+            "ENTP", "ESTJ", "ESFJ", "ENFJ", "ENTJ",
         ];
         assert_eq!(PROFILES.len(), 16, "档案数必须正好 16");
         for code in want {
@@ -625,7 +625,10 @@ mod tests {
             assert_eq!(p.dimensions.sn.pole, &p.code[1..2], "{code} 的 sn 极对不上");
             assert_eq!(p.dimensions.tf.pole, &p.code[2..3], "{code} 的 tf 极对不上");
             assert_eq!(p.dimensions.jp.pole, &p.code[3..4], "{code} 的 jp 极对不上");
-            assert!(!p.name_zh.is_empty() && !p.name_en.is_empty(), "{code} 缺名字");
+            assert!(
+                !p.name_zh.is_empty() && !p.name_en.is_empty(),
+                "{code} 缺名字"
+            );
             assert!(!p.summary_zh.is_empty(), "{code} 缺中文一句话");
             assert!(p.color.starts_with('#'), "{code} 的 color 不是 hex");
         }

@@ -21,7 +21,8 @@ pub fn derive_user_id(name: &str) -> Result<UserId, ControlError> {
     }
     let digest = Sha256::digest(format!("quill-user:{norm}").as_bytes());
     let hex: String = digest[..16].iter().map(|b| format!("{b:02x}")).collect();
-    UserId::parse(&hex).map_err(|e| invalid_identity(format!("由用户名 {name:?} 派生的 ID 非法：{e}")))
+    UserId::parse(&hex)
+        .map_err(|e| invalid_identity(format!("由用户名 {name:?} 派生的 ID 非法：{e}")))
 }
 
 /// 令牌条目里写的身份：显式 ID，或以 `@` 开头的用户名。
@@ -49,9 +50,9 @@ pub fn parse_token_subject(raw: &str) -> Result<TokenSubject, ControlError> {
         }
         Ok(TokenSubject::Named(name.trim().to_string()))
     } else {
-        UserId::parse(t)
-            .map(TokenSubject::Id)
-            .map_err(|e| invalid_identity(format!("令牌身份 {t:?} 既不是 @用户名 也不是合法 ID：{e}")))
+        UserId::parse(t).map(TokenSubject::Id).map_err(|e| {
+            invalid_identity(format!("令牌身份 {t:?} 既不是 @用户名 也不是合法 ID：{e}"))
+        })
     }
 }
 

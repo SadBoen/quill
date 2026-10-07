@@ -200,9 +200,7 @@ impl WikiStore {
         // 缺页是「资源不存在」，不是 I/O 故障：混进 Io 会让调用方把 404 报成 500。
         let text = match read_utf8(&p) {
             Ok(t) => t,
-            Err(WikiError::Io { source, .. })
-                if source.kind() == io::ErrorKind::NotFound =>
-            {
+            Err(WikiError::Io { source, .. }) if source.kind() == io::ErrorKind::NotFound => {
                 return Err(WikiError::NotFound(rel.to_string()))
             }
             Err(other) => return Err(other),

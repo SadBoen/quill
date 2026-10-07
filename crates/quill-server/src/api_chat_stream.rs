@@ -184,7 +184,10 @@ mod tests {
         let text_frame = rx.try_recv().expect("应当先来正文增量");
         assert_eq!(text_frame.event, "delta");
         assert_eq!(text_frame.data["text"], "先说一句");
-        assert_eq!(rx.try_recv().expect("应当接着来思考增量").data["kind"], "reasoning");
+        assert_eq!(
+            rx.try_recv().expect("应当接着来思考增量").data["kind"],
+            "reasoning"
+        );
 
         emitter.discard(1);
         let frame = rx.try_recv().expect("应当有一帧 discard");

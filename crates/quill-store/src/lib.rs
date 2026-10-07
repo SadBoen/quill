@@ -374,8 +374,15 @@ impl MigrationReport {
 #[derive(Debug)]
 pub enum MigrateError {
     Ledger(sqlx::Error),
-    Drift { version: i64, name: String },
-    Apply { version: i64, name: String, source: sqlx::Error },
+    Drift {
+        version: i64,
+        name: String,
+    },
+    Apply {
+        version: i64,
+        name: String,
+        source: sqlx::Error,
+    },
 }
 
 impl std::fmt::Display for MigrateError {
@@ -391,7 +398,11 @@ impl std::fmt::Display for MigrateError {
                  但也别顺手改：注释一改，别人读这份文件时看到的就是新说法，\
                  而已经建好的库里跑的是旧写法。"
             ),
-            Self::Apply { version, name, source } => {
+            Self::Apply {
+                version,
+                name,
+                source,
+            } => {
                 write!(f, "应用迁移 {version}（{name}）失败：{source}")
             }
         }
@@ -436,11 +447,13 @@ pub async fn migrate(pool: &SqlitePool) -> Result<MigrationReport, MigrateError>
         }
 
         let started = std::time::Instant::now();
-        run_migration(pool, m.sql).await.map_err(|source| MigrateError::Apply {
-            version: m.version,
-            name: m.name.to_string(),
-            source,
-        })?;
+        run_migration(pool, m.sql)
+            .await
+            .map_err(|source| MigrateError::Apply {
+                version: m.version,
+                name: m.name.to_string(),
+                source,
+            })?;
         let exec_ms = started.elapsed().as_millis() as i64;
 
         // 0001 自己建出 schema_version，所以这里必然已经存在该表。
@@ -671,11 +684,10 @@ mod tests {
             .expect("应当有 0007");
         run_migration(&pool, m7.sql).await.expect("0007 迁移");
 
-        let t: String =
-            sqlx::query_scalar("SELECT transport FROM mcp_servers WHERE name='old'")
-                .fetch_one(&pool)
-                .await
-                .expect("老行必须还在");
+        let t: String = sqlx::query_scalar("SELECT transport FROM mcp_servers WHERE name='old'")
+            .fetch_one(&pool)
+            .await
+            .expect("老行必须还在");
         assert_eq!(
             t, "streamable_http",
             "老库的 'http' 必须被改名而不是丢掉：数据丢失是静默的，几个月后才发现"
@@ -691,19 +703,15 @@ mod tests {
         .expect("三列应可写");
 
         // 旧枚举必须被拒：'http' 已经不合法了。
-        let bad = sqlx::query(
-            "UPDATE mcp_servers SET transport='http' WHERE name='old'",
-        )
-        .execute(&pool)
-        .await;
+        let bad = sqlx::query("UPDATE mcp_servers SET transport='http' WHERE name='old'")
+            .execute(&pool)
+            .await;
         assert!(bad.is_err(), "'http' 已不是合法 transport，CHECK 必须挡住");
 
         // 并发上限的边界。
-        let bad2 = sqlx::query(
-            "UPDATE mcp_servers SET max_concurrent_calls=0 WHERE name='old'",
-        )
-        .execute(&pool)
-        .await;
+        let bad2 = sqlx::query("UPDATE mcp_servers SET max_concurrent_calls=0 WHERE name='old'")
+            .execute(&pool)
+            .await;
         assert!(bad2.is_err(), "并发上限为 0 没有意义，CHECK 必须挡住");
 
         // 三态能力：必须是合法 JSON 数组。
@@ -1075,7 +1083,12 @@ mod tests {
         let pool = in_memory().await.expect("内存库");
         migrate(&pool).await.expect("迁移");
 
-        async fn insert(pool: &sqlx::SqlitePool, id: &str, instructions: &str, model: Option<&str>) -> Result<(), sqlx::Error> {
+        async fn insert(
+            pool: &sqlx::SqlitePool,
+            id: &str,
+            instructions: &str,
+            model: Option<&str>,
+        ) -> Result<(), sqlx::Error> {
             let sql = format!(
                 "INSERT INTO experts (id, owner_user_id, display_name, version, description, \
                  role_summary, visibility, tool_policy_json, tags_json, license, \
@@ -1151,7 +1164,11 @@ mod tests {
         let pool = in_memory().await.expect("内存库");
         migrate(&pool).await.expect("迁移");
 
-        async fn insert(pool: &sqlx::SqlitePool, id: &str, src: Option<&str>) -> Result<(), sqlx::Error> {
+        async fn insert(
+            pool: &sqlx::SqlitePool,
+            id: &str,
+            src: Option<&str>,
+        ) -> Result<(), sqlx::Error> {
             let sql = format!(
                 "INSERT INTO experts (id, owner_user_id, display_name, version, description, \
                  role_summary, visibility, tool_policy_json, tags_json, license, \
@@ -1161,11 +1178,7 @@ mod tests {
                  'user_authored', '{{}}', '[]', '', 1, 0, zeroblob(32), zeroblob(32), 0, 0, 0, \
                  NULL, ?)"
             );
-            sqlx::query(&sql)
-                .bind(src)
-                .execute(pool)
-                .await
-                .map(|_| ())
+            sqlx::query(&sql).bind(src).execute(pool).await.map(|_| ())
         }
 
         insert(&pool, "prog-1", Some("ai-coding-coach"))
@@ -1192,10 +1205,11 @@ mod tests {
         insert(&pool, "handmade", None)
             .await
             .expect("NULL = 不来自模板，必须合法");
-        let n: i64 = sqlx::query_scalar("SELECT count(*) FROM experts WHERE source_template IS NULL")
-            .fetch_one(&pool)
-            .await
-            .expect("查 NULL 语义");
+        let n: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM experts WHERE source_template IS NULL")
+                .fetch_one(&pool)
+                .await
+                .expect("查 NULL 语义");
         assert_eq!(n, 1, "source_template 必须允许 NULL（手建 / 内置专家）");
 
         insert(&pool, "edge-64", Some(&"a".repeat(64)))
@@ -1211,7 +1225,9 @@ mod tests {
             ("65 个字符", too_long.as_str()),
         ] {
             assert!(
-                insert(&pool, &format!("bad-{}", label), Some(bad)).await.is_err(),
+                insert(&pool, &format!("bad-{}", label), Some(bad))
+                    .await
+                    .is_err(),
                 "不合法的模板 id {label}（{bad:?}）必须被 CHECK 拒掉"
             );
         }
@@ -1333,8 +1349,14 @@ mod tests {
 
     #[test]
     fn checksum_is_stable_and_label_sensitive() {
-        assert_eq!(checksum("CREATE TABLE a(x);"), checksum("CREATE TABLE a(x);"));
-        assert_ne!(checksum("CREATE TABLE a(x);"), checksum("CREATE TABLE a(y);"));
+        assert_eq!(
+            checksum("CREATE TABLE a(x);"),
+            checksum("CREATE TABLE a(x);")
+        );
+        assert_ne!(
+            checksum("CREATE TABLE a(x);"),
+            checksum("CREATE TABLE a(y);")
+        );
     }
 
     #[test]
@@ -1359,7 +1381,10 @@ mod tests {
     #[test]
     fn structural_change_is_still_drift() {
         // 摘要不看注释，但不能连结构一起不看。
-        assert_ne!(checksum("CREATE TABLE a(x);"), checksum("CREATE TABLE a(x, y);"));
+        assert_ne!(
+            checksum("CREATE TABLE a(x);"),
+            checksum("CREATE TABLE a(x, y);")
+        );
         // 顺序也算结构。
         assert_ne!(
             checksum("CREATE TABLE a(x); CREATE TABLE b(y);"),
@@ -1372,7 +1397,10 @@ mod tests {
         // 字符串里的 '--' 不是注释，不能从中间截断。
         let sql = "INSERT INTO t(v) VALUES('a--b');";
         assert_eq!(structural(sql), format!("{sql}\n"));
-        assert_ne!(structural(sql), structural("INSERT INTO t(v) VALUES('ab');"));
+        assert_ne!(
+            structural(sql),
+            structural("INSERT INTO t(v) VALUES('ab');")
+        );
     }
 
     #[test]

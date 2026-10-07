@@ -35,10 +35,7 @@ use crate::state::AppState;
 
 // ------------------------------------------------------------------ REST 线
 
-pub async fn list(
-    State(state): State<AppState>,
-    user: AuthUser,
-) -> Result<Json<Value>, ApiError> {
+pub async fn list(State(state): State<AppState>, user: AuthUser) -> Result<Json<Value>, ApiError> {
     let rows = store::list(state.db()?, user.0.user_id).await?;
     Ok(Json(json!({
         "channels": rows.iter().map(store::to_public).collect::<Vec<Value>>(),
@@ -193,7 +190,9 @@ pub async fn weixin_qr_poll(
         .and_then(weixin_base_of)
         .unwrap_or_else(|| weixin::DEFAULT_BASE_URL.to_string());
 
-    let st = weixin::poll_qr_status(&base, &token).await.map_err(ilink_err)?;
+    let st = weixin::poll_qr_status(&base, &token)
+        .await
+        .map_err(ilink_err)?;
     match st {
         QrStatus::Waiting => Ok(Json(json!({ "status": "wait" }))),
         QrStatus::Scanned => Ok(Json(json!({ "status": "scaned" }))),
@@ -330,8 +329,9 @@ impl ActiveChannels {
     }
 }
 
-static ACTIVE: std::sync::LazyLock<ActiveChannels> =
-    std::sync::LazyLock::new(|| ActiveChannels(std::sync::Mutex::new(std::collections::HashSet::new())));
+static ACTIVE: std::sync::LazyLock<ActiveChannels> = std::sync::LazyLock::new(|| {
+    ActiveChannels(std::sync::Mutex::new(std::collections::HashSet::new()))
+});
 
 /// 长轮询主循环。**不自己重试** —— 退避重连是下一轮的事（见 BACKLOG B6-5）。
 ///
@@ -465,7 +465,8 @@ async fn handle_turn(
     )
     .await?;
     let mut sink = crate::api_chat::NullSink;
-    let outcome = crate::api_chat::run_turn(&mut prep, crate::api_chat::ReplyMode::Once, &mut sink).await?;
+    let outcome =
+        crate::api_chat::run_turn(&mut prep, crate::api_chat::ReplyMode::Once, &mut sink).await?;
     let done = crate::api_chat::finish_turn(&prep, outcome).await?;
 
     Ok(done
@@ -491,7 +492,13 @@ async fn session_for_peer(
         match crate::api_chat::parse_public_id(&existing) {
             Ok(sid) => {
                 // 会话可能已被用户删掉；查一下再用，别对着空气跑一轮。
-                if crate::api_chat::session_exists(db, quill_domain::UserId::from_bytes(row.owner), sid).await? {
+                if crate::api_chat::session_exists(
+                    db,
+                    quill_domain::UserId::from_bytes(row.owner),
+                    sid,
+                )
+                .await?
+                {
                     return Ok(sid);
                 }
             }
@@ -510,7 +517,11 @@ async fn session_for_peer(
         &format!("微信 · {}", &peer[..peer.len().min(12)]),
     )
     .await?;
-    put_at(sync, &["sessions", peer], json!(crate::api_chat::session_hex(&sid)));
+    put_at(
+        sync,
+        &["sessions", peer],
+        json!(crate::api_chat::session_hex(&sid)),
+    );
     Ok(sid)
 }
 
@@ -625,7 +636,9 @@ fn validate_config(kind: &str, config: &mut Value) -> Result<(), ApiError> {
 /// 通道 id 会进路由，必须是不含路径分隔符与空白的一段。
 fn validate_channel_id(id: &str) -> Result<(), ApiError> {
     if id.is_empty() || id.len() > 64 {
-        return Err(ApiError::bad_request("channel_id 长度必须在 1 到 64 之间。"));
+        return Err(ApiError::bad_request(
+            "channel_id 长度必须在 1 到 64 之间。",
+        ));
     }
     if !id
         .chars()

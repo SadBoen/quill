@@ -264,7 +264,9 @@ impl ApiError {
     /// 客户端该等多久再重试。非 429 一律为 `None`。
     pub fn retry_after_secs(&self) -> Option<u64> {
         match self {
-            Self::TooManyRequests { retry_after_secs, .. } => Some(*retry_after_secs),
+            Self::TooManyRequests {
+                retry_after_secs, ..
+            } => Some(*retry_after_secs),
             _ => None,
         }
     }
@@ -279,7 +281,8 @@ impl ApiError {
             Self::Conflict { .. } => StatusCode::CONFLICT,
             Self::Unprocessable { .. } => StatusCode::UNPROCESSABLE_ENTITY,
             Self::NotImplemented { .. } => StatusCode::NOT_IMPLEMENTED,
-            Self::StorageUnavailable { .. } | Self::ProviderUnavailable { .. }
+            Self::StorageUnavailable { .. }
+            | Self::ProviderUnavailable { .. }
             | Self::UpstreamUnavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
             // 与 `ProviderUnavailable` 同一个状态码：**请求确实没拿到结果**。
             // 分开的是「下一步」说什么，不是「算不算失败」。
@@ -503,7 +506,11 @@ mod tests {
         );
         for e in [dead, alive] {
             let n = e.next_step();
-            assert!(n.chars().count() > 20, "{:?} 的下一步太短，说不清怎么做：{n}", e.code());
+            assert!(
+                n.chars().count() > 20,
+                "{:?} 的下一步太短，说不清怎么做：{n}",
+                e.code()
+            );
             // 「能照着做」的最低要求：给得出一个可执行的东西（命令 / 键名 / 具体动作）。
             let actionable = n.contains('`') || n.contains("下一步") || n.contains("；");
             assert!(actionable, "{:?} 的下一步里没有可执行的动作：{n}", e.code());
@@ -524,9 +531,18 @@ mod tests {
             "provider_unavailable",
             "不收敛与连不上是两件事，错误码必须分开"
         );
-        assert_ne!(e.code(), "provider_rejected", "这里什么都没报错，别编一个错误出来");
+        assert_ne!(
+            e.code(),
+            "provider_rejected",
+            "这里什么都没报错，别编一个错误出来"
+        );
 
-        for wrong in ["确认端点活着", "启动 llama-server", "llama-server", "回了一个错误状态码"] {
+        for wrong in [
+            "确认端点活着",
+            "启动 llama-server",
+            "llama-server",
+            "回了一个错误状态码",
+        ] {
             assert!(
                 !e.next_step().contains(wrong),
                 "「下一步」里不该出现「{wrong}」：{}",
@@ -539,7 +555,10 @@ mod tests {
             "下一步要与 detail 里的处置方向一致：{}",
             e.next_step()
         );
-        assert!(e.detail().contains("4 轮"), "detail 要如实说清是第几轮用尽的");
+        assert!(
+            e.detail().contains("4 轮"),
+            "detail 要如实说清是第几轮用尽的"
+        );
     }
 
     #[test]

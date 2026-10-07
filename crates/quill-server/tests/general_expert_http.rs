@@ -1,4 +1,4 @@
-﻿//! 「不允许未选角色就聊天」这条规则的端到端验收。
+//! 「不允许未选角色就聊天」这条规则的端到端验收。
 //!
 //! 过去的漏洞：`POST /api/sessions` 允许 `expert_id` 缺省，建出来的会话
 //! `expert_id = null`，对话页把它归进「默认（未选角色）」分组 ——
@@ -239,7 +239,14 @@ async fn creating_a_session_also_materialises_the_general_expert() {
     let t = fixture("general-expert-materialise");
     let app = state(&t);
 
-    call(&app, "POST", "/api/sessions", TOKEN_A, Some(serde_json::json!({}))).await;
+    call(
+        &app,
+        "POST",
+        "/api/sessions",
+        TOKEN_A,
+        Some(serde_json::json!({})),
+    )
+    .await;
 
     let v = call(&app, "GET", "/api/experts", TOKEN_A, None).await;
     let list = v["experts"].as_array().expect("experts 必须是数组");
@@ -258,7 +265,14 @@ async fn the_general_expert_is_not_duplicated_or_overwritten() {
     let app = state(&t);
 
     for _ in 0..3 {
-        call(&app, "POST", "/api/sessions", TOKEN_A, Some(serde_json::json!({}))).await;
+        call(
+            &app,
+            "POST",
+            "/api/sessions",
+            TOKEN_A,
+            Some(serde_json::json!({})),
+        )
+        .await;
     }
 
     call(
@@ -270,7 +284,14 @@ async fn the_general_expert_is_not_duplicated_or_overwritten() {
     )
     .await;
 
-    call(&app, "POST", "/api/sessions", TOKEN_A, Some(serde_json::json!({}))).await;
+    call(
+        &app,
+        "POST",
+        "/api/sessions",
+        TOKEN_A,
+        Some(serde_json::json!({})),
+    )
+    .await;
 
     let v = call(&app, "GET", "/api/experts/general", TOKEN_A, None).await;
     assert_eq!(
@@ -293,7 +314,14 @@ async fn each_user_gets_their_own_general_expert() {
     let t = fixture("general-expert-isolation");
     let app = state(&t);
 
-    call(&app, "POST", "/api/sessions", TOKEN_A, Some(serde_json::json!({}))).await;
+    call(
+        &app,
+        "POST",
+        "/api/sessions",
+        TOKEN_A,
+        Some(serde_json::json!({})),
+    )
+    .await;
     call(
         &app,
         "PATCH",
@@ -303,7 +331,14 @@ async fn each_user_gets_their_own_general_expert() {
     )
     .await;
 
-    call(&app, "POST", "/api/sessions", TOKEN_B, Some(serde_json::json!({}))).await;
+    call(
+        &app,
+        "POST",
+        "/api/sessions",
+        TOKEN_B,
+        Some(serde_json::json!({})),
+    )
+    .await;
 
     let v = call(&app, "GET", "/api/experts/general", TOKEN_B, None).await;
     assert_ne!(

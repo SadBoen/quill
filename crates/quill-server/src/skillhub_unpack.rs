@@ -47,14 +47,12 @@ impl UnpackError {
                 "技能包解不开（不是有效的 zip）。下一步：这个包可能是上游坏了或被中途截断，\
                  换一个试试。详情：{d}"
             ),
-            UnpackError::Refused(why) => format!(
-                "这个技能包因为安全检查没过，没有安装。下一步：{why}"
-            ),
-            UnpackError::NoSkill => {
-                "这个包里没有可用的技能正文（.md）。下一步：换一个技能包；\
-                 如果这是单技能，它可能缺 SKILL.md。"
-                    .to_string()
+            UnpackError::Refused(why) => {
+                format!("这个技能包因为安全检查没过，没有安装。下一步：{why}")
             }
+            UnpackError::NoSkill => "这个包里没有可用的技能正文（.md）。下一步：换一个技能包；\
+                 如果这是单技能，它可能缺 SKILL.md。"
+                .to_string(),
         }
     }
 }
@@ -128,7 +126,9 @@ fn unpack_with(bytes: &[u8], kind: PackageKind) -> Result<Unpacked, UnpackError>
     let mut skipped_other: usize = 0;
 
     for i in 0..zip.len() {
-        let mut entry = zip.by_index(i).map_err(|e| UnpackError::Zip(e.to_string()))?;
+        let mut entry = zip
+            .by_index(i)
+            .map_err(|e| UnpackError::Zip(e.to_string()))?;
         if entry.is_dir() {
             continue;
         }
@@ -299,7 +299,10 @@ pub struct SkillsetContents {
 /// 并如实回报「这个包没有列出技能」。
 /// 理由是人格本身是完整可用的 —— 为了一个描述性字段把整单废掉，
 /// 比装上一个用户能看见、也能改的专家更糟。这是**我们的选择**，不是上游做法。
-pub fn skillset_contents(bytes: &[u8], skillset_slug: &str) -> Result<SkillsetContents, UnpackError> {
+pub fn skillset_contents(
+    bytes: &[u8],
+    skillset_slug: &str,
+) -> Result<SkillsetContents, UnpackError> {
     let reader = std::io::Cursor::new(bytes);
     let mut zip = zip::ZipArchive::new(reader).map_err(|e| UnpackError::Zip(e.to_string()))?;
     guard_entry_count(zip.len())?;
@@ -309,7 +312,9 @@ pub fn skillset_contents(bytes: &[u8], skillset_slug: &str) -> Result<SkillsetCo
     let mut manifest_text: Option<String> = None;
 
     for i in 0..zip.len() {
-        let mut entry = zip.by_index(i).map_err(|e| UnpackError::Zip(e.to_string()))?;
+        let mut entry = zip
+            .by_index(i)
+            .map_err(|e| UnpackError::Zip(e.to_string()))?;
         if entry.is_dir() {
             continue;
         }
@@ -344,12 +349,15 @@ pub fn skillset_contents(bytes: &[u8], skillset_slug: &str) -> Result<SkillsetCo
         }
         false => match first_in_skillsets {
             Some(name) => {
-                let mut entry =
-                    zip.by_name(&name).map_err(|e| UnpackError::Zip(e.to_string()))?;
+                let mut entry = zip
+                    .by_name(&name)
+                    .map_err(|e| UnpackError::Zip(e.to_string()))?;
                 read_persona_entry(&mut entry, &name)?
             }
             None => {
-                let mut entry = zip.by_name("identify.md").map_err(|_| UnpackError::NoSkill)?;
+                let mut entry = zip
+                    .by_name("identify.md")
+                    .map_err(|_| UnpackError::NoSkill)?;
                 read_persona_entry(&mut entry, "identify.md")?
             }
         },
@@ -365,7 +373,10 @@ pub fn skillset_contents(bytes: &[u8], skillset_slug: &str) -> Result<SkillsetCo
     Ok(SkillsetContents { persona, manifest })
 }
 
-fn preferred_exists<R: std::io::Read + std::io::Seek>(zip: &mut zip::ZipArchive<R>, name: &str) -> bool {
+fn preferred_exists<R: std::io::Read + std::io::Seek>(
+    zip: &mut zip::ZipArchive<R>,
+    name: &str,
+) -> bool {
     zip.by_name(name).is_ok()
 }
 
@@ -489,7 +500,9 @@ pub fn sanitize_name(raw: &str) -> Result<String, UnpackError> {
         .trim()
         .to_string();
     if last.is_empty() {
-        return Err(refuse(format!("包里有条目的文件名是空的（{raw:?}），已跳过。")));
+        return Err(refuse(format!(
+            "包里有条目的文件名是空的（{raw:?}），已跳过。"
+        )));
     }
     if last == "." || last == ".." {
         return Err(refuse(format!(
@@ -530,8 +543,8 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
-            let opts: zip::write::FileOptions<'_, ()> =
-                zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+            let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
             for (name, body) in entries {
                 w.start_file(*name, opts).expect("start_file");
                 w.write_all(body.as_bytes()).expect("write");
@@ -563,7 +576,10 @@ mod tests {
         ]);
         let out = unpack(&bytes).expect("应当解开");
         let names: Vec<&str> = out.files.iter().map(|(n, _)| n.as_str()).collect();
-        assert!(names.contains(&"manifest.json"), "manifest 必须留着：{names:?}");
+        assert!(
+            names.contains(&"manifest.json"),
+            "manifest 必须留着：{names:?}"
+        );
         assert!(names.contains(&"identify.md"));
     }
 
@@ -698,7 +714,10 @@ mod tests {
         ("scripts/pdf_text_extractor.py", "print('x')"),
         ("scripts/changelog.py", "print('x')"),
         ("scripts/record.py", "print('x')"),
-        ("SKILL.md", "---\nname: pdf-image-text-extractor\ndescription: 提取文字\n---\n\n# 正文"),
+        (
+            "SKILL.md",
+            "---\nname: pdf-image-text-extractor\ndescription: 提取文字\n---\n\n# 正文",
+        ),
         ("_meta.json", r#"{"version":"1.0.13"}"#),
     ];
 
@@ -765,10 +784,7 @@ mod tests {
     fn a_single_skill_with_only_nested_markdowns_is_refused() {
         // `docs/foo.md` 是文档，不是技能正文。
         let bytes = make_zip(&[("docs/a.md", "a"), ("docs/b.md", "b")]);
-        assert!(matches!(
-            unpack_skill(&bytes),
-            Err(UnpackError::NoSkill)
-        ));
+        assert!(matches!(unpack_skill(&bytes), Err(UnpackError::NoSkill)));
     }
 
     #[test]
@@ -841,7 +857,10 @@ mod tests {
         )]);
         let out = skillset_contents(&bytes, "pdf-toolkit").expect("应当读出人格");
         assert_eq!(out.persona.body, "先问用途。");
-        assert!(!out.persona.body.contains("version:"), "包装元数据不该进人格");
+        assert!(
+            !out.persona.body.contains("version:"),
+            "包装元数据不该进人格"
+        );
     }
 
     #[test]
@@ -864,7 +883,10 @@ mod tests {
             ("skillsets/pdf-toolkit.md", "人格正文"),
         ]);
         let out = skillset_contents(&bytes, "pdf-toolkit").expect("应当读出人格");
-        assert_eq!(out.manifest.expect("manifest 应可解析").referenced_slugs(), vec!["pdf-extract"]);
+        assert_eq!(
+            out.manifest.expect("manifest 应可解析").referenced_slugs(),
+            vec!["pdf-extract"]
+        );
         assert_eq!(out.persona.source_file, "skillsets/pdf-toolkit.md");
     }
 

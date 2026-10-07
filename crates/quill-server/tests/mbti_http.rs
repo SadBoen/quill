@@ -160,11 +160,12 @@ async fn count_rows(db: &Arc<DbBridge>, uid: &str) -> i64 {
     let id = user_id(uid).as_bytes().to_vec();
     db.call(move |pool, _rt| {
         Box::pin(async move {
-            let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM mbti_results WHERE owner_user_id = ?")
-                .bind(&id)
-                .fetch_one(&pool)
-                .await
-                .map_err(|e| storage_error("数测评记录", e))?;
+            let row: (i64,) =
+                sqlx::query_as("SELECT COUNT(*) FROM mbti_results WHERE owner_user_id = ?")
+                    .bind(&id)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|e| storage_error("数测评记录", e))?;
             Ok::<i64, quill_agent::AgentError>(row.0)
         })
     })
@@ -227,10 +228,22 @@ async fn questions_endpoint_returns_twenty_eight_and_ships_the_threshold() {
 
     // 题库里不该出现极性，只有 id/dimension/题干/两个选项。
     let q0 = &b["questions"][0];
-    assert!(q0.get("question").and_then(Value::as_str).is_some_and(|s| !s.is_empty()));
-    assert!(q0.get("option_a").and_then(Value::as_str).is_some_and(|s| !s.is_empty()));
-    assert!(q0.get("option_b").and_then(Value::as_str).is_some_and(|s| !s.is_empty()));
-    assert!(q0.get("a_pole").is_none(), "极性属于计分内部，不该外发：{q0}");
+    assert!(q0
+        .get("question")
+        .and_then(Value::as_str)
+        .is_some_and(|s| !s.is_empty()));
+    assert!(q0
+        .get("option_a")
+        .and_then(Value::as_str)
+        .is_some_and(|s| !s.is_empty()));
+    assert!(q0
+        .get("option_b")
+        .and_then(Value::as_str)
+        .is_some_and(|s| !s.is_empty()));
+    assert!(
+        q0.get("a_pole").is_none(),
+        "极性属于计分内部，不该外发：{q0}"
+    );
 }
 
 #[tokio::test]
@@ -245,7 +258,9 @@ async fn submitting_all_a_scores_estj_at_the_cap_and_is_recorded() {
     assert_eq!(b["result"]["dimensions"]["ei"][0], "E");
     assert_eq!(b["result"]["dimensions"]["ei"][1], 85, "全选一边应顶到上限");
     assert_eq!(b["profile"]["name"], json!("总经理"), "{b}");
-    let row_id = b["result"]["row_id"].as_i64().expect("要回 row_id 才能应用");
+    let row_id = b["result"]["row_id"]
+        .as_i64()
+        .expect("要回 row_id 才能应用");
 
     let (s, h) = call(app.clone(), TOKEN_A, "GET", "/api/mbti/history", None).await;
     assert_eq!(s, StatusCode::OK);
@@ -378,10 +393,13 @@ async fn apply_writes_the_persona_and_repeating_it_does_not_grow_the_text() {
     assert_eq!(s, StatusCode::OK, "{first}");
     assert_eq!(first["replaced"], false, "第一次不是替换：{first}");
     let len1 = first["instructions"].as_str().unwrap().len();
-    assert!(first["instructions"]
-        .as_str()
-        .unwrap()
-        .contains("MBTI: ESTJ"), "{first}");
+    assert!(
+        first["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("MBTI: ESTJ"),
+        "{first}"
+    );
 
     let (s, second) = call(
         app.clone(),
@@ -392,10 +410,7 @@ async fn apply_writes_the_persona_and_repeating_it_does_not_grow_the_text() {
     )
     .await;
     assert_eq!(s, StatusCode::OK, "{second}");
-    assert_eq!(
-        second["replaced"], true,
-        "第二次应识别为替换：{second}"
-    );
+    assert_eq!(second["replaced"], true, "第二次应识别为替换：{second}");
     assert_eq!(second["previous_code"], "ESTJ");
     let len2 = second["instructions"].as_str().unwrap().len();
     assert_eq!(len2, len1, "同类型重复应用不该增长：{len1} → {len2}");
@@ -410,10 +425,10 @@ async fn apply_writes_the_persona_and_repeating_it_does_not_grow_the_text() {
     )
     .await;
     assert_eq!(s, StatusCode::OK, "{e}");
-    assert!(e["instructions"]
-        .as_str()
-        .unwrap()
-        .contains("MBTI: ESTJ"), "{e}");
+    assert!(
+        e["instructions"].as_str().unwrap().contains("MBTI: ESTJ"),
+        "{e}"
+    );
 
     // 历史里标出已应用。
     let (_, h) = call(app, TOKEN_A, "GET", "/api/mbti/history", None).await;
@@ -513,17 +528,11 @@ async fn another_users_record_is_not_reachable() {
 
     // 再钉一层：B 的专家的人格正文必须是空的 ——
     // 万一哪天有人「顺手」把 404 改成 500，这里仍然能看出它写过东西。
-    let (s, own) = call(
-        app.clone(),
-        TOKEN_B,
-        "GET",
-        "/api/experts/b-expert",
-        None,
-    )
-    .await;
+    let (s, own) = call(app.clone(), TOKEN_B, "GET", "/api/experts/b-expert", None).await;
     assert_eq!(s, StatusCode::OK, "{own}");
     assert_eq!(
-        own["instructions"], json!(""),
+        own["instructions"],
+        json!(""),
         "没授权就不该动任何人的 instructions：{own}"
     );
 

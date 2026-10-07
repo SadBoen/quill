@@ -862,10 +862,7 @@ async fn admin_config_round_trips_and_rejects_invalid() {
     assert_eq!(r.status(), StatusCode::BAD_REQUEST);
     let b = body_text(r).await;
     assert!(b.contains("下一步"), "必须给中文下一步：{b}");
-    assert!(
-        b.contains("max_context_tokens"),
-        "要点名出错字段：{b}"
-    );
+    assert!(b.contains("max_context_tokens"), "要点名出错字段：{b}");
 
     // 非法字段 3：compaction 大于 context。
     let bad_balance = serde_json::json!({
@@ -911,9 +908,7 @@ async fn admin_config_hot_reloads_provider_and_keeps_old_on_build_failure() {
     s.replace_llm(Some(provider.clone()), cfg_llm.clone());
 
     assert_eq!(
-        s.llm()
-            .expect("hot swap 后必须有 provider")
-            .name(),
+        s.llm().expect("hot swap 后必须有 provider").name(),
         "openai-compatible",
         "替换后的 provider 名字必须反映新配置"
     );
@@ -947,7 +942,11 @@ async fn admin_config_put_then_state_has_provider() {
         .expect("失败");
     let status = resp.status();
     let text = body_text(resp).await;
-    assert_eq!(status, StatusCode::OK, "合法 PUT 必须 200，实际 {status}：{text}");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "合法 PUT 必须 200，实际 {status}：{text}"
+    );
 
     // 同一 state（共享）上断言 hot swap 已生效 —— 这一段不依赖 SQLite 行，
     // 只看 in-memory 的 `Arc<RwLock<...>>` slot，所以并行跑也安全。
@@ -956,7 +955,10 @@ async fn admin_config_put_then_state_has_provider() {
         .expect("PUT 后 state.llm 必须是 Some（hot reload 失败时是 provider_unavailable）");
     assert_eq!(llm.name(), "openai-compatible");
     assert_eq!(shared.llm_config_snapshot().model, "after-put");
-    assert_eq!(shared.llm_config_snapshot().base_url, "http://127.0.0.1:65530/v1");
+    assert_eq!(
+        shared.llm_config_snapshot().base_url,
+        "http://127.0.0.1:65530/v1"
+    );
     assert_eq!(shared.llm_config_snapshot().max_tokens, 2048);
     assert_eq!(shared.llm_config_snapshot().max_context_tokens, 32768);
 }
@@ -1097,12 +1099,16 @@ const FAKE_MODEL_ID: &str = "D:\\models\\Qwen3.5-4B-Q4_K_M.gguf";
 async fn providers_crud_round_trip_and_never_leak_the_api_key() {
     let (_db, s) = provider_state("providers-crud");
 
-    let created =
-        create_provider(&s, base_provider_body("本地 llama", "http://127.0.0.1:18080/v1")).await;
+    let created = create_provider(
+        &s,
+        base_provider_body("本地 llama", "http://127.0.0.1:18080/v1"),
+    )
+    .await;
     let id = provider_id(&created);
     assert_eq!(id.len(), 32, "id 必须是 32 位 hex：{created}");
     assert!(
-        id.chars().all(|c| c.is_ascii_hexdigit() && !c.is_lowercase()),
+        id.chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_lowercase()),
         "id 必须全大写 hex（SQLite hex() 读出来是大写）：{id}"
     );
     assert_eq!(created["kind"], "custom");
@@ -1154,8 +1160,14 @@ async fn providers_crud_round_trip_and_never_leak_the_api_key() {
     ] {
         assert_eq!(updated[k], created[k], "只发 model 时字段 {k:?} 不许被清空");
     }
-    assert_eq!(updated["has_api_key"], true, "没传 api_key 就必须沿用旧密钥");
-    assert!(!updated.to_string().contains("sk-secret-value-123"), "{updated}");
+    assert_eq!(
+        updated["has_api_key"], true,
+        "没传 api_key 就必须沿用旧密钥"
+    );
+    assert!(
+        !updated.to_string().contains("sk-secret-value-123"),
+        "{updated}"
+    );
 
     // 显式 null = 清除；空串 = 沿用。
     let (status, cleared) = prov_send(
@@ -1213,7 +1225,11 @@ async fn provider_validation_failures_and_unknown_ids_are_explicit() {
     ];
     for (body, field) in bad_bodies {
         let (status, out) = prov_send(&s, "POST", "/api/admin/providers", Some(body.clone())).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "body={body} 必须 400：{out}");
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "body={body} 必须 400：{out}"
+        );
         let err = &out["error"];
         assert_eq!(err["code"], "bad_request", "{out}");
         let detail = err["detail"].as_str().unwrap_or_default().to_string();
@@ -1245,7 +1261,11 @@ async fn provider_validation_failures_and_unknown_ids_are_explicit() {
         ),
     ] {
         let (status, out) = prov_send(&s, method, &path, Some(serde_json::json!({}))).await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "{method} {path} 必须 404：{out}");
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "{method} {path} 必须 404：{out}"
+        );
         assert_eq!(out["error"]["code"], "entity_not_found", "{out}");
     }
 }
@@ -1294,7 +1314,11 @@ async fn deleting_the_only_or_the_default_provider_is_refused() {
     );
 
     let (status, t) = prov_delete(&s, &only).await;
-    assert_eq!(status, StatusCode::CONFLICT, "删唯一 provider 必须 409：{t}");
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "删唯一 provider 必须 409：{t}"
+    );
     assert!(t.contains("conflict"), "{t}");
     // 「下一步」是独立的 next_step 字段，不在 detail 里（Conflict 的 advice
     // 由调用方给：删 provider 的正确做法和删专家的不一样）。
@@ -1310,11 +1334,19 @@ async fn deleting_the_only_or_the_default_provider_is_refused() {
     );
 
     let second = provider_id(
-        &create_provider(&s, base_provider_body("第二个", "http://127.0.0.1:18081/v1")).await,
+        &create_provider(
+            &s,
+            base_provider_body("第二个", "http://127.0.0.1:18081/v1"),
+        )
+        .await,
     );
 
     let (status, t) = prov_delete(&s, &only).await;
-    assert_eq!(status, StatusCode::CONFLICT, "删当前默认 provider 必须 409：{t}");
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "删当前默认 provider 必须 409：{t}"
+    );
     assert!(t.contains("default"), "文案要点名「默认」：{t}");
 
     let (status, out) = prov_send(
@@ -1326,7 +1358,10 @@ async fn deleting_the_only_or_the_default_provider_is_refused() {
     .await;
     assert_eq!(status, StatusCode::OK, "切默认必须 200：{out}");
     assert_eq!(out["is_default"], true);
-    assert_eq!(s.llm_config_snapshot().base_url, "http://127.0.0.1:18081/v1");
+    assert_eq!(
+        s.llm_config_snapshot().base_url,
+        "http://127.0.0.1:18081/v1"
+    );
 
     let (status, t) = prov_delete(&s, &only).await;
     assert_eq!(status, StatusCode::NO_CONTENT, "不再是默认就允许删：{t}");
@@ -1361,7 +1396,13 @@ async fn setting_a_new_default_is_reflected_by_the_legacy_admin_config() {
     let before: serde_json::Value = serde_json::from_str(&body_text(resp).await).expect("JSON");
     assert_eq!(before["base_url"], "http://127.0.0.1:18080/v1");
 
-    let (status, out) = prov_send(&s, "PUT", &format!("/api/admin/providers/{b}/default"), None).await;
+    let (status, out) = prov_send(
+        &s,
+        "PUT",
+        &format!("/api/admin/providers/{b}/default"),
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{out}");
 
     let resp = build_router(s.clone())
@@ -1396,19 +1437,34 @@ async fn model_probe_derives_name_context_and_modality_from_the_upstream() {
     body["model"] = serde_json::json!(FAKE_MODEL_ID);
     let id = provider_id(&create_provider(&s, body).await);
 
-    let (status, out) = prov_send(&s, "GET", &format!("/api/admin/providers/{id}/models"), None).await;
+    let (status, out) = prov_send(
+        &s,
+        "GET",
+        &format!("/api/admin/providers/{id}/models"),
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "探测接口必须 200：{out}");
     assert_eq!(out["provider_id"].as_str(), Some(id.as_str()));
     assert!(out["probed_at"].as_i64().unwrap_or(0) > 0, "必须带探测时刻");
-    assert!(out["error"].is_null(), "探测成功时 error 必须是 null：{out}");
+    assert!(
+        out["error"].is_null(),
+        "探测成功时 error 必须是 null：{out}"
+    );
 
     let models = out["models"].as_array().expect("models 必须是数组");
     assert_eq!(models.len(), 1, "上游报了几个就是几个：{out}");
     let m = &models[0];
     assert_eq!(m["id"], FAKE_MODEL_ID, "id 必须原样透传");
     assert_eq!(m["display_name"], "Qwen3.5-4B-Q4_K_M");
-    assert_eq!(m["context_window"], 8192, "必须是实例窗口 n_ctx，不是训练窗口 n_ctx_train");
-    assert_eq!(m["modality"], "text", "capabilities=[completion] 是文本证据");
+    assert_eq!(
+        m["context_window"], 8192,
+        "必须是实例窗口 n_ctx，不是训练窗口 n_ctx_train"
+    );
+    assert_eq!(
+        m["modality"], "text",
+        "capabilities=[completion] 是文本证据"
+    );
     assert_eq!(m["owned_by"], "llamacpp");
 
     // 模型池：starred 判定就是 model.id == provider.model
@@ -1421,8 +1477,14 @@ async fn model_probe_derives_name_context_and_modality_from_the_upstream() {
     assert_eq!(entries.len(), 1, "{pool}");
     assert_eq!(entries[0]["provider_id"].as_str(), Some(id.as_str()));
     assert_eq!(entries[0]["provider_name"], "假上游");
-    assert_eq!(entries[0]["starred"], true, "等于 provider.model 的模型必须打星");
-    assert_eq!(entries[0]["model"]["context_window"], 8192, "模型池里同样是实例窗口");
+    assert_eq!(
+        entries[0]["starred"], true,
+        "等于 provider.model 的模型必须打星"
+    );
+    assert_eq!(
+        entries[0]["model"]["context_window"], 8192,
+        "模型池里同样是实例窗口"
+    );
     assert_eq!(entries[0]["model"]["display_name"], "Qwen3.5-4B-Q4_K_M");
 
     // ☆ 点一下只发 model：不能把别的字段清空。
@@ -1446,7 +1508,13 @@ async fn an_unreachable_provider_lands_in_unavailable_not_in_an_empty_pool() {
     let dead = create_provider(&s, base_provider_body("打不通", "http://127.0.0.1:9/v1")).await;
     let dead_id = provider_id(&dead);
 
-    let (status, out) = prov_send(&s, "GET", &format!("/api/admin/providers/{dead_id}/models"), None).await;
+    let (status, out) = prov_send(
+        &s,
+        "GET",
+        &format!("/api/admin/providers/{dead_id}/models"),
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert!(
         out["models"].as_array().expect("数组").is_empty(),
@@ -1464,7 +1532,9 @@ async fn an_unreachable_provider_lands_in_unavailable_not_in_an_empty_pool() {
         pool["pool"].as_array().expect("数组").is_empty(),
         "池里不该有打不通的 provider：{pool}"
     );
-    let un = pool["unavailable"].as_array().expect("unavailable 必须是数组");
+    let un = pool["unavailable"]
+        .as_array()
+        .expect("unavailable 必须是数组");
     assert_eq!(un.len(), 1, "打不通的 provider 必须进 unavailable：{pool}");
     assert_eq!(un[0]["provider_id"].as_str(), Some(dead_id.as_str()));
     assert_eq!(un[0]["provider_name"], "打不通");
@@ -1499,12 +1569,25 @@ async fn an_unreachable_provider_lands_in_unavailable_not_in_an_empty_pool() {
 #[tokio::test]
 async fn the_legacy_admin_config_never_echoes_the_api_key() {
     let (_db, s) = provider_state("legacy-config-no-key");
-    let created = create_provider(&s, base_provider_body("带密钥的端点", "http://127.0.0.1:18080/v1")).await;
+    let created = create_provider(
+        &s,
+        base_provider_body("带密钥的端点", "http://127.0.0.1:18080/v1"),
+    )
+    .await;
     let id = provider_id(&created);
-    assert_eq!(created["has_api_key"], true, "建的时候确实存了密钥：{created}");
+    assert_eq!(
+        created["has_api_key"], true,
+        "建的时候确实存了密钥：{created}"
+    );
 
     // 让它成为默认 provider，legacy config 才有东西可回。
-    let (status, _) = prov_send(&s, "PUT", &format!("/api/admin/providers/{id}/default"), None).await;
+    let (status, _) = prov_send(
+        &s,
+        "PUT",
+        &format!("/api/admin/providers/{id}/default"),
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
 
     let (status, body) = prov_send(&s, "GET", "/api/admin/config", None).await;
@@ -1514,11 +1597,11 @@ async fn the_legacy_admin_config_never_echoes_the_api_key() {
         "legacy config 响应里不该有 api_key 这个键：{body}"
     );
     let raw = body.to_string();
-    assert!(
-        !raw.contains("sk-secret-value-123"),
-        "密钥明文泄漏：{raw}"
+    assert!(!raw.contains("sk-secret-value-123"), "密钥明文泄漏：{raw}");
+    assert_eq!(
+        body["has_api_key"], true,
+        "只该用 has_api_key 说明已设置：{body}"
     );
-    assert_eq!(body["has_api_key"], true, "只该用 has_api_key 说明已设置：{body}");
 
     // 请求体仍然接受 api_key（留空 = 沿用旧值），否则前端无法在不误清密钥的前提下保存。
     let (status, kept) = prov_send(
@@ -1539,8 +1622,14 @@ async fn the_legacy_admin_config_never_echoes_the_api_key() {
     assert_eq!(status, StatusCode::OK, "{kept}");
     assert!(!kept.to_string().contains("sk-secret-value-123"), "{kept}");
     let (_, after) = prov_send(&s, "GET", "/api/admin/config", None).await;
-    assert_eq!(after["model"], "qwen3.5-kept", "空 api_key 不该清掉旧密钥：{after}");
-    assert_eq!(after["has_api_key"], true, "空 api_key 不该清掉旧密钥：{after}");
+    assert_eq!(
+        after["model"], "qwen3.5-kept",
+        "空 api_key 不该清掉旧密钥：{after}"
+    );
+    assert_eq!(
+        after["has_api_key"], true,
+        "空 api_key 不该清掉旧密钥：{after}"
+    );
 }
 
 /// 停用默认 provider 必须**真的**生效：`llm::build` 不读 `enabled` 是上一轮的漏洞，
@@ -1551,7 +1640,13 @@ async fn disabling_the_default_provider_makes_the_runtime_honest() {
     let upstream = spawn_fake_upstream(FAKE_LLAMA_MODELS).await;
     let created = create_provider(&s, base_provider_body("唯一端点", &upstream)).await;
     let id = provider_id(&created);
-    let (status, _) = prov_send(&s, "PUT", &format!("/api/admin/providers/{id}/default"), None).await;
+    let (status, _) = prov_send(
+        &s,
+        "PUT",
+        &format!("/api/admin/providers/{id}/default"),
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
 
     // 启用时：模型池里能看到它。
@@ -1576,7 +1671,9 @@ async fn disabling_the_default_provider_makes_the_runtime_honest() {
         pool["pool"].as_array().expect("数组").is_empty(),
         "停用的 provider 不该留在 pool：{pool}"
     );
-    let un = pool["unavailable"].as_array().expect("unavailable 必须是数组");
+    let un = pool["unavailable"]
+        .as_array()
+        .expect("unavailable 必须是数组");
     assert!(
         un.iter().all(|p| p["provider_id"] != id.as_str()),
         "停用不是探测失败，不该混进 unavailable：{pool}"
@@ -1586,7 +1683,10 @@ async fn disabling_the_default_provider_makes_the_runtime_honest() {
     assert_eq!(dis[0]["provider_id"].as_str(), Some(id.as_str()));
     assert_eq!(dis[0]["provider_name"], "唯一端点");
     let why = dis[0]["reason"].as_str().expect("停用要给原因");
-    assert!(why.chars().any(|c| c as u32 > 0x2e80), "原因必须是中文：{why}");
+    assert!(
+        why.chars().any(|c| c as u32 > 0x2e80),
+        "原因必须是中文：{why}"
+    );
 
     // 运行时必须同步：默认 provider 停用后不该还留着可用的 provider，
     // 否则界面三处（健康横幅 / 模型池 / 聊天）会自相矛盾。
@@ -1610,9 +1710,17 @@ async fn disabling_the_default_provider_makes_the_runtime_honest() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{on}");
-    assert!(s.llm().is_ok(), "重新启用后运行时必须恢复：{:?}", s.llm().err());
+    assert!(
+        s.llm().is_ok(),
+        "重新启用后运行时必须恢复：{:?}",
+        s.llm().err()
+    );
     let (_, pool) = prov_send(&s, "GET", "/api/admin/models", None).await;
-    assert_eq!(pool["pool"].as_array().map(Vec::len), Some(1), "重新启用后要回到 pool：{pool}");
+    assert_eq!(
+        pool["pool"].as_array().map(Vec::len),
+        Some(1),
+        "重新启用后要回到 pool：{pool}"
+    );
     assert!(
         pool["disabled"].as_array().expect("数组").is_empty(),
         "重新启用后不该还留在 disabled：{pool}"

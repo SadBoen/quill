@@ -97,12 +97,11 @@ impl EnvTokenResolver {
             Err(_) => {
                 warnings.push(super::config::Warning {
                     source: "QUILL_TOKENS".to_string(),
-                    message:
-                        "未设置，当前**所有** /api 路由都会返回 401。\
+                    message: "未设置，当前**所有** /api 路由都会返回 401。\
                          这是刻意的：宁可全部拒绝，也不要无鉴权放行。\
                          调试用可设为 `dev-token:@alice:admin`（`@用户名` 会按用户名推导 ID，\
                          与 `quill --as alice` 指向同一个人）。"
-                            .to_string(),
+                        .to_string(),
                 });
                 return (Self::default(), warnings);
             }
@@ -152,8 +151,7 @@ impl EnvTokenResolver {
                         Ok(user_id) => entries.push(TokenEntry {
                             token: token.to_string(),
                             ctx: AuthContext { user_id, is_admin },
-                            login: declared_login
-                                .unwrap_or_else(|| user_id.to_compact_hex()),
+                            login: declared_login.unwrap_or_else(|| user_id.to_compact_hex()),
                         }),
                         Err(e) => warnings.push(super::config::Warning {
                             source: "QUILL_TOKENS".to_string(),
@@ -344,14 +342,14 @@ impl CompositeTokenResolver {
                     quill_control::Pbkdf2Params::production(),
                 );
                 let outcome = match cp.authz_of(&user_id).await {
-                    Ok(Some((role, quill_control::UserStatus::Active))) => {
-                        Ok(AuthContext {
-                            user_id,
-                            is_admin: role == quill_control::UserRole::Owner,
-                        })
-                    }
+                    Ok(Some((role, quill_control::UserStatus::Active))) => Ok(AuthContext {
+                        user_id,
+                        is_admin: role == quill_control::UserRole::Owner,
+                    }),
                     Ok(Some((_, status))) => {
-                        eprintln!("[auth] 环境变量令牌对应账号已停用（{status:?}），按令牌无效处理");
+                        eprintln!(
+                            "[auth] 环境变量令牌对应账号已停用（{status:?}），按令牌无效处理"
+                        );
                         Err(TokenRejected::Unknown)
                     }
                     Ok(None) => {

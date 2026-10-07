@@ -195,7 +195,14 @@ fn row_into_expert(row: &SqliteRow) -> Result<Expert, AgentError> {
                 "专家 {id} 是内置专家但已被软删除：内置专家受保护，不可删除"
             )));
         }
-        Expert::builtin_with_source(id.clone(), display_name, description, instructions, model, source_template)?
+        Expert::builtin_with_source(
+            id.clone(),
+            display_name,
+            description,
+            instructions,
+            model,
+            source_template,
+        )?
     } else {
         if visibility != Visibility::UserAuthored {
             return Err(crate::db::invariant_broken(format!(

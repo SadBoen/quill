@@ -147,7 +147,10 @@ async fn expert_crud_walks_the_full_lifecycle_over_http() {
         "通用专家必须默认启用，否则对话页下拉里没有它：{body}"
     );
     assert!(
-        !list[0]["instructions"].as_str().unwrap_or_default().is_empty(),
+        !list[0]["instructions"]
+            .as_str()
+            .unwrap_or_default()
+            .is_empty(),
         "通用专家的人格正文不许是空串——那等于没建：{body}"
     );
 
@@ -567,7 +570,8 @@ async fn dispatch_booking_validates_member_id_prefix_and_rejects_empty_members()
 /// 这条钉的是 404，且顺带确认它**不是** 400（400 会被读成「参数写错了」，
 /// 而这里的真相是「这个团队没有」）。
 #[tokio::test]
-async fn dispatch_to_a_team_that_does_not_exist_is_404_and_writes_nothing() {    let t = TestDb::new("http-dispatch-unknown-team");
+async fn dispatch_to_a_team_that_does_not_exist_is_404_and_writes_nothing() {
+    let t = TestDb::new("http-dispatch-unknown-team");
     // 真的种一个团队进去，让「不存在的那个」确实是另一个 id。
     let f = seed(&t.bridge(), user_id(UID_A), 0x23, &["cost-analyst"]);
     let app = state(&t);
@@ -643,7 +647,10 @@ async fn listing_dispatch_of_a_missing_team_is_404_not_an_empty_200() {
         "GET 侧也必须 404：不存在 ≠ 没有记录"
     );
     let body = text(resp).await;
-    assert!(!body.contains("\"count\""), "404 里不该出现记录条数：{body}");
+    assert!(
+        !body.contains("\"count\""),
+        "404 里不该出现记录条数：{body}"
+    );
 
     // 反过来：真团队仍然 200，并如实说明自己按什么过滤。
     let ok_path = format!(

@@ -75,6 +75,9 @@ mod tests {
 
     #[test]
     fn an_empty_environment_value_falls_back_instead_of_producing_a_broken_url() {
-        assert_eq!(env_or("QUILL_PROVIDER_DEFINITELY_UNSET", "fallback"), "fallback");
+        assert_eq!(
+            env_or("QUILL_PROVIDER_DEFINITELY_UNSET", "fallback"),
+            "fallback"
+        );
     }
 }

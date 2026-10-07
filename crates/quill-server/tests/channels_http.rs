@@ -97,11 +97,16 @@ fn seed_user(db: &Arc<DbBridge>, uid: &str) {
 /// 直接读 `b["detail"]` 永远读到 null —— 断言会莫名其妙地失败，
 /// 而那是**判据自己读错了**，不是被测行为有问题。
 fn detail_of(body: &Value) -> Option<&str> {
-    body.pointer("/error/detail")
-        .and_then(Value::as_str)
+    body.pointer("/error/detail").and_then(Value::as_str)
 }
 
-async fn call(app: axum::Router, token: &str, method: &str, path: &str, body: Option<Value>) -> (StatusCode, Value) {
+async fn call(
+    app: axum::Router,
+    token: &str,
+    method: &str,
+    path: &str,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
     let mut builder = Request::builder().method(method).uri(path);
     if !token.is_empty() {
         builder = builder.header("authorization", format!("Bearer {token}"));
@@ -299,10 +304,7 @@ async fn partial_update_keeps_the_token() {
     .await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(b["name"], "改名了");
-    assert_eq!(
-        b["configured"], true,
-        "只改名字不该弄丢凭据"
-    );
+    assert_eq!(b["configured"], true, "只改名字不该弄丢凭据");
 }
 
 #[tokio::test]
@@ -312,7 +314,14 @@ async fn delete_removes_the_channel() {
     let app = build_router(state(&t));
     make_weixin(&app, TOKEN_A).await;
 
-    let (s, _) = call(app.clone(), TOKEN_A, "DELETE", "/api/channels/weixin-main", None).await;
+    let (s, _) = call(
+        app.clone(),
+        TOKEN_A,
+        "DELETE",
+        "/api/channels/weixin-main",
+        None,
+    )
+    .await;
     assert_eq!(s, StatusCode::OK);
 
     let (_, b) = call(app, TOKEN_A, "GET", "/api/channels", None).await;
@@ -383,7 +392,8 @@ async fn qr_poll_rejects_unknown_keys() {
     )
     .await;
     assert_eq!(
-        s, StatusCode::BAD_REQUEST,
+        s,
+        StatusCode::BAD_REQUEST,
         "未知字段要报错 —— 拼错的字段名会静默丢掉"
     );
 }

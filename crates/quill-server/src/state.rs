@@ -47,11 +47,7 @@ impl std::fmt::Debug for AppState {
             .field("storage_ready", &self.db.is_some())
             .field(
                 "llm_ready",
-                &self
-                    .llm
-                    .read()
-                    .map(|g| g.is_some())
-                    .unwrap_or(false),
+                &self.llm.read().map(|g| g.is_some()).unwrap_or(false),
             )
             .finish_non_exhaustive()
     }
@@ -72,7 +68,10 @@ impl AppState {
             .llm
             .read()
             .map_err(|_| ApiError::internal("LLM provider 读写锁被毒化（poisoned）"))?;
-        guard.as_ref().cloned().ok_or_else(|| self.llm_unavailable())
+        guard
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| self.llm_unavailable())
     }
 
     /// 运行时没有 provider 的原因。默认 provider 被 `enabled=false` 停用是
@@ -122,9 +121,7 @@ impl AppState {
 
     /// 默认 provider 的整行（`/api/admin/config` 兼容路径与 set-default 判定用）。
     pub fn default_provider_row(&self) -> Option<crate::llm_providers::LlmProvider> {
-        self.provider_cache_snapshot()
-            .default_provider()
-            .cloned()
+        self.provider_cache_snapshot().default_provider().cloned()
     }
 
     /// 把默认 provider 翻译成运行时 `LlmConfig`。表里还没有 provider 时
@@ -162,7 +159,10 @@ impl AppState {
         };
         let cfg = p.to_llm_config();
         if !p.enabled {
-            eprintln!("[llm] 默认 provider「{}」已停用：清空运行时 provider", p.name);
+            eprintln!(
+                "[llm] 默认 provider「{}」已停用：清空运行时 provider",
+                p.name
+            );
             self.replace_llm(None, cfg);
             return;
         }
@@ -241,10 +241,7 @@ mod tests {
             !err.next_step().contains("section=db"),
             "模型故障不能把人引到数据库：{err}"
         );
-        assert!(
-            s.db().is_err(),
-            "对照组：没有存储时应当走 db 那条建议"
-        );
+        assert!(s.db().is_err(), "对照组：没有存储时应当走 db 那条建议");
     }
 
     #[test]

@@ -110,8 +110,16 @@ fn seed_session(db: &Arc<DbBridge>, seq: u8, kind: &str, room: &str) -> [u8; 16]
         match kind.as_str() {
             "solo" => (None, None, None),
             "team_leader" => (Some(vec![0x7e; 16]), None, Some("cost-analyst")),
-            "team_member" => (Some(vec![0x7e; 16]), Some(vec![0x11; 16]), Some("cost-analyst")),
-            _ => (Some(vec![0x7e; 16]), Some(vec![0x11; 16]), Some("cost-analyst")),
+            "team_member" => (
+                Some(vec![0x7e; 16]),
+                Some(vec![0x11; 16]),
+                Some("cost-analyst"),
+            ),
+            _ => (
+                Some(vec![0x7e; 16]),
+                Some(vec![0x11; 16]),
+                Some("cost-analyst"),
+            ),
         };
     let expert_id = expert_id.map(str::to_string);
     db.call(move |pool, _rt| {
@@ -230,11 +238,7 @@ async fn comma_separated_kinds_are_all_collected() {
     seed_session(&db, 5, "team_leader", "r0");
     seed_session(&db, 6, "team_member", "r0");
 
-    let (status, v) = call(
-        &app,
-        "/api/sessions?exclude_kind=team_leader,team_member",
-    )
-    .await;
+    let (status, v) = call(&app, "/api/sessions?exclude_kind=team_leader,team_member").await;
     assert_eq!(status, StatusCode::OK, "{v}");
     let ks = kinds(&v);
     assert_eq!(ks, vec!["solo".to_string()], "两个 kind 都该被滤掉：{ks:?}");
@@ -274,11 +278,7 @@ async fn empty_segments_do_not_change_the_result() {
     // 纯空白段（%20 是空格）同理，这条还要过 trim 那一层。
     let (status, v) = call(&app, "/api/sessions?exclude_kind=%20,%20,team_leader").await;
     assert_eq!(status, StatusCode::OK, "{v}");
-    assert_eq!(
-        kinds(&v),
-        vec!["solo".to_string()],
-        "纯空白段被丢掉：{v}"
-    );
+    assert_eq!(kinds(&v), vec!["solo".to_string()], "纯空白段被丢掉：{v}");
 }
 
 /// `?exclude_kind=` 整体为空时等于「不过滤」，而不是「滤掉 kind 为空的」。

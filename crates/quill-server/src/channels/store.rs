@@ -68,7 +68,10 @@ fn s(row: &sqlx::sqlite::SqliteRow, name: &str) -> String {
 }
 
 fn n(row: &sqlx::sqlite::SqliteRow, name: &str) -> i64 {
-    row.try_get::<Option<i64>, _>(name).ok().flatten().unwrap_or(0)
+    row.try_get::<Option<i64>, _>(name)
+        .ok()
+        .flatten()
+        .unwrap_or(0)
 }
 
 /// 读一列 JSON。列上有 `json_valid` 约束，所以解析失败只可能是程序自己
@@ -148,21 +151,18 @@ pub fn to_public(row: &ChannelRow) -> Value {
     })
 }
 
-pub async fn list(
-    db: &DbBridge,
-    owner: quill_domain::UserId,
-) -> Result<Vec<ChannelRow>, ApiError> {
+pub async fn list(db: &DbBridge, owner: quill_domain::UserId) -> Result<Vec<ChannelRow>, ApiError> {
     let uid = owner.as_bytes().to_vec();
     db.call(move |pool, _rt| {
         Box::pin(async move {
-            let sql = format!(
-                "SELECT {COLS} FROM channels WHERE owner_user_id = ? ORDER BY kind"
-            );
+            let sql = format!("SELECT {COLS} FROM channels WHERE owner_user_id = ? ORDER BY kind");
             let rows = sqlx::query(&sql)
                 .bind(&uid)
                 .fetch_all(&pool)
                 .await
-                .map_err(|e| quill_agent::AgentError::Storage { detail: format!("list channels: {e}") })?;
+                .map_err(|e| quill_agent::AgentError::Storage {
+                    detail: format!("list channels: {e}"),
+                })?;
             Ok::<_, quill_agent::AgentError>(rows.iter().map(from_row).collect())
         })
     })
@@ -187,16 +187,16 @@ pub async fn get(
                     .bind(&cid)
                     .fetch_optional(&pool)
                     .await
-                    .map_err(|e| {
-                        quill_agent::AgentError::Storage { detail: format!("get channel {cid}: {e}") }
+                    .map_err(|e| quill_agent::AgentError::Storage {
+                        detail: format!("get channel {cid}: {e}"),
                     })
             })
         })
         .map_err(storage)?;
 
-    found.map(|r| from_row(&r)).ok_or_else(|| {
-        ApiError::not_found(format!("通道 {channel_id} 不存在，或不属于当前用户"))
-    })
+    found
+        .map(|r| from_row(&r))
+        .ok_or_else(|| ApiError::not_found(format!("通道 {channel_id} 不存在，或不属于当前用户")))
 }
 
 /// 找出这个用户该 kind 的那一条（表上有 UNIQUE(owner_user_id, kind)）。
@@ -213,14 +213,15 @@ pub async fn get_by_kind(
     let found = db
         .call(move |pool, _rt| {
             Box::pin(async move {
-                let sql = format!("SELECT {COLS} FROM channels WHERE owner_user_id = ? AND kind = ?");
+                let sql =
+                    format!("SELECT {COLS} FROM channels WHERE owner_user_id = ? AND kind = ?");
                 sqlx::query(&sql)
                     .bind(&uid)
                     .bind(&k)
                     .fetch_optional(&pool)
                     .await
-                    .map_err(|e| {
-                        quill_agent::AgentError::Storage { detail: format!("get channel by kind {k}: {e}") }
+                    .map_err(|e| quill_agent::AgentError::Storage {
+                        detail: format!("get channel by kind {k}: {e}"),
                     })
             })
         })
@@ -257,10 +258,8 @@ pub async fn save(db: &DbBridge, row: &ChannelRow, now: i64) -> Result<(), ApiEr
             .bind(now)
             .execute(&pool)
             .await
-            .map_err(|e| {
-                quill_agent::AgentError::Storage {
-                    detail: format!("save channel {}: {e}", r.channel_id),
-                }
+            .map_err(|e| quill_agent::AgentError::Storage {
+                detail: format!("save channel {}: {e}", r.channel_id),
             })?;
             Ok::<(), quill_agent::AgentError>(())
         })
@@ -287,8 +286,8 @@ pub async fn save_sync_state(
             .bind(&cid)
             .execute(&pool)
             .await
-            .map_err(|e| {
-                quill_agent::AgentError::Storage { detail: format!("save sync state {cid}: {e}") }
+            .map_err(|e| quill_agent::AgentError::Storage {
+                detail: format!("save sync state {cid}: {e}"),
             })?;
             Ok::<(), quill_agent::AgentError>(())
         })
@@ -310,8 +309,8 @@ pub async fn remove(
                 .bind(&cid)
                 .execute(&pool)
                 .await
-                .map_err(|e| {
-                    quill_agent::AgentError::Storage { detail: format!("delete channel {cid}: {e}") }
+                .map_err(|e| quill_agent::AgentError::Storage {
+                    detail: format!("delete channel {cid}: {e}"),
                 })?;
             Ok::<(), quill_agent::AgentError>(())
         })

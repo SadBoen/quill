@@ -59,7 +59,12 @@ pub fn ensure(state: &AppState, uid: UserId) -> Result<Expert, ApiError> {
         Ok(e) => return Ok(e),
         Err(quill_agent::AgentError::ExpertNotFound { .. })
         | Err(quill_agent::AgentError::ExpertDeleted { .. }) => {}
-        Err(other) => return Err(crate::api_experts::agent_error_to_api("查找通用专家", other)),
+        Err(other) => {
+            return Err(crate::api_experts::agent_error_to_api(
+                "查找通用专家",
+                other,
+            ))
+        }
     }
 
     let new = NewExpert {
@@ -79,7 +84,10 @@ pub fn ensure(state: &AppState, uid: UserId) -> Result<Expert, ApiError> {
         Err(quill_agent::AgentError::ExpertExists { .. }) => {
             crate::api_experts::map_agent_error("重读通用专家", registry.get_visible(&uid, &id))
         }
-        Err(other) => Err(crate::api_experts::agent_error_to_api("创建通用专家", other)),
+        Err(other) => Err(crate::api_experts::agent_error_to_api(
+            "创建通用专家",
+            other,
+        )),
     }
 }
 
@@ -87,7 +95,11 @@ pub fn ensure(state: &AppState, uid: UserId) -> Result<Expert, ApiError> {
 ///
 /// 返回的永远是 `Some` —— 这就是「不允许未选角色就聊天」在服务端的落点。
 /// 真要区分「调用方显式传了空串」与「压根没传」，看调用方那层；这里一律给兜底。
-pub fn resolve_for_session(state: &AppState, uid: UserId, requested: Option<String>) -> Result<String, ApiError> {
+pub fn resolve_for_session(
+    state: &AppState,
+    uid: UserId,
+    requested: Option<String>,
+) -> Result<String, ApiError> {
     if let Some(id) = requested.filter(|s| !s.trim().is_empty()) {
         return Ok(id);
     }

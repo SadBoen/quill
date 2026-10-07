@@ -193,12 +193,8 @@ async fn text(resp: axum::response::Response) -> String {
 }
 
 fn json(t: &str) -> serde_json::Value {
-    serde_json::from_str(t).unwrap_or_else(|e| {
-        panic!(
-            "响应必须是 JSON（{e}）：{}",
-            t.replace('\n', "\\n")
-        )
-    })
+    serde_json::from_str(t)
+        .unwrap_or_else(|e| panic!("响应必须是 JSON（{e}）：{}", t.replace('\n', "\\n")))
 }
 
 /// 把 SSE 响应体拆成一串 `(事件名, 负载)`。
@@ -343,8 +339,8 @@ async fn the_stream_carries_every_frame_and_drops_the_tool_rounds_text() {
         names,
         vec![
             "user_message",
-            "delta", // 我先查一下。
-            "discard",   // 这一轮的正文会被工具往返覆盖，先抹掉
+            "delta",   // 我先查一下。
+            "discard", // 这一轮的正文会被工具往返覆盖，先抹掉
             "tool_call",
             "tool_result",
             "delta", // 最终
@@ -388,10 +384,7 @@ async fn the_stream_carries_every_frame_and_drops_the_tool_rounds_text() {
         .map(|(_, d)| d.clone())
         .expect("最后一帧必须是 done");
     assert_eq!(done["reply"], "最终答案。");
-    assert_eq!(
-        done["tool_rounds"], 1,
-        "工具往返确实发生过：{done}"
-    );
+    assert_eq!(done["tool_rounds"], 1, "工具往返确实发生过：{done}");
     assert_eq!(
         done["tool_calls"][0]["ok"], false,
         "不存在的工具在轨迹里也必须是失败：{done}"
@@ -430,11 +423,7 @@ fn assert_same_shape(a: &serde_json::Value, b: &serde_json::Value, path: &str) {
                 assert_same_shape(xi, yi, &format!("{path}[{i}]"));
             }
         }
-        (x, y) => assert_eq!(
-            kind_of(x),
-            kind_of(y),
-            "{path} 的类型不一致：{x} vs {y}"
-        ),
+        (x, y) => assert_eq!(kind_of(x), kind_of(y), "{path} 的类型不一致：{x} vs {y}"),
     }
 }
 
@@ -477,17 +466,19 @@ async fn the_done_payload_has_the_same_shape_as_the_old_route() {
 
     let app = state(&t, Some(Arc::new(TwoRoundProvider::default())));
     let sid2 = create_session(app.clone()).await;
-    let plain = json(&text(
-        build_router(app)
-            .oneshot(req(
-                "POST",
-                &format!("/api/sessions/{sid2}/messages"),
-                Some(serde_json::json!({ "content": "帮我看看" })),
-            ))
-            .await
-            .expect("老路由失败"),
-    )
-    .await);
+    let plain = json(
+        &text(
+            build_router(app)
+                .oneshot(req(
+                    "POST",
+                    &format!("/api/sessions/{sid2}/messages"),
+                    Some(serde_json::json!({ "content": "帮我看看" })),
+                ))
+                .await
+                .expect("老路由失败"),
+        )
+        .await,
+    );
 
     assert_same_shape(&streamed_done, &plain, "done");
 }
@@ -646,7 +637,11 @@ async fn an_empty_content_is_rejected_before_any_stream_starts() {
         .await
         .expect("oneshot 失败");
 
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "准备阶段的错误仍然要是正常的 4xx 信封，不能变成一串流");
+    assert_eq!(
+        resp.status(),
+        StatusCode::BAD_REQUEST,
+        "准备阶段的错误仍然要是正常的 4xx 信封，不能变成一串流"
+    );
     let body = json(&text(resp).await);
     assert_eq!(body["error"]["code"], "bad_request", "{body}");
     assert!(

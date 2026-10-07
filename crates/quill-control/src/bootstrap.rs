@@ -1,4 +1,4 @@
-﻿use sqlx::SqlitePool;
+use sqlx::SqlitePool;
 
 use crate::password::{validate_password, PasswordHasher, Pbkdf2Params};
 use crate::user::{normalize_username, validate_display_name, validate_username};
@@ -75,9 +75,7 @@ pub async fn ensure_token_user(
 
     match r {
         Ok(_) => Ok(Provision::Created),
-        Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
-            Ok(Provision::AlreadyPresent)
-        }
+        Err(sqlx::Error::Database(e)) if e.is_unique_violation() => Ok(Provision::AlreadyPresent),
         Err(e) => Err(storage(e)),
     }
 }
@@ -116,11 +114,12 @@ pub async fn ensure_password_user(
     let digest = PasswordHasher::new(params).hash(&OsEntropySource, password);
     let blob = id.as_bytes().to_vec();
 
-    let existing: Option<String> = sqlx::query_scalar("SELECT password_algo FROM users WHERE id = ?")
-        .bind(&blob)
-        .fetch_optional(pool)
-        .await
-        .map_err(storage)?;
+    let existing: Option<String> =
+        sqlx::query_scalar("SELECT password_algo FROM users WHERE id = ?")
+            .bind(&blob)
+            .fetch_optional(pool)
+            .await
+            .map_err(storage)?;
 
     let now = now_ms();
     let role = if is_admin { "owner" } else { "member" };
@@ -241,11 +240,15 @@ mod tests {
         let id = derive_user_id("alice").expect("id");
 
         assert_eq!(
-            ensure_token_user(&p, id, "alice", false).await.expect("首次"),
+            ensure_token_user(&p, id, "alice", false)
+                .await
+                .expect("首次"),
             Provision::Created
         );
         assert_eq!(
-            ensure_token_user(&p, id, "alice", false).await.expect("再次"),
+            ensure_token_user(&p, id, "alice", false)
+                .await
+                .expect("再次"),
             Provision::AlreadyPresent
         );
         assert_eq!(count(&p).await, 1, "不得因重复引导插出第二行");
@@ -255,7 +258,9 @@ mod tests {
     async fn provisioned_user_can_actually_hold_child_rows() {
         let p = pool().await;
         let id = derive_user_id("alice").expect("id");
-        ensure_token_user(&p, id, "alice", false).await.expect("引导");
+        ensure_token_user(&p, id, "alice", false)
+            .await
+            .expect("引导");
 
         let sid = quill_domain::SessionId::from_bytes([9u8; 16]);
         let r = sqlx::query(
@@ -278,7 +283,9 @@ mod tests {
     async fn token_only_account_records_that_it_has_no_password() {
         let p = pool().await;
         let id = derive_user_id("alice").expect("id");
-        ensure_token_user(&p, id, "alice", false).await.expect("引导");
+        ensure_token_user(&p, id, "alice", false)
+            .await
+            .expect("引导");
 
         let algo: String = sqlx::query_scalar("SELECT password_algo FROM users WHERE id = ?")
             .bind(id.as_bytes().to_vec())
@@ -320,7 +327,10 @@ mod tests {
             .expect("建密码账号");
         assert_eq!(out, PasswordProvision::Created);
 
-        let s = control(&p).login("carol", PW, None, None).await.expect("应能登录");
+        let s = control(&p)
+            .login("carol", PW, None, None)
+            .await
+            .expect("应能登录");
         assert_eq!(s.username_norm, "carol");
     }
 

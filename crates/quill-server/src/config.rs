@@ -82,7 +82,8 @@ impl Config {
     }
 }
 
-fn parse_wiki_dir(db_parent: Option<&std::path::Path>, warnings: &mut Vec<Warning>) -> PathBuf {    match std::env::var("QUILL_WIKI_DIR") {
+fn parse_wiki_dir(db_parent: Option<&std::path::Path>, warnings: &mut Vec<Warning>) -> PathBuf {
+    match std::env::var("QUILL_WIKI_DIR") {
         Err(_) => db_parent
             .map(|p| p.join("wiki"))
             .unwrap_or_else(|| PathBuf::from("data/wiki")),

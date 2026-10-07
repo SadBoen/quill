@@ -120,8 +120,18 @@ impl LlmConfig {
     pub fn from_env() -> (Self, Vec<crate::config::Warning>) {
         let mut warnings = Vec::new();
 
-        let base_url = env_or("QUILL_LLM_BASE_URL", DEFAULT_BASE_URL, "QUILL_LLM_BASE_URL", &mut warnings);
-        let model = env_or("QUILL_LLM_MODEL", DEFAULT_MODEL, "QUILL_LLM_MODEL", &mut warnings);
+        let base_url = env_or(
+            "QUILL_LLM_BASE_URL",
+            DEFAULT_BASE_URL,
+            "QUILL_LLM_BASE_URL",
+            &mut warnings,
+        );
+        let model = env_or(
+            "QUILL_LLM_MODEL",
+            DEFAULT_MODEL,
+            "QUILL_LLM_MODEL",
+            &mut warnings,
+        );
         let api_key = std::env::var("QUILL_LLM_API_KEY")
             .ok()
             .map(|v| v.trim().to_string())
@@ -213,10 +223,15 @@ impl AdminConfig {
             return Err("base_url 不能为空。下一步：填上完整的接口地址（含协议与 /v1），例如 http://127.0.0.1:18080/v1。".into());
         }
         if self.model.trim().is_empty() {
-            return Err("model 不能为空。下一步：从模型服务的 /v1/models 列出的名字里选一个填上。".into());
+            return Err(
+                "model 不能为空。下一步：从模型服务的 /v1/models 列出的名字里选一个填上。".into(),
+            );
         }
         if self.max_context_tokens == 0 {
-            return Err("max_context_tokens 必须 > 0。下一步：把它设成模型能容纳的历史长度（默认 32768）。".into());
+            return Err(
+                "max_context_tokens 必须 > 0。下一步：把它设成模型能容纳的历史长度（默认 32768）。"
+                    .into(),
+            );
         }
         if self.compaction_threshold_tokens < MIN_COMPACTION_THRESHOLD_TOKENS {
             return Err(format!(
@@ -341,7 +356,10 @@ mod tests {
         };
         let err = bad.validate().expect_err("必须被拒");
         assert!(err.contains("下一步"), "错误必须给出修复方向：{err}");
-        assert!(err.contains("compaction_threshold"), "要点名出错字段：{err}");
+        assert!(
+            err.contains("compaction_threshold"),
+            "要点名出错字段：{err}"
+        );
     }
 
     #[test]

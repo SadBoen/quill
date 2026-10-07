@@ -486,7 +486,6 @@ mod tests {
         // 同目录下叫别的名字的用户数据不能被误伤 —— 排错比漏掉更糟，
         // 因为用户会发现自己明明没让备份数据库却丢了文件。
         for other in ["/data/u1/notes.md", "/data/quill.dbx", "/data/quill.db.bak"] {
-
             assert!(
                 !is_live_database(Path::new(other), db),
                 "{other} 不是活库，不该被排除"

@@ -366,8 +366,14 @@ mod tests {
 
     #[test]
     fn username_case_and_padding_do_not_split_the_budget() {
-        assert_eq!(RateLimiter::key(" Alice ", "1.2.3.4"), RateLimiter::key("alice", "1.2.3.4"));
-        assert_ne!(RateLimiter::key("alice", "1.2.3.4"), RateLimiter::key("bob", "1.2.3.4"));
+        assert_eq!(
+            RateLimiter::key(" Alice ", "1.2.3.4"),
+            RateLimiter::key("alice", "1.2.3.4")
+        );
+        assert_ne!(
+            RateLimiter::key("alice", "1.2.3.4"),
+            RateLimiter::key("bob", "1.2.3.4")
+        );
     }
 
     #[test]
@@ -437,7 +443,8 @@ mod tests {
         rl.record_failure(&a, 1_000);
         assert!(rl.acquire(&a, 1_000).is_err());
         assert!(rl.acquire(&b, 1_000).is_ok(), "换个用户名有独立额度");
-        assert!(rl.acquire(&c, 1_000).is_ok(), "换个 IP 有独立额度");    }
+        assert!(rl.acquire(&c, 1_000).is_ok(), "换个 IP 有独立额度");
+    }
 
     #[test]
     fn tracking_stays_bounded_when_usernames_are_random() {
@@ -508,7 +515,10 @@ mod tests {
         // 新的假 IP，限流窗口永远是空的，等于没有限流。
         let h = headers(&[("x-forwarded-for", "1.2.3.4")]);
         let seg = peer_segment(&h, Some(peer("10.0.0.5:5555")), false);
-        assert_eq!(seg, "10.0.0.5", "默认必须用真实对端地址，而不是客户端自填的头");
+        assert_eq!(
+            seg, "10.0.0.5",
+            "默认必须用真实对端地址，而不是客户端自填的头"
+        );
     }
 
     #[test]

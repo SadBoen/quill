@@ -48,8 +48,7 @@ pub async fn resolve_user(
         )));
     }
 
-    let uid = quill_control::derive_user_id(name)
-        .map_err(|e| Outcome::fail(e.to_string()))?;
+    let uid = quill_control::derive_user_id(name).map_err(|e| Outcome::fail(e.to_string()))?;
     let norm = name.trim().to_lowercase();
 
     let uid_bytes = uid.as_bytes().to_vec();

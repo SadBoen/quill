@@ -17,12 +17,21 @@ pub enum TeamError {
 
     DuplicateMember(ExpertId),
 
-    TooManyMembers { got: usize, max: usize },
+    TooManyMembers {
+        got: usize,
+        max: usize,
+    },
 
-    TooFewMembers { got: usize, min: usize },
+    TooFewMembers {
+        got: usize,
+        min: usize,
+    },
 
     /// 团队只能由普通专家组成，不搞嵌套团队。
-    MemberIsTeam { member: ExpertId, team: TeamId },
+    MemberIsTeam {
+        member: ExpertId,
+        team: TeamId,
+    },
 
     UnknownExpert(ExpertId),
 }
@@ -41,7 +50,10 @@ impl std::fmt::Display for TeamError {
                 write!(f, "团队成员数 {got} 少于下限 {min}")
             }
             Self::MemberIsTeam { member, team } => {
-                write!(f, "{member} 是一个团队，不能作为 {team} 的成员（不支持嵌套团队）")
+                write!(
+                    f,
+                    "{member} 是一个团队，不能作为 {team} 的成员（不支持嵌套团队）"
+                )
             }
             Self::UnknownExpert(e) => write!(f, "专家 {e} 不在名册中"),
         }
@@ -393,8 +405,12 @@ mod tests {
     fn a_team_cannot_become_a_member_of_itself() {
         let tid = TeamId::parse("growth-squad").expect("应合法");
         let r = roster(&["growth-squad", "cost-analyst"]);
-        let mut t = Team::new(tid.clone(), "增长小队", ExpertId::parse("lead").expect("应合法"))
-            .expect("应合法");
+        let mut t = Team::new(
+            tid.clone(),
+            "增长小队",
+            ExpertId::parse("lead").expect("应合法"),
+        )
+        .expect("应合法");
         assert_eq!(
             t.add_member(ExpertId::parse("growth-squad").expect("应合法"), &r)
                 .unwrap_err(),

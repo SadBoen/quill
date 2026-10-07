@@ -175,9 +175,9 @@ pub async fn apply_to_expert(
     )?;
 
     let row_id = match body.get("row_id") {
-        Some(Value::Number(n)) => n.as_i64().ok_or_else(|| {
-            ApiError::bad_request("字段 row_id 必须是整数行号。".to_string())
-        })?,
+        Some(Value::Number(n)) => n
+            .as_i64()
+            .ok_or_else(|| ApiError::bad_request("字段 row_id 必须是整数行号。".to_string()))?,
         Some(other) => {
             return Err(ApiError::bad_request(format!(
                 "字段 row_id 必须是数字，实际收到 {}。\n\
@@ -191,7 +191,7 @@ pub async fn apply_to_expert(
         Some(Value::String(s)) if !s.trim().is_empty() => s.trim().to_string(),
         Some(_) => {
             return Err(ApiError::bad_request(
-                "字段 expert_id 必须是非空字符串（专家标识）。".to_string()
+                "字段 expert_id 必须是非空字符串（专家标识）。".to_string(),
             ))
         }
         None => {
@@ -206,14 +206,15 @@ pub async fn apply_to_expert(
 
     let row = store::get_by_row_id(state.db()?, user.0.user_id, row_id)
         .await?
-        .ok_or_else(|| ApiError::not_found("找不到这次测评记录（row_id 不对，或不是你的记录）。"))?;
+        .ok_or_else(|| {
+            ApiError::not_found("找不到这次测评记录（row_id 不对，或不是你的记录）。")
+        })?;
     let profile = profiles::get(&row.code).ok_or_else(|| {
         ApiError::service_unavailable(format!("档案表里没有 {} 这一型。", row.code))
     })?;
 
-    let id = quill_adapters::ExpertId::parse(&expert_slug).map_err(|e| {
-        ApiError::bad_request(format!("专家标识 {expert_slug:?} 非法（{e}）。"))
-    })?;
+    let id = quill_adapters::ExpertId::parse(&expert_slug)
+        .map_err(|e| ApiError::bad_request(format!("专家标识 {expert_slug:?} 非法（{e}）。")))?;
     let reg = registry(&state)?;
     let expert = map_agent_error("读取专家", reg.get_visible(&user.0.user_id, &id))?;
 
@@ -237,14 +238,8 @@ pub async fn apply_to_expert(
     out.insert("row_id".into(), json!(row_id));
     out.insert("code".into(), json!(row.code));
     out.insert("expert_id".into(), json!(expert_slug));
-    out.insert(
-        "instructions".into(),
-        Value::String(placement.text),
-    );
-    out.insert(
-        "replaced".into(),
-        json!(placement.previous.is_some()),
-    );
+    out.insert("instructions".into(), Value::String(placement.text));
+    out.insert("replaced".into(), json!(placement.previous.is_some()));
     out.insert("previous_code".into(), json!(placement.previous));
     Ok(Json(Value::Object(out)))
 }

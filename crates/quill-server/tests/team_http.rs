@@ -177,11 +177,7 @@ fn fixture(label: &str) -> (TestDb, AppState) {
 #[tokio::test]
 async fn creating_a_team_returns_201_and_the_stored_shape() {
     let (_t, app) = fixture("team-create");
-    make_experts(
-        &app,
-        &["cost-analyst", "growth-analyst", "risk-reviewer"],
-    )
-    .await;
+    make_experts(&app, &["cost-analyst", "growth-analyst", "risk-reviewer"]).await;
 
     let (status, v) = call(
         &app,
@@ -204,7 +200,10 @@ async fn creating_a_team_returns_201_and_the_stored_shape() {
         serde_json::json!(["growth-analyst", "risk-reviewer"]),
         "🔴 member_ids 必须按 id 升序且不含主持人：{v}"
     );
-    assert!(v["created_at"].as_i64().unwrap_or(0) > 0, "必须带回时间戳：{v}");
+    assert!(
+        v["created_at"].as_i64().unwrap_or(0) > 0,
+        "必须带回时间戳：{v}"
+    );
 
     // 回读：创建后 GET 拿到的必须与创建回包一致（写路径真的落库了）。
     let (status, got) = call(&app, "GET", "/api/teams/growth-squad", TOKEN_A, None).await;
@@ -217,10 +216,7 @@ async fn creating_a_team_returns_201_and_the_stored_shape() {
     let teams = list["teams"].as_array().expect("必须是 teams 数组");
     assert_eq!(teams.len(), 1);
     assert_eq!(
-        teams[0]["member_ids"]
-            .as_array()
-            .expect("必须是数组")
-            .len(),
+        teams[0]["member_ids"].as_array().expect("必须是数组").len(),
         2,
         "主持人不计入成员数"
     );
@@ -231,10 +227,7 @@ async fn fewer_than_two_members_is_400_with_a_next_step() {
     let (_t, app) = fixture("team-too-few");
     make_experts(&app, &["cost-analyst", "growth-analyst", "risk-reviewer"]).await;
 
-    for members in [
-        vec![],
-        vec!["growth-analyst"],
-    ] {
+    for members in [vec![], vec!["growth-analyst"]] {
         let (status, v) = call(
             &app,
             "POST",
@@ -281,7 +274,11 @@ async fn more_than_eight_members_is_400() {
         })),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "8 个成员是上限本身，必须放行：{v}");
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "8 个成员是上限本身，必须放行：{v}"
+    );
 
     let nine: Vec<&str> = roster[..9].to_vec();
     let (status, v) = call(
@@ -299,7 +296,10 @@ async fn more_than_eight_members_is_400() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "9 个成员必须 400：{v}");
     let body = v.to_string();
-    assert!(body.contains('9') && body.contains('8'), "应给出实际值与上限：{body}");
+    assert!(
+        body.contains('9') && body.contains('8'),
+        "应给出实际值与上限：{body}"
+    );
 }
 
 /// 主持人不计入成员数，因此也不能同时出现在 member_ids 里
@@ -354,7 +354,12 @@ async fn nesting_a_team_as_a_member_is_400() {
     let (_t, app) = fixture("team-nested");
     make_experts(
         &app,
-        &["cost-analyst", "growth-analyst", "risk-reviewer", "growth-squad"],
+        &[
+            "cost-analyst",
+            "growth-analyst",
+            "risk-reviewer",
+            "growth-squad",
+        ],
     )
     .await;
 
@@ -373,7 +378,10 @@ async fn nesting_a_team_as_a_member_is_400() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "嵌套团队必须 400：{v}");
     let body = v.to_string();
     assert!(body.contains("嵌套"), "应说明是不支持嵌套团队：{body}");
-    assert!(body.contains("growth-squad"), "应点名被当成成员的那个 id：{body}");
+    assert!(
+        body.contains("growth-squad"),
+        "应点名被当成成员的那个 id：{body}"
+    );
 }
 
 #[tokio::test]
@@ -386,7 +394,10 @@ async fn a_member_outside_my_roster_is_400() {
         "POST",
         "/api/teams",
         TOKEN_A,
-        Some(team_body("cost-analyst", &["growth-analyst", "ghost-expert"])),
+        Some(team_body(
+            "cost-analyst",
+            &["growth-analyst", "ghost-expert"],
+        )),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "名册外的专家必须 400：{v}");
@@ -404,18 +415,18 @@ async fn a_member_outside_my_roster_is_400() {
         )),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "名册外的主持人必须 400：{v}");
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "名册外的主持人必须 400：{v}"
+    );
     assert!(v.to_string().contains("ghost-leader"), "{v}");
 }
 
 #[tokio::test]
 async fn a_taken_team_id_is_409() {
     let (_t, app) = fixture("team-conflict");
-    make_experts(
-        &app,
-        &["cost-analyst", "growth-analyst", "risk-reviewer"],
-    )
-    .await;
+    make_experts(&app, &["cost-analyst", "growth-analyst", "risk-reviewer"]).await;
     let body = team_body("cost-analyst", &["growth-analyst", "risk-reviewer"]);
     let (status, _) = call(&app, "POST", "/api/teams", TOKEN_A, Some(body.clone())).await;
     assert_eq!(status, StatusCode::CREATED);
@@ -429,17 +440,16 @@ async fn a_taken_team_id_is_409() {
 #[tokio::test]
 async fn the_list_only_shows_my_own_teams() {
     let (_t, app) = fixture("team-isolation");
-    make_experts(
-        &app,
-        &["cost-analyst", "growth-analyst", "risk-reviewer"],
-    )
-    .await;
+    make_experts(&app, &["cost-analyst", "growth-analyst", "risk-reviewer"]).await;
     let (status, v) = call(
         &app,
         "POST",
         "/api/teams",
         TOKEN_A,
-        Some(team_body("cost-analyst", &["growth-analyst", "risk-reviewer"])),
+        Some(team_body(
+            "cost-analyst",
+            &["growth-analyst", "risk-reviewer"],
+        )),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{v}");
@@ -453,17 +463,14 @@ async fn the_list_only_shows_my_own_teams() {
         "别人的团队不得出现在我的列表里：{list}"
     );
     let (status, v) = call(&app, "GET", "/api/teams/growth-squad", TOKEN_B, None).await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "读别人的团队按「不存在」口径：{v}");
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "读别人的团队按「不存在」口径：{v}"
+    );
     assert_eq!(v["error"]["code"], serde_json::json!("entity_not_found"));
 
-    let (status, v) = call(
-        &app,
-        "DELETE",
-        "/api/teams/growth-squad",
-        TOKEN_B,
-        None,
-    )
-    .await;
+    let (status, v) = call(&app, "DELETE", "/api/teams/growth-squad", TOKEN_B, None).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "不得删掉别人的团队：{v}");
 }
 
@@ -593,17 +600,16 @@ async fn patching_replaces_the_member_set_and_keeps_the_rest() {
 #[tokio::test]
 async fn delete_is_soft_idempotent_and_hides_the_team() {
     let (_t, app) = fixture("team-delete");
-    make_experts(
-        &app,
-        &["cost-analyst", "growth-analyst", "risk-reviewer"],
-    )
-    .await;
+    make_experts(&app, &["cost-analyst", "growth-analyst", "risk-reviewer"]).await;
     let (status, v) = call(
         &app,
         "POST",
         "/api/teams",
         TOKEN_A,
-        Some(team_body("cost-analyst", &["growth-analyst", "risk-reviewer"])),
+        Some(team_body(
+            "cost-analyst",
+            &["growth-analyst", "risk-reviewer"],
+        )),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{v}");
@@ -642,7 +648,10 @@ async fn delete_is_soft_idempotent_and_hides_the_team() {
         "POST",
         "/api/teams",
         TOKEN_A,
-        Some(team_body("cost-analyst", &["growth-analyst", "risk-reviewer"])),
+        Some(team_body(
+            "cost-analyst",
+            &["growth-analyst", "risk-reviewer"],
+        )),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "软删后同名应可重建：{v}");

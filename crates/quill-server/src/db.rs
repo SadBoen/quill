@@ -226,10 +226,7 @@ impl DbBridge {
     ///
     /// 格式 `用户名:口令`，逗号分隔。口令本身不能含 `,` 与 `:` —— 这两个字符是分隔符，
     /// 想用就从别处生成然后换个分隔方式（或走首管引导）。
-    pub fn ensure_password_users(
-        &self,
-        raw: Option<&str>,
-    ) -> Result<(), Vec<(String, String)>> {
+    pub fn ensure_password_users(&self, raw: Option<&str>) -> Result<(), Vec<(String, String)>> {
         let Some(raw) = raw else {
             return Ok(());
         };
@@ -270,7 +267,8 @@ impl DbBridge {
         // 同样用「结果槽位」把 Vec<(source, message)> 原样带出来：
         // DbBridge 的错误通道是 AgentError，套不进去，而且不该把多条
         // 警告压成一条错误。
-        type PasswordSlot = std::sync::Arc<std::sync::Mutex<Option<Result<(), Vec<(String, String)>>>>>;
+        type PasswordSlot =
+            std::sync::Arc<std::sync::Mutex<Option<Result<(), Vec<(String, String)>>>>>;
         let slot: PasswordSlot = std::sync::Arc::new(std::sync::Mutex::new(None));
         let writer = std::sync::Arc::clone(&slot);
         self.call(move |pool, _rt| {

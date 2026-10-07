@@ -66,7 +66,12 @@ async fn get_json(app: AppState, path: &str) -> (StatusCode, Value) {
         .await
         .expect("oneshot 失败");
     let status = resp.status();
-    let bytes = resp.into_body().collect().await.expect("读响应体").to_bytes();
+    let bytes = resp
+        .into_body()
+        .collect()
+        .await
+        .expect("读响应体")
+        .to_bytes();
     let body = String::from_utf8(bytes.to_vec()).expect("响应体必须是 UTF-8");
     let v: Value =
         serde_json::from_str(&body).unwrap_or_else(|e| panic!("响应必须是 JSON（{e}）：{body}"));
@@ -112,7 +117,12 @@ async fn create_session(app: AppState) -> String {
         .await
         .expect("oneshot 失败");
     assert_eq!(resp.status(), StatusCode::OK, "建会话应成功");
-    let bytes = resp.into_body().collect().await.expect("读响应体").to_bytes();
+    let bytes = resp
+        .into_body()
+        .collect()
+        .await
+        .expect("读响应体")
+        .to_bytes();
     let v: Value = serde_json::from_slice(&bytes).expect("必须是 JSON");
     v["id"].as_str().expect("应当返回会话 id").to_string()
 }
@@ -126,7 +136,10 @@ type OwnedMessageRow = (i64, String, i64, i64, Option<i64>, Option<i64>);
 /// 直接铺消息行，省掉起一个模型端点。
 fn seed_messages(t: &TestDb, sid: &str, rows: &[MessageRow<'_>]) {
     let uid = user_id().as_bytes().to_vec();
-    let sid_v = quill_domain::SessionId::parse(sid).expect("会话 id 合法").as_bytes().to_vec();
+    let sid_v = quill_domain::SessionId::parse(sid)
+        .expect("会话 id 合法")
+        .as_bytes()
+        .to_vec();
     // 先全部拷成自有值再进循环：下面的闭包是 `move` + `'static` 的，
     // 直接从 `rows` 里取引用会借出一个逃不出本函数的借用。
     let owned: Vec<OwnedMessageRow> = rows
@@ -192,7 +205,11 @@ async fn an_empty_session_reports_zero_turns_and_null_everything_else() {
     assert_eq!(v["turns"], serde_json::json!(0));
     assert_eq!(v["steps"], serde_json::json!(0));
     // 没消息 = 没有 token 数据。显示成 0 会让用户以为「这次聊天一点没花 token」。
-    assert_eq!(v["input_tokens"], Value::Null, "没消息时入参必须是 null 不是 0");
+    assert_eq!(
+        v["input_tokens"],
+        Value::Null,
+        "没消息时入参必须是 null 不是 0"
+    );
     assert_eq!(v["output_tokens"], Value::Null);
     assert_eq!(v["llm_duration_ms"], Value::Null);
     assert_eq!(v["tok_per_s"], Value::Null);
@@ -254,7 +271,11 @@ async fn a_reported_cache_hit_survives_the_round_trip_as_a_real_number() {
     let (status, v) = get_json(app, &format!("/api/sessions/{sid}/metrics")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(v["cache_read_tokens"], serde_json::json!(900));
-    assert_eq!(v["input_tokens"], serde_json::json!(1000), "缓存读不能重复计入入参");
+    assert_eq!(
+        v["input_tokens"],
+        serde_json::json!(1000),
+        "缓存读不能重复计入入参"
+    );
     let ratio = v["cache_hit_ratio"].as_f64().expect("应当给出命中率");
     assert!((ratio - 0.9).abs() < 1e-6, "命中率应为 90%，实际 {ratio}");
 }
@@ -292,8 +313,16 @@ async fn a_missing_session_is_404_not_an_empty_statistics_object() {
     seed_user(&t);
     let app = state(&t);
 
-    let (status, v) = get_json(app, "/api/sessions/0123456789ABCDEF0123456789ABCDEF/metrics").await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "找不到会话不能回一份全 0 的统计");
+    let (status, v) = get_json(
+        app,
+        "/api/sessions/0123456789ABCDEF0123456789ABCDEF/metrics",
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "找不到会话不能回一份全 0 的统计"
+    );
     assert!(v.get("turns").is_none(), "错误信封里不该混进统计字段：{v}");
 }
 
@@ -405,8 +434,16 @@ async fn usage_on_a_fresh_account_is_an_empty_report_not_a_zeroed_one() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(v["session_count"], serde_json::json!(0));
     assert_eq!(v["sessions"].as_array().map(Vec::len), Some(0));
-    assert_eq!(v["totals"]["input_tokens"], Value::Null, "没有任何数据就是 null");
-    assert_eq!(v["totals"]["turns"], serde_json::json!(0), "轮次是 0，这是真值");
+    assert_eq!(
+        v["totals"]["input_tokens"],
+        Value::Null,
+        "没有任何数据就是 null"
+    );
+    assert_eq!(
+        v["totals"]["turns"],
+        serde_json::json!(0),
+        "轮次是 0，这是真值"
+    );
 }
 
 #[tokio::test]
@@ -454,7 +491,11 @@ async fn context_uses_the_last_real_input_tokens_and_never_invents_one() {
 
     let (status, v) = get_json(app, &format!("/api/sessions/{sid}/context")).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(v["used_tokens"], serde_json::json!(12000), "要认最后一条，不是求和");
+    assert_eq!(
+        v["used_tokens"],
+        serde_json::json!(12000),
+        "要认最后一条，不是求和"
+    );
 
     // 命中率按最后一次算；12000 里有 6000 命中 → 50%。
     let hit: Vec<i64> = v["segments"]
@@ -475,7 +516,10 @@ async fn context_uses_the_last_real_input_tokens_and_never_invents_one() {
         .expect("必须有 conversation 段")["chars"]
         .as_i64()
         .expect("数字");
-    assert_eq!(conv, 0, "夹具里的 user 消息正文是空串，所以是 0 —— 这是真值不是缺失");
+    assert_eq!(
+        conv, 0,
+        "夹具里的 user 消息正文是空串，所以是 0 —— 这是真值不是缺失"
+    );
 }
 
 /// 假上游：第 1 次调用只给 tool_calls，第 2 次给正文。两次的 usage **故意不同**，
@@ -579,18 +623,31 @@ async fn a_turn_with_tool_rounds_is_charged_for_every_round_not_only_the_last() 
         .await
         .expect("oneshot 失败");
     assert_eq!(resp.status(), StatusCode::OK, "工具往返应当正常收尾");
-    let bytes = resp.into_body().collect().await.expect("读响应体").to_bytes();
+    let bytes = resp
+        .into_body()
+        .collect()
+        .await
+        .expect("读响应体")
+        .to_bytes();
     let v: Value = serde_json::from_slice(&bytes).expect("必须是 JSON");
     assert_eq!(v["tool_rounds"], serde_json::json!(1), "确实走了一轮工具");
     // 响应里的 usage 与存档里那一行必须同源（都是整轮总量）。
     assert_eq!(v["usage"]["input"], serde_json::json!(2500), "1000 + 1500");
     assert_eq!(v["usage"]["output"], serde_json::json!(130));
-    assert_eq!(v["usage"]["cache_read"], serde_json::json!(1600), "400 + 1200");
+    assert_eq!(
+        v["usage"]["cache_read"],
+        serde_json::json!(1600),
+        "400 + 1200"
+    );
 
     // 存档侧：会话统计与 /api/usage 合计都读的是这一行，不能退回 1500。
     let (status, m) = get_json(app.clone(), &format!("/api/sessions/{sid}/metrics")).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(m["steps"], serde_json::json!(1), "一轮对话就是一条 assistant 消息");
+    assert_eq!(
+        m["steps"],
+        serde_json::json!(1),
+        "一轮对话就是一条 assistant 消息"
+    );
     assert_eq!(
         m["input_tokens"],
         serde_json::json!(2500),

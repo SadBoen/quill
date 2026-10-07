@@ -67,10 +67,7 @@ fn http() -> Result<reqwest::Client, ILinkError> {
 
 /// 公共请求头。`AuthorizationType: ilink_bot_token` 与 `X-WECHAT-UIN`
 /// 是协议要求的，后者每次请求都要换新值（防重放）。
-fn auth_headers(
-    mut rb: reqwest::RequestBuilder,
-    token: &str,
-) -> reqwest::RequestBuilder {
+fn auth_headers(mut rb: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilder {
     rb = rb
         .header("AuthorizationType", "ilink_bot_token")
         .header("Authorization", format!("Bearer {token}"))
@@ -97,12 +94,24 @@ fn b64(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = String::new();
     for chunk in bytes.chunks(3) {
-        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
         let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
         out.push(T[(n >> 18) as usize & 63] as char);
         out.push(T[(n >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
-        out.push(if chunk.len() > 2 { T[n as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            T[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            T[n as usize & 63] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -193,10 +202,7 @@ pub struct QrTicket {
 }
 
 /// `GET get_bot_qrcode?bot_type=3`
-pub async fn fetch_qrcode(
-    base_url: &str,
-    now: i64,
-) -> Result<QrTicket, ILinkError> {
+pub async fn fetch_qrcode(base_url: &str, now: i64) -> Result<QrTicket, ILinkError> {
     let v = http()?
         .get(base(base_url, "get_bot_qrcode"))
         .query(&[("bot_type", BOT_TYPE)])
@@ -248,10 +254,7 @@ pub enum QrStatus {
 }
 
 /// `GET get_qrcode_status?qrcode=`
-pub async fn poll_qr_status(
-    base_url: &str,
-    qrcode: &str,
-) -> Result<QrStatus, ILinkError> {
+pub async fn poll_qr_status(base_url: &str, qrcode: &str) -> Result<QrStatus, ILinkError> {
     let v = http()?
         .get(base(base_url, "get_qrcode_status"))
         .query(&[("qrcode", qrcode)])
@@ -326,10 +329,7 @@ pub struct PollBatch {
 ///
 /// 客户端侧超时按「这一轮没消息」处理并立刻再发一轮 —— 服务端挂满 35 秒
 /// 是正常节奏，不是故障。
-pub async fn poll_updates(
-    session: &Session,
-    cursor: &str,
-) -> Result<PollBatch, ILinkError> {
+pub async fn poll_updates(session: &Session, cursor: &str) -> Result<PollBatch, ILinkError> {
     let v = auth_headers(
         session
             .client
@@ -519,8 +519,16 @@ mod tests {
 
     #[test]
     fn expired_code_is_recognised_only_for_minus_fourteen() {
-        assert!(ILinkError::Remote { code: -14, message: String::new() }.is_session_expired());
-        assert!(!ILinkError::Remote { code: -2, message: String::new() }.is_session_expired());
+        assert!(ILinkError::Remote {
+            code: -14,
+            message: String::new()
+        }
+        .is_session_expired());
+        assert!(!ILinkError::Remote {
+            code: -2,
+            message: String::new()
+        }
+        .is_session_expired());
         assert!(!ILinkError::Http("x".into()).is_session_expired());
     }
 
@@ -589,8 +597,8 @@ mod tests {
 
     #[test]
     fn check_surfaces_remote_code() {
-        let e = check(&json!({ "errcode": -14, "errmsg": "session expired" }))
-            .expect_err("-14 应报错");
+        let e =
+            check(&json!({ "errcode": -14, "errmsg": "session expired" })).expect_err("-14 应报错");
         assert!(e.is_session_expired());
     }
 }

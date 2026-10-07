@@ -76,10 +76,7 @@ fn main() {
                 if has("--bad-initialize") {
                     Err(json!({"code": -32603, "message": "stub 被要求握手失败"}))
                 } else {
-                    eprintln!(
-                        "stub: 握手来自 {}",
-                        req["params"]["clientInfo"]["name"]
-                    );
+                    eprintln!("stub: 握手来自 {}", req["params"]["clientInfo"]["name"]);
                     Ok(json!({
                         "protocolVersion": PROTOCOL,
                         "capabilities": if has("--caps-off") { json!({}) } else { json!({"tools": {}}) },

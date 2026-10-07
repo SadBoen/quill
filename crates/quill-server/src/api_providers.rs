@@ -58,8 +58,8 @@ pub async fn create(
     let name = required_str(&body, "name")?.trim().to_string();
     let base_url = required_str(&body, "base_url")?.trim().to_string();
     let protocol_raw = required_str(&body, "protocol")?;
-    let protocol = LlmProvider::parse_protocol(protocol_raw.trim())
-        .map_err(ApiError::bad_request)?;
+    let protocol =
+        LlmProvider::parse_protocol(protocol_raw.trim()).map_err(ApiError::bad_request)?;
 
     let kind = parse_kind(&body, "kind")?;
     let preset_id = match body.get("preset_id").and_then(Value::as_str) {
@@ -172,7 +172,8 @@ pub async fn update(
     if let Some(v) = body.get("enabled") {
         p.enabled = v.as_bool().ok_or_else(|| {
             ApiError::bad_request(
-                "字段 \"enabled\" 必须是布尔值。下一步：传 true / false，不要传字符串。".to_string(),
+                "字段 \"enabled\" 必须是布尔值。下一步：传 true / false，不要传字符串。"
+                    .to_string(),
             )
         })?;
     }

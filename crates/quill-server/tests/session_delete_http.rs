@@ -136,10 +136,7 @@ async fn new_session(app: &AppState) -> String {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "建会话应成功：{v}");
-    v["id"]
-        .as_str()
-        .expect("建会话回包必须带 id")
-        .to_string()
+    v["id"].as_str().expect("建会话回包必须带 id").to_string()
 }
 
 fn fixture(label: &str) -> (TestDb, AppState) {
@@ -155,7 +152,14 @@ async fn deleting_a_session_soft_deletes_it_and_is_idempotent() {
     let (_t, app) = fixture("session-delete");
     let id = new_session(&app).await;
 
-    let (status, v) = call(&app, "DELETE", &format!("/api/sessions/{id}"), TOKEN_A, None).await;
+    let (status, v) = call(
+        &app,
+        "DELETE",
+        &format!("/api/sessions/{id}"),
+        TOKEN_A,
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "删除应 200：{v}");
     assert_eq!(v["id"], serde_json::json!(id));
     assert_eq!(v["deleted"], serde_json::json!(true));
@@ -184,7 +188,14 @@ async fn deleting_a_session_soft_deletes_it_and_is_idempotent() {
     );
 
     // 二次删除必须幂等：200 + deleted:false，而不是 404。
-    let (status, v) = call(&app, "DELETE", &format!("/api/sessions/{id}"), TOKEN_A, None).await;
+    let (status, v) = call(
+        &app,
+        "DELETE",
+        &format!("/api/sessions/{id}"),
+        TOKEN_A,
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "二次删除必须幂等 200：{v}");
     assert_eq!(v["deleted"], serde_json::json!(false));
     assert!(
@@ -225,7 +236,14 @@ async fn deleting_a_session_keeps_its_messages() {
         })
         .expect("铺消息失败");
 
-    let (status, _) = call(&app, "DELETE", &format!("/api/sessions/{id}"), TOKEN_A, None).await;
+    let (status, _) = call(
+        &app,
+        "DELETE",
+        &format!("/api/sessions/{id}"),
+        TOKEN_A,
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         scalar_i64(&t.bridge(), "SELECT count(*) AS c FROM messages"),
@@ -244,8 +262,19 @@ async fn another_users_session_cannot_be_deleted() {
     let (_t, app) = fixture("session-delete-isolation");
     let id = new_session(&app).await;
 
-    let (status, v) = call(&app, "DELETE", &format!("/api/sessions/{id}"), TOKEN_B, None).await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "删别人的会话按「不存在」口径：{v}");
+    let (status, v) = call(
+        &app,
+        "DELETE",
+        &format!("/api/sessions/{id}"),
+        TOKEN_B,
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "删别人的会话按「不存在」口径：{v}"
+    );
     assert_eq!(v["error"]["code"], serde_json::json!("entity_not_found"));
     assert!(v.to_string().contains("下一步"), "{v}");
 

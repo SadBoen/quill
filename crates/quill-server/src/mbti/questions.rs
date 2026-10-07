@@ -396,7 +396,11 @@ mod tests {
     #[test]
     fn ids_are_unique_and_poles_match_the_axis() {
         for q in QUESTIONS {
-            assert!(QUESTIONS.iter().filter(|o| o.id == q.id).count() == 1, "题号重复 {}", q.id);
+            assert!(
+                QUESTIONS.iter().filter(|o| o.id == q.id).count() == 1,
+                "题号重复 {}",
+                q.id
+            );
             let axis = AXES
                 .iter()
                 .find(|a| a.0 == q.dimension)

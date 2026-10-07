@@ -39,10 +39,7 @@ pub(crate) fn map_err(op: &str, e: quill_agent::AgentError) -> ApiError {
 /// 每台服务器都会走一遍 `mcp_client::probe`：启用且是 stdio 的会真的被拉起来、
 /// 真的握手、真的 `tools/list`。连不上的那台在 `status` 里带一句白话原因，
 /// 但**不会**让整个请求失败 —— 一台用户的服务器起不来，不该让整页 MCP 打不开。
-pub async fn list_mcp(
-    State(state): State<AppState>,
-    user: AuthUser,
-) -> Result<Response, ApiError> {
+pub async fn list_mcp(State(state): State<AppState>, user: AuthUser) -> Result<Response, ApiError> {
     let db = state.db()?;
     let rows = mcp_repo::list(db, user.0.user_id)
         .await
@@ -105,7 +102,10 @@ async fn mcp_body(state: &AppState, uid: quill_adapters::UserId, rows: &[McpServ
         .collect();
     // 停用的那些：**如实报「已停用」**，而不是把它们从 status 里抹掉 ——
     // 抹掉的话界面上这台服务器就没了，用户会以为它被删了。
-    for row in rows.iter().filter(|r| !active_names.iter().any(|n| n == &r.name)) {
+    for row in rows
+        .iter()
+        .filter(|r| !active_names.iter().any(|n| n == &r.name))
+    {
         status.push(json!({
             "name": row.name,
             "probed": false,
@@ -241,7 +241,11 @@ pub async fn save_mcp(
                  同一次提交里名字必须唯一 —— 名字是主键的一部分，重复会让 \
                  「哪一条被删」无法判定。\
                  下一步：改掉其中一个名字，或拆成两次提交。",
-                parsed.iter().position(|x| x.name.to_lowercase() == n).map(|x| x + 1).unwrap_or(0)
+                parsed
+                    .iter()
+                    .position(|x| x.name.to_lowercase() == n)
+                    .map(|x| x + 1)
+                    .unwrap_or(0)
             )));
         }
     }
@@ -347,7 +351,10 @@ fn parse_server(v: &Value, idx: usize) -> Result<McpServerRow, ApiError> {
         )));
     }
 
-    let command = obj.get("command").and_then(Value::as_str).map(str::to_string);
+    let command = obj
+        .get("command")
+        .and_then(Value::as_str)
+        .map(str::to_string);
     let args = obj
         .get("args")
         .and_then(Value::as_array)
@@ -371,7 +378,10 @@ fn parse_server(v: &Value, idx: usize) -> Result<McpServerRow, ApiError> {
         .filter(|s| !s.is_empty())
         .map(str::to_string);
     let env = kv(obj.get("env"), &format!("第 {idx} 项的 env（stdio 专用）"))?;
-    let headers = kv(obj.get("headers"), &format!("第 {idx} 项的 headers（http/sse 专用）"))?;
+    let headers = kv(
+        obj.get("headers"),
+        &format!("第 {idx} 项的 headers（http/sse 专用）"),
+    )?;
 
     // 传输方式与必填字段对不上时**在这里**报错，而不是丢给数据库 CHECK ——
     // 数据库只说 "CHECK constraint failed"，用户无从知道是哪台服务器的哪个字段。
@@ -506,7 +516,9 @@ fn kv(v: Option<&Value>, label: &str) -> Result<Vec<(String, String)>, ApiError>
         // 前端发来 number 的话存成 "3" 比报错更合理（用户看到的是同一个框）。
         out.push((
             k.clone(),
-            val.as_str().map(str::to_string).unwrap_or_else(|| val.to_string()),
+            val.as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| val.to_string()),
         ));
     }
     out.sort();
@@ -558,7 +570,10 @@ mod hub_error_tests {
 
     #[test]
     fn the_detail_keeps_the_actual_reason_next_to_the_generic_advice() {
-        let e = hub_error("读技能市场列表失败", HubError::Parse("期望 skillSets".into()));
+        let e = hub_error(
+            "读技能市场列表失败",
+            HubError::Parse("期望 skillSets".into()),
+        );
         let d = e.detail();
         assert!(d.contains("读技能市场列表失败"), "{d}");
         assert!(d.contains("skillSets"), "真正的原因要留着：{d}");
@@ -600,7 +615,10 @@ mod hub_error_tests {
         // detail 要留住上限与是哪个接口，用户才知道该拿什么去比。
         let d = oversize.detail();
         assert!(d.contains("32"), "上限要给出数字：{d}");
-        assert!(d.contains("/api/v1/showcase/recommended"), "接口要说清：{d}");
+        assert!(
+            d.contains("/api/v1/showcase/recommended"),
+            "接口要说清：{d}"
+        );
 
         // 反过来也得钉住：真正的传输失败仍然要给网络建议，
         // 别把这个 bug 修成「谁都不再说网络」。
@@ -641,8 +659,7 @@ mod hub_source_tests {
         // `identify.md`。按文件名装出来技能就叫 `identify` —— 这个名字
         // 既看不懂，又会直接出现在对话工具表里让模型调（tool_name 就是 slug）。
         // 一个包 = 一个技能，名字必须是那个包。
-        let manifest = crate::skillhub::parse_manifest(REAL_MANIFEST)
-            .expect("manifest 应当能解析");
+        let manifest = crate::skillhub::parse_manifest(REAL_MANIFEST).expect("manifest 应当能解析");
         let file_name = "identify.md";
         let chosen = manifest.slug.trim().to_string();
         assert_eq!(chosen, "tech-test-automation");
@@ -792,7 +809,8 @@ pub struct HubListQuery {
     pub page: u32,
     #[serde(default = "fifty")]
     pub page_size: u32,
-}fn one() -> u32 {
+}
+fn one() -> u32 {
     1
 }
 fn fifty() -> u32 {
@@ -846,8 +864,7 @@ pub(crate) fn hub_error(what: &str, e: crate::skillhub::HubError) -> ApiError {
 ///
 /// **不能复用 `ProviderUnavailable` 那句** —— 它谈的是模型服务与
 /// llama-server，而这里坏的是另一个外部服务。
-pub(crate) const SKILLHUB_ADVICE: &str =
-    "技能市场（SkillHub）是外部服务，本机没有它的副本。\
+pub(crate) const SKILLHUB_ADVICE: &str = "技能市场（SkillHub）是外部服务，本机没有它的副本。\
      先确认网络能到上游；若是自建或镜像的市场，用 `QUILL_SKILLHUB_HOST` \
      指向可达的地址后重启 quill-server。已安装的技能不受影响，\
      它们本来就在本机磁盘上。";
@@ -1171,10 +1188,8 @@ fn plan_install(
         // `normalize_name` 的错误信息里没有「换个名字继续」这句话。
         let slug_row = match mcp_repo::normalize_name(&stem) {
             Ok(n) => n,
-            Err(_) => {
-                mcp_repo::normalize_name(name.trim_end_matches(".md"))
-                    .map_err(ApiError::bad_request)?
-            }
+            Err(_) => mcp_repo::normalize_name(name.trim_end_matches(".md"))
+                .map_err(ApiError::bad_request)?,
         };
 
         match taken.iter().find(|(s, _)| *s == slug_row) {
@@ -1214,16 +1229,15 @@ pub async fn skill_hub_install(
     user: AuthUser,
     Path(slug): Path<String>,
 ) -> Result<Response, ApiError> {
-    let safe = crate::skillhub::validate_slug(&slug)
-        .map_err(|e| hub_error("请求不合法", e))?;
+    let safe = crate::skillhub::validate_slug(&slug).map_err(|e| hub_error("请求不合法", e))?;
 
     let bytes = match crate::skillhub::download_skillset(&safe).await {
         Ok(b) => b,
         Err(e) => return Err(hub_error(&format!("下载技能包 {safe} 失败"), e)),
     };
 
-    let unpacked = crate::skillhub_unpack::unpack(&bytes)
-        .map_err(|e| ApiError::bad_request(e.message()))?;
+    let unpacked =
+        crate::skillhub_unpack::unpack(&bytes).map_err(|e| ApiError::bad_request(e.message()))?;
 
     // 上游的包里有一份 manifest（实测 2026-10-06）：
     // `tech-test-automation` 的 zip 只有 `manifest.json` 与 `identify.md` 两个条目，
@@ -1423,7 +1437,10 @@ pub(crate) fn skill_body_path(
 /// **路径穿越防护**：slug 来自 URL/body，直接拼进路径就能用 `../` 跳出目录，
 /// 写到任意位置。归一后仍要确认最终路径落在根目录内 —— 归一规则被绕过时
 /// 这道检查是最后一道。
-pub(crate) fn skill_file(root: &std::path::Path, slug: &str) -> Result<std::path::PathBuf, ApiError> {
+pub(crate) fn skill_file(
+    root: &std::path::Path,
+    slug: &str,
+) -> Result<std::path::PathBuf, ApiError> {
     let name = mcp_repo::normalize_name(slug).map_err(ApiError::bad_request)?;
     skill_body_path(root, &name)
 }
@@ -1464,11 +1481,9 @@ pub async fn list_skills(
     let dir = skill_dir(&state.config);
     // 内置工具名是「已占住」的名字。SKILL 之间的重名在当前 schema 下不存在
     // （`UNIQUE(user_id, name)`），所以拿内置这一份就够判定。
-    let builtin_names: Vec<quill_provider::ToolSpec> = crate::tools::ToolRegistry::builtin(
-        std::sync::Arc::new(state.clone()),
-        user.0.user_id,
-    )
-    .specs();
+    let builtin_names: Vec<quill_provider::ToolSpec> =
+        crate::tools::ToolRegistry::builtin(std::sync::Arc::new(state.clone()), user.0.user_id)
+            .specs();
 
     let mut items = Vec::with_capacity(rows.len());
     let mut taken = builtin_names;
@@ -1542,7 +1557,9 @@ pub async fn save_skill(
         .or_else(|| body.get("name"))
         .and_then(Value::as_str)
         .ok_or_else(|| {
-            ApiError::bad_request("slug 必填。\u{0a}下一步：{\"slug\":\"code-review\",\"content\":\"…\"}")
+            ApiError::bad_request(
+                "slug 必填。\u{0a}下一步：{\"slug\":\"code-review\",\"content\":\"…\"}",
+            )
         })?;
     let dir = skill_dir(&state.config);
     std::fs::create_dir_all(&dir)
@@ -1682,23 +1699,21 @@ pub async fn update_skill(
 ) -> Result<Response, ApiError> {
     let obj = patch.as_object().ok_or_else(|| {
         ApiError::bad_request(
-            "请求体必须是 JSON 对象。下一步：{\"enabled\": true} 或 {\"enabled\": false}。".to_string(),
+            "请求体必须是 JSON 对象。下一步：{\"enabled\": true} 或 {\"enabled\": false}。"
+                .to_string(),
         )
     })?;
 
     // `only_keys_at` 会把多余的键逐个点名，而不是只说「参数不对」。
     crate::api_experts::only_keys_at(&patch, &["enabled"], "SKILL 的 PATCH")?;
 
-    let enabled = obj
-        .get("enabled")
-        .and_then(Value::as_bool)
-        .ok_or_else(|| {
-            ApiError::bad_request(
-                "enabled 必须是 true 或 false。下一步：{\"enabled\": true} 可以让模型这一轮调到它，\
+    let enabled = obj.get("enabled").and_then(Value::as_bool).ok_or_else(|| {
+        ApiError::bad_request(
+            "enabled 必须是 true 或 false。下一步：{\"enabled\": true} 可以让模型这一轮调到它，\
                  {\"enabled\": false} 会把它从对话工具表里摘掉。"
-                    .to_string(),
-            )
-        })?;
+                .to_string(),
+        )
+    })?;
 
     let norm = mcp_repo::normalize_name(&name).map_err(ApiError::bad_request)?;
     let db = state.db()?;
@@ -1729,9 +1744,7 @@ pub async fn update_skill(
     let saved = skills_repo::get(db, user.0.user_id, &norm)
         .await
         .map_err(|e| map_err("回读 SKILL", e))?
-        .ok_or_else(|| {
-            ApiError::internal(format!("刚改完的 SKILL {norm} 立刻就读不到了"))
-        })?;
+        .ok_or_else(|| ApiError::internal(format!("刚改完的 SKILL {norm} 立刻就读不到了")))?;
 
     Ok(Json(json!({ "skill": skills_repo::to_json(&saved) })).into_response())
 }

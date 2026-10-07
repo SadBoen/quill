@@ -248,10 +248,7 @@ pub(crate) async fn find_credentials(
 /// 就撞不变量**：不是 401「凭据无效」，而是 500「内部不变量被破坏」。
 /// 那等于把一个正常的登录失败报成服务端故障，还顺手把它计进限流额度里
 /// 当成「一次失败尝试」——双重错误。
-fn digest_from_row(
-    row: &SqliteRow,
-    algo: &str,
-) -> Result<PasswordDigest, ControlError> {
+fn digest_from_row(row: &SqliteRow, algo: &str) -> Result<PasswordDigest, ControlError> {
     if algo == crate::bootstrap::TOKEN_ONLY_ALGO {
         // 零值摘要。`verify_stored` 会先 `parse_algo("token-only")` 失败，
         // 直接返回 false（见 password.rs），所以这两个字节数组永远不会被

@@ -74,7 +74,12 @@ pub fn score(answers: &Map<String, Value>) -> Result<Scored, TooFewAnswers> {
         jp: axis(&counts, "JP"),
     };
     let mut code = String::with_capacity(4);
-    for d in [&dimensions.ei, &dimensions.sn, &dimensions.tf, &dimensions.jp] {
+    for d in [
+        &dimensions.ei,
+        &dimensions.sn,
+        &dimensions.tf,
+        &dimensions.jp,
+    ] {
         code.push_str(d.pole);
     }
     Ok(Scored {
@@ -91,7 +96,9 @@ fn tally(answers: &Map<String, Value>) -> ([[i64; 2]; 4], usize) {
 
     for (k, v) in answers {
         let Ok(id) = k.parse::<i64>() else { continue };
-        let Some(q) = questions::get(id) else { continue };
+        let Some(q) = questions::get(id) else {
+            continue;
+        };
         let Some(axis_idx) = AXES.iter().position(|a| a.0 == q.dimension) else {
             continue;
         };
@@ -131,7 +138,11 @@ fn axis(counts: &[[i64; 2]; 4], name: &str) -> Pole {
     let dominant = if dominant_is_first { first } else { second };
     let pct = (50.0_f64 + (dominant as f64 / total as f64) * 35.0).round() as i64;
     Pole {
-        pole: if dominant_is_first { first_pole } else { second_pole },
+        pole: if dominant_is_first {
+            first_pole
+        } else {
+            second_pole
+        },
         pct: pct.clamp(50, 85),
     }
 }
@@ -189,7 +200,12 @@ mod tests {
     fn all_a_gives_the_first_pole_of_every_axis_at_the_cap() {
         let s = score(&half_and_half()).expect("28 题够门槛");
         assert_eq!(s.code, "ESTJ");
-        for d in [&s.dimensions.ei, &s.dimensions.sn, &s.dimensions.tf, &s.dimensions.jp] {
+        for d in [
+            &s.dimensions.ei,
+            &s.dimensions.sn,
+            &s.dimensions.tf,
+            &s.dimensions.jp,
+        ] {
             assert_eq!(d.pct, 85, "全选一边应顶到上限 85");
         }
     }
@@ -249,7 +265,10 @@ mod tests {
         assert_eq!(e.answered, 2);
         assert_eq!(e.required, MIN_ANSWERS);
         let msg = e.to_string();
-        assert!(msg.contains("20") && msg.contains("2"), "消息里两个数都要有：{msg}");
+        assert!(
+            msg.contains("20") && msg.contains("2"),
+            "消息里两个数都要有：{msg}"
+        );
     }
 
     #[test]

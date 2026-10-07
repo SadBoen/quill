@@ -156,7 +156,8 @@ mod tests {
     #[test]
     fn the_stream_ends_when_the_sender_is_dropped() {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<SseFrame>();
-        tx.send(SseFrame::new("delta", json!({"text": "你"}))).unwrap();
+        tx.send(SseFrame::new("delta", json!({"text": "你"})))
+            .unwrap();
         drop(tx);
 
         let mut stream = FrameStream::new(rx);

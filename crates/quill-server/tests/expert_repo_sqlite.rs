@@ -317,17 +317,13 @@ fn persona_columns_persist_across_bridge_restart_including_null_model() {
     r.set_model(&u(1), &e("cost-analyst"), None)
         .expect("清除偏好模型应成功");
 
-    let updated = r
-        .get_visible(&u(1), &e("quiet-expert"))
-        .expect("应可读");
+    let updated = r.get_visible(&u(1), &e("quiet-expert")).expect("应可读");
     assert_eq!(
         updated.instructions(),
         "改过的人格",
         "🔴 PATCH 的人格必须真的写进库（PUT_SQL 的 DO UPDATE 段漏了 instructions）"
     );
-    let cleared = r
-        .get_visible(&u(1), &e("cost-analyst"))
-        .expect("应可读");
+    let cleared = r.get_visible(&u(1), &e("cost-analyst")).expect("应可读");
     assert_eq!(
         cleared.model(),
         None,
