@@ -63,8 +63,11 @@ describe('上下文小环', () => {
     renderRing(ctx())
     const ring = screen.getByRole('button')
     expect(ring).toHaveTextContent('9%')
-    expect(ring.getAttribute('aria-label')).toContain('3042')
-    expect(ring.getAttribute('aria-label')).toContain('32768')
+    // 3042 / 32768 压成 3k / 33k，不写成四位数。
+    // 取整不是四舍五入到一位小数 —— 逐字抄 octop 的 `Math.round(n / 1000)`。
+    expect(ring.getAttribute('aria-label')).toContain('3k')
+    expect(ring.getAttribute('aria-label')).toContain('33k')
+    expect(ring.getAttribute('aria-label')).not.toContain('3042')
   })
 
   it('没实测值时一个环都不画', () => {
@@ -77,20 +80,32 @@ describe('上下文小环', () => {
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 
-  it('展开后逐项带「字符」，一个 0 字符的段不出现', () => {
+  it('展开后逐项带 `~`，一个 0 字符的段不出现', () => {
     renderRing(ctx(), true)
     const panel = screen.getByRole('dialog')
     const items = Array.from(panel.querySelectorAll('li')).map((li) => li.textContent?.replace(/\s+/g, ' ').trim())
     // 名字与数字是两个元素，靠 flex gap 分开，所以按「一行一项」来对。
+    // `~` 是「这是估算」的声明（照 octop），k/M 是紧凑写法（照 formatTokenK）。
     expect(items).toEqual([
-      '系统提示 242 字符',
-      '内置工具 3100 字符',
-      '对话历史 1800 字符',
+      '系统提示 ~242',
+      '内置工具 ~3k',
+      '对话历史 ~2k',
     ])
     // 0 字符的段（技能 / MCP）不该占一行。
     expect(panel).not.toHaveTextContent('技能')
-    // 单位那句也得留着。
-    expect(panel).toHaveTextContent('按字符数')
+  })
+
+  it('不再显示「quill 没有分词器」那句解释', () => {
+    // 声明「这是估算」的是 `~` 符号本身。用一整句话解释符号，
+    // 等于替用户把 `~` 读一遍 —— 而那句话描述的是实现细节，不是这个数能干什么。
+    //
+    // 断言要能同时抓住中英两种写法：那句废话里一定带「字符」或「分词器」，
+    // 两种都在 i18n 资源里。上一版这里只断言了中文，换成英文 defaultValue 就漏了。
+    renderRing(ctx(), true)
+    const panel = screen.getByRole('dialog')
+    expect(panel).not.toHaveTextContent('分词器')
+    expect(panel).not.toHaveTextContent('tokenizer')
+    expect(panel).not.toHaveTextContent('字符')
   })
 
   it('服务端没给构成时明说没有，而不是画一个空环', () => {

@@ -18,8 +18,10 @@ import { useSessionContext } from './useSessionContext'
  * 1. **环的总占用是实测的**：`used_tokens` 来自模型端真实上报的
  *    `input_tokens`。不用「字符数 ÷ 4」这种估算 —— 那样环上的百分比
  *    就是一个凭空的数字。
- * 2. **构成段是字符数，不是 token 数。** quill 没有分词器，所以图例上
- *    明写「字符」。把字符数当 token 数报出去，是这个页面最容易犯的错。
+ * 2. **构成段是估算值，前缀 `~`。** 服务端给的是字符数，quill 没有分词器，
+ *    所以它只能是估算。照 octop（`ContextWindowRing.tsx:254`）在每个值前
+ *    面加 `~`，靠符号本身声明这件事 —— 而不是用一整句话解释 `~` 是什么，
+ *    那等于替用户把符号读一遍。
  *
  * 两者的关系和 octop 一致：环的宽度由实测值决定，构成段只提供**相对比例**。
  */
@@ -47,7 +49,17 @@ export function contextSegmentLabel(key: string, t: (k: string, o: Record<string
   return map[key] ?? key
 }
 
-function formatTokens(n: number): string {
+/**
+ * 大数压成 `k` / `M`，逐字抄 octop 的 `formatTokenK`
+ * （`.octop-ref/octop/dashboard/src/pages/Chat/components/ContextWindowRing.tsx:26-30`）。
+ *
+ * 不压的话一个 128k 窗口要写成「131072」，五位数在面板里既占地方又要用户
+ * 自己在脑子里换算。三位数以下原样显示 —— 压成「0.2k」反而更难读。
+ *
+ * **导出而不留在本文件**：聊天页的小环面板与用量页的图表要显示同一批数，
+ * 两处各抄一份就会出现「环上 3.1k、图上 3100」。
+ */
+export function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1000) return `${Math.round(n / 1000)}k`
   return String(n)
@@ -158,7 +170,7 @@ export function ContextWindowChart({
           name: p.name,
           value: formatTokens(p.value),
           percent: p.percent,
-          defaultValue: '{{name}}：{{value}} 字符（{{percent}}%）',
+          defaultValue: '{{name}}：~{{value}}（{{percent}}%）',
         }),
     },
     legend: { bottom: 0, itemWidth: 10, itemHeight: 10, textStyle: { fontSize: 11 } },
@@ -173,7 +185,7 @@ export function ContextWindowChart({
     ],
   }
 
-  // 单位跟 tooltip 走同一个 key：这一页唯一说「字符」的地方不允许出现两种
+  // 单位跟 tooltip 走同一个 key：这一页唯一说「估算」的地方不允许出现两种
   // 写法，更不允许在英文界面里蹦出中文单位。
   // 提前算好：`.i18n-check.mjs` 靠括号配平抓参数，嵌在外层 t() 里的 t() 会被
   // 误认成「多传了 name / value」。
@@ -182,7 +194,7 @@ export function ContextWindowChart({
       t('usage.segItem', {
         name: s.name,
         value: s.value,
-        defaultValue: '{{name}} {{value}} 字符',
+        defaultValue: '{{name}} ~{{value}}',
       }),
     )
     .join('，')
@@ -210,9 +222,12 @@ export function ContextWindowChart({
       <figure className="usage-chart">
         <figcaption>
           {t('usage.contextComposition', { defaultValue: '上下文构成' })}
+          {/* 原来这里挂着一句「按字符数，不是 token 数（quill 没有分词器）」。
+              现在每个分段值前面带 `~`（照 octop），那才是「这是估算」的声明；
+              再用一整句解释 `~` 是什么意思，等于替用户把符号读一遍。 */}
           <small className="field-help">
-            {t('usage.charsNotTokens', {
-              defaultValue: '按字符数，不是 token 数（quill 没有分词器）',
+            {t('usage.contextCompositionEstimate', {
+              defaultValue: '分段为估算值（~），总占用是模型端实测',
             })}
           </small>
         </figcaption>

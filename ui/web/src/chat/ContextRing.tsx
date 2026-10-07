@@ -2,7 +2,7 @@ import type { CSSProperties, ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import type { SessionContext } from '../usage/contextApi'
-import { contextSegmentColor, contextSegmentLabel } from '../usage/ContextWindowChart'
+import { contextSegmentColor, contextSegmentLabel, formatTokens } from '../usage/ContextWindowChart'
 import './ContextRing.css'
 
 /**
@@ -61,8 +61,8 @@ const segments = (context.segments ?? []).filter((s) => s.chars > 0)
         onClick={onToggle}
         aria-expanded={open}
         aria-label={t('chat.contextRing.label', {
-          used: String(used),
-          max: String(context.max_tokens),
+          used: formatTokens(used),
+          max: formatTokens(context.max_tokens),
           percent,
           defaultValue: '上下文已占用 {{used}} / {{max}} tokens（{{percent}}%），点开看构成',
         })}
@@ -81,8 +81,8 @@ const segments = (context.segments ?? []).filter((s) => s.chars > 0)
         >
           <p className="chat-context-panel-head">
             {t('chat.contextRing.usedOf', {
-              used: String(used),
-              max: String(context.max_tokens),
+              used: formatTokens(used),
+              max: formatTokens(context.max_tokens),
               percent,
               defaultValue: '已占用 {{used}} / {{max}} tokens（{{percent}}%）',
             })}
@@ -101,9 +101,11 @@ const segments = (context.segments ?? []).filter((s) => s.chars > 0)
                   <span className="chat-context-panel-name">
                     {contextSegmentLabel(s.key, t)}{' '}
                   </span>
-                  {/* 单位必须跟着数走：quill 没有分词器，说成 token 就是凭空造数字。 */}
+                  {/* 前缀 `~` 跟着 octop（ContextWindowRing.tsx:254）：
+                      总占用是模型端实测的 token，分段只是本地量的相对构成。
+                      `~` 就是「别把这个当准值」。压成 k/M 同理，逐字抄 formatTokenK。 */}
                   <b>
-                    {s.chars} {t('chat.contextRing.charUnit', { defaultValue: '字符' })}
+                    ~{formatTokens(s.chars)}
                   </b>
                 </li>
               ))}
@@ -116,14 +118,11 @@ const segments = (context.segments ?? []).filter((s) => s.chars > 0)
             <p className="chat-context-panel-cache">
               {t('chat.contextRing.cacheHit', {
                 percent: Math.round(cacheHit * 100),
-                tokens: cacheRead ?? 0,
+                tokens: formatTokens(cacheRead ?? 0),
                 defaultValue: '缓存命中 {{percent}}%（{{tokens}} tokens 走缓存）',
               })}
             </p>
           ) : null}
-          <p className="chat-context-panel-note">
-            {t('usage.charsNotTokens', { defaultValue: '按字符数，不是 token 数（quill 没有分词器）' })}
-          </p>
         </div>
       ) : null}
     </div>

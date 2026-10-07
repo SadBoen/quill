@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import { useTranslation } from 'react-i18next'
 import remarkGfm from 'remark-gfm'
 
+import { formatTokens } from '../usage/ContextWindowChart'
 import { messageBlocks, type ChatMessage, type ContentBlock } from './model'
 
 function MessageRow({ message }: { message: ChatMessage }): ReactNode {
@@ -21,11 +22,11 @@ function MessageRow({ message }: { message: ChatMessage }): ReactNode {
       {!isHuman && message.turn_ms > 0 ? (
         <p className="chat-muted" data-testid="chat-turn-usage">
           {t('chat.usage', {
-            ms: message.turn_ms,
-            input: message.input_tokens,
-            output: message.output_tokens,
+            duration: formatDurationSeconds(message.turn_ms),
+            input: formatTokens(message.input_tokens),
+            output: formatTokens(message.output_tokens),
             speed: formatSpeed(message.output_tokens, message.turn_ms),
-            defaultValue: '{{ms}} 毫秒 · 入 {{input}} / 出 {{output}} tokens{{speed}}',
+            defaultValue: '{{duration}} · 入 {{input}} / 出 {{output}} tokens{{speed}}',
           })}
         </p>
       ) : null}
@@ -126,6 +127,19 @@ export function ContentBlocks({ blocks }: { blocks: ContentBlock[] }): ReactNode
     }
     return null
   })
+}
+
+/**
+ * 毫秒 → 秒。**不显示毫秒**。
+ *
+ * 这一行后面已经跟着「入 598 / 出 9」，再挂一个「2084 毫秒」就是三个
+ * 不同数量级的数挤在一行，读的人得自己在脑子里换算。秒是人对「等了多久」
+ * 的直觉单位 —— 「2.1s」不需要解释，「2084ms」需要。
+ *
+ * 一位小数是刻意的：再往下压，0.04s 这种值对用户没有信息量。
+ */
+function formatDurationSeconds(turnMs: number): string {
+  return `${(turnMs / 1000).toFixed(1)}s`
 }
 
 /**

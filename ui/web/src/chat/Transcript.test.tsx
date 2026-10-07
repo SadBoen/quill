@@ -38,7 +38,32 @@ describe('Transcript 每条末尾的用量行', () => {
   it('这一条花了多久、出入参多少，都在这一行里', () => {
     render(<Transcript messages={[assistant()]} running={false} />)
     const line = screen.getByTestId('chat-turn-usage')
-    expect(line.textContent).toContain('2084 毫秒')
+    // 2084 毫秒压成 2.1 秒。后面已经跟着出入参，再挂个毫秒就是三个数量级挤一行。
+    expect(line.textContent).toContain('2.1s')
+    expect(line.textContent).not.toContain('2084')
+    expect(line.textContent).toContain('入 598')
+    expect(line.textContent).toContain('出 9')
+  })
+
+  it('token 数压成 k/M，不写成四位数', () => {
+    render(
+      <Transcript
+        messages={[assistant({ input_tokens: 3200, output_tokens: 1_200_000, turn_ms: 2000 })]}
+        running={false}
+      />,
+    )
+    const line = screen.getByTestId('chat-turn-usage')
+    // k 档取整（照 octop 的 Math.round(n/1000)），M 档一位小数。
+    expect(line.textContent).toContain('入 3k')
+    expect(line.textContent).toContain('出 1.2M')
+    expect(line.textContent).not.toContain('3200')
+  })
+
+  it('三位数以下不压成 0.6k —— 那比原数更难读', () => {
+    render(
+      <Transcript messages={[assistant({ input_tokens: 598, output_tokens: 9 })]} running={false} />,
+    )
+    const line = screen.getByTestId('chat-turn-usage')
     expect(line.textContent).toContain('入 598')
     expect(line.textContent).toContain('出 9')
   })
@@ -55,7 +80,7 @@ describe('Transcript 每条末尾的用量行', () => {
     render(<Transcript messages={[assistant({ output_tokens: 0 })]} running={false} />)
     const line = screen.getByTestId('chat-turn-usage')
     expect(line.textContent).not.toContain('tok/s')
-    expect(line.textContent).toContain('2084 毫秒')
+    expect(line.textContent).toContain('2.1s')
   })
 
   it('用户自己那条不显示用量行', () => {

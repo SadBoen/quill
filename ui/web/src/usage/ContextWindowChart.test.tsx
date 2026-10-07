@@ -132,10 +132,18 @@ describe('上下文窗口图', () => {
     expect(ring?.getAttribute('aria-label')).toContain('9%')
   })
 
-  it('构成图必须标明单位是字符，不是 token', async () => {
+  it('构成图必须声明分段是估算，而不是假装它是真值', async () => {
     renderChart(context())
     await waitFor(() => expect(screen.getByText('上下文构成')).toBeInTheDocument())
-    expect(screen.getByText(/按字符数，不是 token 数/)).toBeInTheDocument()
+    // 每个分段值前面带 `~`（照 octop）。说明句只交代「哪些是真值」，
+    // 不再用一整句「quill 没有分词器」去解释符号 —— 那是实现细节。
+    expect(screen.getByText(/分段为估算值/)).toBeInTheDocument()
+    const aria = screen
+      .getAllByRole('img')
+      .map((el) => el.getAttribute('aria-label') ?? '')
+      .join(' ')
+    expect(aria).toContain('~')
+    expect(aria).not.toContain('字符')
   })
 
   it('上下文上限为 0 时不显示百分比，也不假装满环', async () => {
