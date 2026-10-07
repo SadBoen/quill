@@ -9,7 +9,6 @@ import { EXPERTS_KEY, listExperts } from '../experts/api'
 import { Popconfirm } from '../experts/ExpertsUi'
 import { loadSessions, createSession, loadHealth, loadMessageHistory, loadSessionMetrics, chatErrorMessage } from './chatApi'
 import { upsertMessage, type ChatMessage } from './model'
-import SessionMetricsBar from './SessionMetricsBar'
 import { ContextRing } from './ContextRing'
 import { useSessionContext } from '../usage/useSessionContext'
 import { ChatSidebar } from './ChatSidebar'
@@ -658,7 +657,6 @@ export function ChatPage(): ReactNode {
                     open={contextOpen}
                     onToggle={() => setContextOpen((v) => !v)}
                     cacheHit={metrics.data?.cache_hit_ratio ?? null}
-                    cacheRead={metrics.data?.cache_read_tokens ?? null}
                   />
                 ) : null}
                 <span
@@ -682,9 +680,6 @@ export function ChatPage(): ReactNode {
               </div>
             </div>
           </form>
-          {/* 会话级统计。放在输入框下面：它是会话整体的数据，不是「本次」的。
-              没数据时组件自己返回 null，不占位置。 */}
-          <SessionMetricsBar metrics={metrics.data ?? null} />
         </div>
       </section>
     </div>

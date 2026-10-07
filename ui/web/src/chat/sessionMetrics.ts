@@ -36,29 +36,6 @@ export interface SessionMetrics {
   cache_read_tokens: number | null
 }
 
-/**
- * **聊天页常显的那一排**，比 `METRIC_KEYS` 少得多。
- *
- * `METRIC_KEYS` 是全部指标（用量统计页的表格要用全的）。聊天页那行是从
- * octop 的 `TrajectoryMetricsBar` 抄来的，但抄到输入框下面之后实测有问题：
- * 一屏 8 个词，其中一半是同一件事换个说法。
- *
- * 移走的四项，各有各的去处，不是删掉：
- * - `turns` / `steps`：正常一问一答下两个数永远相等，同一件事说两遍。
- * - `llm_duration_ms` / `tok_per_s`：搬到**每条回复的末尾**
- *   （`Transcript.tsx`）。那是「这一条花了多久」，会话级的和属于会话；
- *   而 tok/s 本身就是「出参 ÷ 耗时」，和这两个数放一起是自证。
- * - `cache_hit_ratio`：搬到**上下文小环的点开面板**里。它讲的是缓存，
- *   和上下文窗口占用是同一件事的两面：省下的钱 + 占掉的位置。
- *
- * 剩下的入参 / 出参 / 缓存读是「这个会话一共花了多少」，只有会话级有答案。
- */
-export const CHAT_BAR_KEYS: readonly SessionMetricKey[] = [
-  'input_tokens',
-  'output_tokens',
-  'cache_read_tokens',
-]
-
 /** 展示顺序即此数组顺序。与 octop 的 METRIC_KEYS 一致。 */
 export const METRIC_KEYS: readonly SessionMetricKey[] = [
   'turns',
@@ -85,9 +62,9 @@ export interface VisibleMetric {
  * 而不是变成 `0`。quill 不记录工具耗时和首 token 时刻，所以那两格
  * 永远不显示 —— 这是诚实，不是缺功能。
  */
-export function visibleMetrics(metrics: SessionMetrics, keys: readonly SessionMetricKey[] = METRIC_KEYS): VisibleMetric[] {
+export function visibleMetrics(metrics: SessionMetrics): VisibleMetric[] {
   const out: VisibleMetric[] = []
-  for (const key of keys) {
+  for (const key of METRIC_KEYS) {
     const value = metrics[key]
     if (value !== null && value !== undefined) {
       out.push({ key, value })
@@ -99,8 +76,9 @@ export function visibleMetrics(metrics: SessionMetrics, keys: readonly SessionMe
 /**
  * 指标名 → 展示文案。
  *
- * 聊天页统计条（`SessionMetricsBar`）和用量页表头（`UsagePage`）展示的是**同一批
- * 指标**，所以名字必须来自同一张表：抄一份的结果就是同一个指标在两个页面显示不同名字。
+ * 词条挂在 `usage.*` 而不是 `chat.*`：聊天页那条统计条已经删了，
+ * 这些名字现在只有用量统计页的表头在用。挂在已经没人访问的命名空间下，
+ * 下一个人找不到它就会以为这批指标没有文案。
  *
  * `Record<SessionMetricKey, ...>` 是刻意的：`SessionMetricKey` 新增一项而这里漏了，
  * TypeScript 直接报错，而不是让那一格默默显示 i18n 的原始 key。
@@ -109,16 +87,16 @@ export function visibleMetrics(metrics: SessionMetrics, keys: readonly SessionMe
  * 否则 `.i18n-check.mjs` 门禁会红。
  */
 const METRIC_LABELS: Record<SessionMetricKey, { key: string; fallback: string }> = {
-  turns: { key: 'chat.metrics.turns', fallback: '轮次' },
-  steps: { key: 'chat.metrics.steps', fallback: '回复' },
-  llm_duration_ms: { key: 'chat.metrics.llmMs', fallback: '模型耗时' },
-  tool_duration_ms: { key: 'chat.metrics.toolMs', fallback: '工具耗时' },
-  ttft_avg_ms: { key: 'chat.metrics.ttft', fallback: '首字延迟' },
-  tok_per_s: { key: 'chat.metrics.tokPerS', fallback: 'tok/s' },
-  cache_hit_ratio: { key: 'chat.metrics.cacheHit', fallback: '缓存命中' },
-  input_tokens: { key: 'chat.metrics.inputTokens', fallback: '入参' },
-  output_tokens: { key: 'chat.metrics.outputTokens', fallback: '出参' },
-  cache_read_tokens: { key: 'chat.metrics.cacheRead', fallback: '缓存读' },
+  turns: { key: 'usage.metricTurns', fallback: 'turns' },
+  steps: { key: 'usage.metricSteps', fallback: 'replies' },
+  llm_duration_ms: { key: 'usage.metricLlmMs', fallback: 'model' },
+  tool_duration_ms: { key: 'usage.metricToolMs', fallback: 'tool call' },
+  ttft_avg_ms: { key: 'usage.metricTtft', fallback: 'TTFT avg' },
+  tok_per_s: { key: 'usage.metricTokPerS', fallback: 'tok/s' },
+  cache_hit_ratio: { key: 'usage.metricCacheHit', fallback: 'Cache hit' },
+  input_tokens: { key: 'usage.metricInputTokens', fallback: 'Input' },
+  output_tokens: { key: 'usage.metricOutputTokens', fallback: 'Output' },
+  cache_read_tokens: { key: 'usage.metricCacheRead', fallback: 'Cache read' },
 }
 
 export function metricLabel(

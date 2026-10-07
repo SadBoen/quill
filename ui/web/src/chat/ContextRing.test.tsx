@@ -39,7 +39,7 @@ function ctx(over: Partial<SessionContext> = {}): SessionContext {
 function renderRing(
   context: SessionContext,
   open = false,
-  cache?: { cacheHit?: number | null; cacheRead?: number | null },
+  cache?: { cacheHit?: number | null },
 ) {
   const onToggle = vi.fn()
   render(
@@ -48,7 +48,6 @@ function renderRing(
       open={open}
       onToggle={onToggle}
       cacheHit={cache?.cacheHit ?? null}
-      cacheRead={cache?.cacheRead ?? null}
     />,
   )
   return { onToggle }
@@ -141,19 +140,22 @@ describe('上下文小环', () => {
    */
   describe('缓存命中率', () => {
     it('报了就显示，报的是 0% 也照样显示', () => {
-      renderRing(ctx(), true, { cacheHit: 0, cacheRead: 0 })
+      renderRing(ctx(), true, { cacheHit: 0 })
       expect(screen.getByRole('dialog')).toHaveTextContent('缓存命中 0%')
     })
 
-    it('命中率与缓存 token 数一起说，单独一个比例没法解释', () => {
-      renderRing(ctx(), true, { cacheHit: 0.96, cacheRead: 575 })
+    it('只报百分比，不重复报缓存读的绝对值', () => {
+      // 绝对值在聊天页底部那排统计的「缓存读」格子里已经有。
+      // 这里再写一遍「575 tokens 走缓存」，是同一个数在一个面板里出现两次。
+      renderRing(ctx(), true, { cacheHit: 0.96 })
       const panel = screen.getByRole('dialog')
-      expect(panel).toHaveTextContent('96%')
-      expect(panel).toHaveTextContent('575')
+      expect(panel).toHaveTextContent('缓存命中 96%')
+      expect(panel).not.toHaveTextContent('走缓存')
+      expect(panel).not.toHaveTextContent('575')
     })
 
     it('上游没上报时整行不出现', () => {
-      renderRing(ctx(), true, { cacheHit: null, cacheRead: null })
+      renderRing(ctx(), true, { cacheHit: null })
       expect(screen.getByRole('dialog')).not.toHaveTextContent('缓存命中')
     })
 
@@ -164,7 +166,7 @@ describe('上下文小环', () => {
     })
 
     it('收起来的时候看不见，得点开才有', () => {
-      renderRing(ctx(), false, { cacheHit: 0.96, cacheRead: 575 })
+      renderRing(ctx(), false, { cacheHit: 0.96 })
       expect(screen.queryByRole('dialog')).toBeNull()
       expect(screen.getByRole('button')).not.toHaveTextContent('缓存命中')
     })
