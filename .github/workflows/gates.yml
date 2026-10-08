@@ -146,6 +146,16 @@ jobs:
       - name: 文本门禁 · i18n
         run: node .i18n-check.mjs
 
+      # 门禁自身的退出码（queue Q106）。2026-10-08 真抓到一个：`.i18n-check.mjs`
+      # 里一个 `process.exit` 都没有，问题逐条打印得很清楚却照样退 0 ——
+      # 于是「漏翻译会报红」是空头承诺，流水线永远是绿的。
+      # 这道自检扫全部门禁脚本，谁没有非 0 退出路径就红。
+      - name: 门禁退出码自检
+        run: node .scripts/gate-exit-selftest.mjs
+
+      - name: 该判定的自测
+        run: node .scripts/gate-exit-selftest.mjs --self-test
+
       # 移植基准：index.css 必须与 vendor/openoctopus-frontend 逐字节一致。
       # 钉的是移植那一刻的哈希，所以**不需要 vendor 在手边** —— 这正是它能进
       # gates-core（不需要任何 secret 的那个 job）的原因。以前这道检查只躺在
