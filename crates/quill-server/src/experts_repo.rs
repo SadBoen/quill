@@ -103,9 +103,9 @@ async fn sql_list_owned(pool: &sqlx::SqlitePool, owner: UserId) -> Result<Vec<Ex
 pub(crate) const PUT_SQL: &str = "INSERT INTO experts (\
      id, owner_user_id, display_name, version, description, role_summary, \
      visibility, tool_policy_json, tags_json, license, default_enabled, is_builtin, \
-     asset_hash, persona_hash, skill_count, created_at, updated_at, deleted_at, \
+     asset_hash, persona_hash, created_at, updated_at, deleted_at, \
      instructions, model, source_template\
-   ) VALUES (?, ?, ?, ?, ?, '', ?, '{}', '[]', '', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?) \
+   ) VALUES (?, ?, ?, ?, ?, '', ?, '{}', '[]', '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
    ON CONFLICT (owner_user_id, id) DO UPDATE SET \
      display_name = excluded.display_name, \
      description = excluded.description, \

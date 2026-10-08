@@ -197,6 +197,7 @@ pub const MIGRATION_0008: &str = include_str!("../migrations/0008_token_metrics.
 pub const MIGRATION_0009: &str = include_str!("../migrations/0009_channels.sql");
 pub const MIGRATION_0010: &str = include_str!("../migrations/0010_mbti.sql");
 pub const MIGRATION_0011: &str = include_str!("../migrations/0011_cron.sql");
+pub const MIGRATION_0012: &str = include_str!("../migrations/0012_experts_drop_skill_count.sql");
 
 pub const MIGRATIONS_TABLES: &[&str] = &[
     "schema_version",
@@ -282,6 +283,11 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 11,
         name: "0011_cron",
         sql: MIGRATION_0011,
+    },
+    Migration {
+        version: 12,
+        name: "0012_experts_drop_skill_count",
+        sql: MIGRATION_0012,
     },
 ];
 
@@ -1145,10 +1151,10 @@ mod tests {
             let sql = format!(
                 "INSERT INTO experts (id, owner_user_id, display_name, version, description, \
                  role_summary, visibility, tool_policy_json, tags_json, license, \
-                 default_enabled, is_builtin, asset_hash, persona_hash, skill_count, \
+                 default_enabled, is_builtin, asset_hash, persona_hash, \
                  created_at, updated_at, deleted_at, instructions, model) \
                  VALUES ('{id}', x'a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0', '探针', '0.1.0', '', '', \
-                 'user_authored', '{{}}', '[]', '', 1, 0, zeroblob(32), zeroblob(32), 0, 0, 0, \
+                 'user_authored', '{{}}', '[]', '', 1, 0, zeroblob(32), zeroblob(32), 0, 0, \
                  NULL, ?, ?)"
             );
             sqlx::query(&sql)
@@ -1225,10 +1231,10 @@ mod tests {
             let sql = format!(
                 "INSERT INTO experts (id, owner_user_id, display_name, version, description, \
                  role_summary, visibility, tool_policy_json, tags_json, license, \
-                 default_enabled, is_builtin, asset_hash, persona_hash, skill_count, \
+                 default_enabled, is_builtin, asset_hash, persona_hash, \
                  created_at, updated_at, deleted_at, source_template) \
                  VALUES ('{id}', x'a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0', '探针', '0.1.0', '', '', \
-                 'user_authored', '{{}}', '[]', '', 1, 0, zeroblob(32), zeroblob(32), 0, 0, 0, \
+                 'user_authored', '{{}}', '[]', '', 1, 0, zeroblob(32), zeroblob(32), 0, 0, \
                  NULL, ?)"
             );
             sqlx::query(&sql).bind(src).execute(pool).await.map(|_| ())
@@ -1484,5 +1490,85 @@ mod tests {
         let report = migrate(&pool).await.expect("旧口径台账必须被接受");
         assert!(report.applied.is_empty(), "不该重复应用");
         assert_eq!(report.already_current.len(), MIGRATIONS.len());
+    }
+
+    /// Q103：删 `experts.skill_count` 的那条迁移必须**保住每一行**，并把其余约束原样带过来。
+    ///
+    /// 「重建表」这类迁移唯一真正危险的地方就在这里 —— 列清单抄错一个，专家就读不出来；
+    /// 约束漏抄一条，坏数据就能写进去。所以这条测试**在旧 schema 上造一行真数据**，
+    /// 跑完 0012 再逐项核对（不是「迁移跑过了就算」）。
+    #[tokio::test]
+    async fn migration_0012_drops_skill_count_and_keeps_every_row() {
+        let pool = in_memory().await.expect("内存库");
+        for m in MIGRATIONS.iter().filter(|m| m.version <= 11) {
+            run_migration(&pool, m.sql).await.expect("跑到 0011");
+        }
+        // 旧 schema 里 skill_count 还在，而且给一个**非零**值 —— 证明迁移不依赖它。
+        sqlx::query(
+            "INSERT INTO experts (id, owner_user_id, display_name, version, description, \
+             role_summary, visibility, tool_policy_json, tags_json, license, default_enabled, \
+             is_builtin, asset_hash, persona_hash, skill_count, created_at, updated_at, \
+             deleted_at, instructions, model, source_template) \
+             VALUES ('probe', x'a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0', '探针', '0.1.0', '说明', \
+             '角色', 'user_authored', '{}', '[]', '', 1, 0, zeroblob(32), zeroblob(32), 7, \
+             111, 222, NULL, '人格正文', 'm1', 'tpl-1')",
+        )
+        .execute(&pool)
+        .await
+        .expect("旧 schema 上塞一行");
+
+        run_migration(&pool, MIGRATION_0012)
+            .await
+            .expect("删列迁移");
+
+        let cols: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('experts')")
+            .fetch_all(&pool)
+            .await
+            .expect("读列");
+        assert!(
+            !cols.iter().any(|c| c == "skill_count"),
+            "列必须真的没了：{cols:?}"
+        );
+
+        // 每一列都还在、值也没变（列清单抄错的话这里会直接报 no such column）。
+        let (name, instr, model, tpl, created): (
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            i64,
+        ) = sqlx::query_as(
+            "SELECT display_name, instructions, model, source_template, created_at \
+             FROM experts WHERE id = 'probe'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("行必须还在");
+        assert_eq!(name, "探针");
+        assert_eq!(instr, "人格正文");
+        assert_eq!(model.as_deref(), Some("m1"));
+        assert_eq!(tpl.as_deref(), Some("tpl-1"));
+        assert_eq!(created, 111, "时间戳这类数据不许在重建里被改动");
+
+        // 其余约束原样带过来了：大写 id 必须被拒（0001 的那条 CHECK）。
+        let bad = sqlx::query(
+            "INSERT INTO experts (id, owner_user_id, display_name, version, description, \
+             visibility, tool_policy_json, tags_json, license, asset_hash, persona_hash, \
+             created_at, updated_at) \
+             VALUES ('Bad', x'a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a1', 'x', '0.1.0', '', \
+             'user_authored', '{}', '[]', '', zeroblob(32), zeroblob(32), 1, 1)",
+        )
+        .execute(&pool)
+        .await;
+        assert!(bad.is_err(), "重建后必须仍然拒绝非法 id（CHECK 漏抄了）");
+
+        // 索引也重建了 —— `DROP TABLE` 会把旧表的索引一起删掉。
+        let idx: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='ix_experts_visible'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("读索引");
+        assert_eq!(idx, 1, "ix_experts_visible 必须重建");
     }
 }

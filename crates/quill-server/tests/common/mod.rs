@@ -220,11 +220,11 @@ mod tests {
                 sqlx::query(
                     "INSERT INTO experts (id, owner_user_id, display_name, version, description, \
                      role_summary, visibility, tool_policy_json, tags_json, license, \
-                     default_enabled, is_builtin, asset_hash, persona_hash, skill_count, \
+                     default_enabled, is_builtin, asset_hash, persona_hash, \
                      created_at, updated_at, deleted_at) \
                      VALUES ('probe-expert', x'a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0', '夹具探针', '0.1.0', \
                      '', '', 'user_authored', '{}', '[]', '', 1, 0, zeroblob(32), zeroblob(32), \
-                     0, 0, 0, NULL)",
+                     0, 0, NULL)",
                 )
                 .execute(&pool)
                 .await

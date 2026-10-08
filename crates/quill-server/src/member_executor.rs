@@ -360,10 +360,10 @@ mod tests {
                 sqlx::query(
                     "INSERT INTO experts (id, owner_user_id, display_name, version, description, \
                      role_summary, visibility, tool_policy_json, tags_json, license, \
-                     default_enabled, is_builtin, asset_hash, persona_hash, skill_count, \
+                     default_enabled, is_builtin, asset_hash, persona_hash, \
                      created_at, updated_at, instructions, model, source_template) \
                      VALUES (?, ?, '显示名', '0.1.0', '', '', 'manual_enable', '{}', '[]', '', \
-                     1, 0, zeroblob(32), zeroblob(32), 0, 1, 1, ?, NULL, NULL)",
+                     1, 0, zeroblob(32), zeroblob(32), 1, 1, ?, NULL, NULL)",
                 )
                 .bind(id)
                 .bind(owner_b)
