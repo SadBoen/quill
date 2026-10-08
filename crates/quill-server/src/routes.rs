@@ -123,8 +123,8 @@ pub fn build_router(state: AppState) -> Router {
     // 只读端点与「只读索引」的检索已接通（不需要模型）：pages / pages/{path} /
     // search / index / log。**页面的手写增删改也接通了**（PUT/DELETE pages/{path}，
     // 带 expected_version 乐观并发，同样不需要模型，见 Q058）。
-    // 仍然要模型配合的只有 ingest（读源文产出页面）与 query（读页面作答）—— 那两条
-    // 是 501 桩，属 Q057。
+    // **摄入与问答也接通了**（Q057）：POST /api/wiki/{ingest,query} 走
+    // `wiki_backend::ProviderKnowledge` —— 模型产出内容，`quill-wiki` 校验/写盘/建索引。
     let wiki = Router::new()
         .route("/api/wiki/pages", get(crate::api_wiki::list_pages))
         .route(
@@ -133,14 +133,8 @@ pub fn build_router(state: AppState) -> Router {
                 .put(crate::api_wiki::put_page)
                 .delete(crate::api_wiki::delete_page),
         )
-        .route(
-            "/api/wiki/ingest",
-            post(|_u: crate::auth::AuthUser| async { not_implemented("POST", "/api/wiki/ingest") }),
-        )
-        .route(
-            "/api/wiki/query",
-            post(|_u: crate::auth::AuthUser| async { not_implemented("POST", "/api/wiki/query") }),
-        )
+        .route("/api/wiki/ingest", post(crate::api_wiki::ingest))
+        .route("/api/wiki/query", post(crate::api_wiki::query_page))
         .route("/api/wiki/search", post(crate::api_wiki::search))
         .route("/api/wiki/index", get(crate::api_wiki::read_index))
         .route("/api/wiki/log", get(crate::api_wiki::read_log));

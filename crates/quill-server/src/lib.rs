@@ -70,6 +70,9 @@ pub mod tool_sources;
 /// `ToolSources` 端口，壳侧实现见 `crate::tool_sources::DbToolSources`。
 pub use quill_core::tools;
 pub mod ui;
+/// 资料库的**模型侧接线**（queue Q057）：`KnowledgeBackend` 的唯一真实现，
+/// 拿这一轮的 provider 调模型。`quill-wiki` 的 ingest / query 只依赖这个端口。
+pub mod wiki_backend;
 
 pub use config::Config;
 pub use db::DbBridge;

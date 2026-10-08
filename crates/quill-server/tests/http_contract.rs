@@ -277,26 +277,39 @@ async fn extra_routes_list_does_not_leak_into_404_claim() {
 
 #[tokio::test]
 async fn registered_but_unimplemented_route_returns_501_with_route_name() {
-    // 拿 `POST /api/wiki/ingest` 当样本：它登记了、能力确实还没实现。
-    // 原来这里用的是 `GET /api/upgrade/check` —— 那条 2026-10-08 接通之后
-    // （Q038–Q040），这个测试会**因为自己过期而失败**。样本路由必须挑一条
-    // **仍然**是 501 的，否则它测的其实是「我以为的那件事」，不是「501 这个行为」。
-    let resp = app!()
-        .oneshot(authed("POST", "/api/wiki/ingest", TOKEN_ADMIN))
-        .await
-        .expect("失败");
-    assert_eq!(
-        resp.status(),
-        StatusCode::NOT_IMPLEMENTED,
-        "已登记未实现的路由必须是 501，不许返回假成功 200"
-    );
-    let text = body_text(resp).await;
+    // **样本自己找**，不写死一条。写死会让这个测试在「那条桩被接通」时自己过期 ——
+    // 已经发生过两次：`GET /api/upgrade/check`（2026-10-08 接通，Q038–Q040）、
+    // `POST /api/wiki/ingest`（2026-10-09 接通，Q057）。那两次红都不是「501 坏了」，
+    // 而是「我以为的那件事过期了」—— 判据自己腐烂比没通过更糟。
+    //
+    // 做法：按契约表逐条真打一次，挑第一条**真的回 501** 的当样本。
+    // 表里没有 501 了就直接红（那时候这个测试没有可测的行为，不该假装通过）。
+    let mut sample: Option<(String, String, String)> = None;
+    for &(method, declared) in CONTRACT_ROUTES {
+        let concrete = declared
+            .replace("{id}", "0192b7c8-0000-7000-8000-000000000003")
+            .replace("{slug}", "cost-analyst")
+            .replace("{name}", "some-mcp")
+            .replace("{path}", "a/b");
+        let resp = app!()
+            .oneshot(authed(method, &concrete, TOKEN_ADMIN))
+            .await
+            .expect("失败");
+        if resp.status() == StatusCode::NOT_IMPLEMENTED {
+            let text = body_text(resp).await;
+            sample = Some((method.to_string(), declared.to_string(), text));
+            break;
+        }
+    }
+    let (method, declared, text) =
+        sample.expect("契约表里必须至少留一条**仍然是 501** 的桩，否则这个测试没有样本可测");
+
     assert!(
         text.contains("not_implemented"),
-        "错误码应可被前端分支：{text}"
+        "{method} {declared} 的 501 错误码应可被前端分支：{text}"
     );
     assert!(
-        text.contains("/api/wiki/ingest"),
+        text.contains(&declared) || text.contains(declared.trim_start_matches("/api/")),
         "501 文案必须点名具体路由（否则不可诊断）：{text}"
     );
     // next_step 现在按路由给（NotImplemented 带 advice），所以还必须真的有内容。
@@ -413,7 +426,7 @@ async fn created_session_id_is_byte_identical_to_the_listed_one() {
 async fn every_contract_route_responds_and_is_never_a_false_success() {
     // 「已实现」清单必须跟着实现一起长，否则新接通的路由会因为不再返回 501
     // 而被判成「假成功」——这正是本测试要抓的东西，所以清单不能手懒。
-    const IMPLEMENTED: [(&str, &str); 66] = [
+    const IMPLEMENTED: [(&str, &str); 68] = [
         ("GET", "/api/version"),
         ("GET", "/api/auth/me"),
         ("GET", "/api/healthz"),
@@ -487,10 +500,12 @@ async fn every_contract_route_responds_and_is_never_a_false_success() {
         // **不是 501** 就说明真实现了，这正是这里要钉的。
         ("PUT", "/api/wiki/pages/{path}"),
         ("DELETE", "/api/wiki/pages/{path}"),
-        // 只读索引的检索（Q035/Q036 那一批，2026-10-08 接通）。仍要模型配合的
-        // ingest（读源文产出页面）与 query（读页面作答）是 501 桩，属 Q057 ——
-        // 所以这两条**不在这份清单里**（不在 = 本测试要求它们返回 501）。
+        // 只读索引的检索（Q035/Q036 那一批，2026-10-08 接通），以及**摄入与问答**
+        // （Q057，2026-10-09 接通：走 `wiki_backend::ProviderKnowledge` 调模型）。
+        // 至此资料库在 HTTP 面上**没有 501 桩**了。
         ("POST", "/api/wiki/search"),
+        ("POST", "/api/wiki/ingest"),
+        ("POST", "/api/wiki/query"),
         ("GET", "/api/wiki/index"),
         ("GET", "/api/wiki/log"),
         ("GET", "/api/admin/config"),

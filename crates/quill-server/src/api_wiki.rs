@@ -11,7 +11,7 @@ use quill_wiki::{page_from_wire, Date, IndexEntry, LogEntry, LogOp, WikiIndex, W
 use crate::auth::AuthUser;
 use crate::body::JsonBody;
 use crate::error::ApiError;
-use crate::jsonx::opt_str;
+use crate::jsonx::{need_str, opt_str};
 use crate::state::AppState;
 
 fn store_for(state: &AppState, user: &AuthUser) -> WikiStore {
@@ -311,6 +311,91 @@ pub async fn delete_page(
         "path": path,
         "deleted": true,
         "index_entries": index_entries,
+    })))
+}
+
+// ---------------------------------------------------------------- 模型侧（Q057）
+
+/// 组装模型侧后端：用**这一轮配置的 provider**（与聊天同源）。
+/// 没有 provider 时 `state.llm()` 会给出「哪条被停用了」的中文说明，不是一句「不可用」。
+fn model_backend(state: &AppState) -> Result<crate::wiki_backend::ProviderKnowledge, ApiError> {
+    Ok(crate::wiki_backend::ProviderKnowledge::new(
+        state.llm()?,
+        state.llm_config_snapshot(),
+        state.config.wiki_dir.clone(),
+    ))
+}
+
+/// `POST /api/wiki/ingest` —— 读 raw 层的一份源文，让模型产出资料库页面。
+///
+/// 两段分工是 xu-wiki 的 `[PRIN-ING-1]`（commit 是唯一写盘入口）在 quill 里的对应物：
+/// **模型产出正文 → 本模块校验并写盘 → `quill-wiki::ingest` 读回来核对、重建索引、写日志**。
+///
+/// 这个端点**不接收正文**，只接收源文在 raw 层的相对路径：否则「摄入」就成了一次无出处的
+/// 写入，而资料库的价值正在于每一页都能追回源文。源文要先放进 raw 层。
+pub async fn ingest(
+    State(state): State<AppState>,
+    user: AuthUser,
+    JsonBody(body): JsonBody,
+) -> Result<Json<Value>, ApiError> {
+    const WHERE_: &str = "POST /api/wiki/ingest";
+    crate::api_experts::only_keys(&body, &["source", "focus"], WHERE_)?;
+    let source = need_str(&body, "source", WHERE_)?;
+    let focus: Vec<String> = match body.get("focus") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect(),
+        Some(_) => {
+            return Err(ApiError::bad_request(format!(
+                "{WHERE_}.focus 必须是字符串数组。下一步：{{\"source\":\"a.md\",\"focus\":[\"所有权\"]}}"
+            )))
+        }
+    };
+
+    let store = store_for(&state, &user);
+    let backend = model_backend(&state)?;
+    let req = quill_wiki::IngestRequest {
+        source_rel: source,
+        date: quill_wiki::Date::today(),
+        focus,
+    };
+    let outcome = quill_wiki::ingest::ingest(&store, &backend, user.0.user_id, &req)
+        .await
+        .map_err(map_wiki)?;
+    Ok(Json(json!({
+        "written": outcome.written,
+        "index_entries": outcome.index_entries,
+    })))
+}
+
+/// `POST /api/wiki/query` —— 按问题检索候选页，让模型**只依据候选页**作答。
+///
+/// 检索那半是确定性的（`quill-wiki::query` 走 `index.md` 的词面命中 + 相关页），模型只负责
+/// 读候选页作答 —— 与 xu-wiki 的 `[PRIN-QRY-3]`（**CLI 不调 LLM**）同一分工，只是 quill
+/// 把那个「agent」放在了服务端。
+pub async fn query_page(
+    State(state): State<AppState>,
+    user: AuthUser,
+    JsonBody(body): JsonBody,
+) -> Result<Json<Value>, ApiError> {
+    const WHERE_: &str = "POST /api/wiki/query";
+    crate::api_experts::only_keys(&body, &["question"], WHERE_)?;
+    let question = need_str(&body, "question", WHERE_)?;
+
+    let store = store_for(&state, &user);
+    let backend = model_backend(&state)?;
+    let req = quill_wiki::QueryRequest {
+        question,
+        date: quill_wiki::Date::today(),
+    };
+    let outcome = quill_wiki::query::query(&store, &backend, user.0.user_id, &req)
+        .await
+        .map_err(map_wiki)?;
+    Ok(Json(json!({
+        "answer": outcome.answer,
+        "used_pages": outcome.used_pages,
     })))
 }
 
