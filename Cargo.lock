@@ -1202,6 +1202,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "quill-core"
+version = "0.1.0"
+dependencies = [
+ "rmcp",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "quill-domain"
 version = "0.1.0"
 dependencies = [
@@ -1234,6 +1243,7 @@ dependencies = [
  "quill-agent",
  "quill-backup",
  "quill-control",
+ "quill-core",
  "quill-domain",
  "quill-provider",
  "quill-store",

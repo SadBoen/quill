@@ -14,6 +14,16 @@
 //!
 //! **失败必须说得清。** 握手失败、超时、服务器起不来，三者的下一步完全不同
 //! （改配置 / 放宽超时 / 装依赖），所以每条错误都带上一条能照着做的建议。
+//!
+//! **搬家记录（queue Q014）**：本文件原在 `quill-server/src/mcp_client.rs`，
+//! 2026-10-08 原样搬进内核层 —— 它本来就只依赖 `McpServerRow` 与 rmcp、与 HTTP
+//! 无关，留在 `quill-server` 里纯属历史原因。行为未改；测试随文件搬走
+//! （在 `cargo test -p quill-core` 里跑同一批用例）。
+//!
+//! 移植出处：`vendor/goose/crates/goose/src/agents/mcp_client.rs`（1687 行，
+//! goose v1.53.0）。goose 用同一族 rmcp API（`serve` → `initialize` →
+//! `list_tools` → `call_tool`）；quill 只铺了 stdio 一种传输，其余传输如实报
+//! 「还没铺」，与 goose 的多传输相比是**已知缺口**（记在 `docs/ARCHITECTURE.md`）。
 
 use std::process::Stdio;
 use std::sync::Arc;
@@ -30,7 +40,7 @@ use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::task::JoinHandle;
 
-use crate::mcp_repo::McpServerRow;
+use crate::mcp::McpServerRow;
 
 /// 单台服务器本轮探测的结果。字段全是**实测**出来的，没有一个是推断的。
 #[derive(Debug, Clone, PartialEq, Eq)]

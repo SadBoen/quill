@@ -26,6 +26,9 @@ path = "src/bin/mcp_stub.rs"
 
 quill-adapters = { path = "../quill-adapters" }
 quill-domain = { path = "../quill-domain" }
+# Agent 内核层（最高指示第 3 条）。内核逻辑的**唯一归属**；HTTP 层只调用它。
+# 原先寄生在本 crate 里的 mcp_client / tools / 对话循环正按 queue Q011–Q015 搬过去。
+quill-core = { path = "../quill-core" }
 quill-store = { path = "../quill-store" }
 quill-control = { path = "../quill-control" }
 quill-agent = { path = "../quill-agent" }

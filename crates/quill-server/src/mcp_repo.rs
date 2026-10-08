@@ -36,26 +36,10 @@ pub const LIST_SQL: &str = "SELECT name, transport, command, args_json, env_json
      enabled_capabilities_json, asset_hash, created_at, updated_at FROM mcp_servers \
      WHERE user_id = ? AND deleted_at IS NULL ORDER BY name ASC";
 
-/// 一行配置。字段与前端 `McpServerConfig` 一一对应（少 `enabled`，前端不暴露它）。
-#[derive(Debug, Clone, PartialEq)]
-pub struct McpServerRow {
-    pub name: String,
-    pub transport: String,
-    pub command: Option<String>,
-    pub args: Vec<String>,
-    pub env: Vec<(String, String)>,
-    pub url: Option<String>,
-    pub headers: Vec<(String, String)>,
-    pub enabled: bool,
-    pub timeout_ms: i64,
-    pub description: String,
-    pub cwd: Option<String>,
-    pub max_concurrent_calls: Option<i64>,
-    /// `None` = 全禁，`Some(vec![])` = 全开，`Some(v)` = 精确列举。
-    pub enabled_capabilities: Option<Vec<String>>,
-    pub created_at: i64,
-    pub updated_at: i64,
-}
+/// 一行配置 —— 定义已随 MCP 协议客户端搬进内核层（queue Q014）：
+/// 内核要拿它拉起进程，存储要按列拼它，**唯一一份**只能住在 `quill-core`，
+/// 否则 `quill-core` 得反过来依赖本 crate。这里 re-export，路径不变。
+pub use quill_core::mcp::McpServerRow;
 
 /// 配置内容的指纹。用于判断「内容有没有真的变」——没变就整行跳过，
 /// 否则每次点保存都会让所有行看起来都变过一遍，`updated_at` 也就失去意义了。

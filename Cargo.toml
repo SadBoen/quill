@@ -12,6 +12,10 @@ members = [
     "crates/quill-provider",
     "crates/quill-upgrade",
 
+    # Agent 内核层（最高指示第 3 条：照 vendor/goose 抄）。L3，见 docs/ARCHITECTURE.md §3.1。
+    # 内核逻辑只住这里，HTTP 层不许再内联（queue Q011–Q015 的落点）。
+    "crates/quill-core",
+
     "crates/quill-testkit",
 
     "crates/quill-server",

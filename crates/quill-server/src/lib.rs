@@ -35,7 +35,8 @@ pub mod llm;
 pub mod llm_providers;
 /// MBTI 人格测评：题库、计分、落库、应用到专家人格正文。
 pub mod mbti;
-pub mod mcp_client;
+/// MCP 协议客户端（内核层，已搬到 `quill-core`；这里 re-export 保持旧路径可用）。
+pub use quill_core::mcp_client;
 pub mod mcp_repo;
 pub mod member_executor;
 pub mod middleware;
