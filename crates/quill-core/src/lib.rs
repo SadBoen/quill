@@ -28,3 +28,6 @@ pub mod state_machine;
 /// 工具执行：内置专家工具、SKILL 即工具、MCP 工具挂载（Q013 搬入）。
 /// 素材来源走 `tools::ToolSources` 端口，壳侧实现在 `quill_server::tool_sources`。
 pub mod tools;
+/// 对话循环：一轮怎么推进（Q012 从 `quill-server::api_chat` 搬入）。
+/// HTTP / SSE 的编码留在壳，内核只把事件交给 `turn::TurnObserver`。
+pub mod turn;

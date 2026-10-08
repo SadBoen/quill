@@ -123,7 +123,7 @@ grep -rn "fn models_url\|probe_models" crates/ --include=*.rs | head
 **HTTP / SSE / 鉴权 / 限流 / 错误信封不进内核** —— 那是壳的活。
 内核产出「事件」（正文增量、工具往返、结束原因），壳负责把它编码成 SSE 或 JSON。
 
-### 4.1 Q012 现状与搬运清单（2026-10-08 清点，**尚未搬运**）
+### 4.1 Q012 现状与搬运清单（2026-10-08 清点，2026-10-09 **已搬运**）
 
 行号是清点时的（`crates/quill-server/src/api_chat.rs` 共 1648 行、`api_chat_stream.rs` 222 行）：
 
@@ -148,6 +148,39 @@ grep -rn "fn models_url\|probe_models" crates/ --include=*.rs | head
 
 **判据**：`grep -c "MAX_TOOL_ROUNDS\|registry.call" crates/quill-server/src/api_chat.rs` → 0；
 `cargo test --workspace` 总数不减；`api_chat.rs` 行数明显下降（1648 → 预计 ~1300）。
+
+### 4.2 Q012 落地结果（2026-10-09）
+
+计划与实做的**差异**（照实记）：
+
+- 新增 `crates/quill-core/src/turn.rs`（661 行，含 7 条测试）：`TurnInput` / `TurnOutcome`
+  / `TurnUsage` / `ReplyMode` / `TurnObserver` 与循环本体全在这里。
+- **`TurnInput` 用借用而不是所有权**：`provider` / `llm_config` / `registry` / `tools`
+  都是 `&`，只有 `messages` 取走（循环要往里追加工具往返）。计划里写的「壳那半留在壳」
+  照做 —— `TurnPrep` 一个字没改结构，只是它不再有循环。
+- **`TurnObserver` 的方法名与计划里的素描不同**：最终用 `round_start` / `text` /
+  `reasoning` / `tool_call` / `tool_result` / `discard` 六个（计划里的
+  `on_text` / `on_reasoning` / `on_tool_round` 是三合一的简写）。它就是壳里原来的
+  `RoundSink` —— **改名搬进内核**，方法签名逐字不变，`api_chat_stream.rs` 的
+  `impl` 只换了 trait 名。`NullSink` 留在壳（「什么都不做」是一种用法，不必进内核）。
+- **错误映射**：内核返回 `quill_provider::ProviderError`，壳在薄 wrapper 里
+  `map_err(provider_failure)`。内核不认识 `ApiError`，也不该认识。
+- **`TurnUsage` 的累计规则文档整块搬进内核**（那是这个类型自己的规矩）；壳的测试
+  改成 `use quill_core::turn::TurnUsage`。
+- 新增一个内核侧小件：`impl Default for ToolRegistry`（空表是合法状态）。内核测试
+  用它起步再 `register` 桩；没有别的构造路径可走（字段私有，同 crate 的兄弟模块
+  也读不到）。
+
+**判据复现（2026-10-09 实测）**：
+
+```bash
+grep -c "MAX_TOOL_ROUNDS\|registry.call" crates/quill-server/src/api_chat.rs   # → 0
+wc -l crates/quill-server/src/api_chat.rs                                      # → 1389（原 1648）
+cargo test --workspace                                                          # → 1459 passed / 0 failed（原 1452，+7 = 内核 turn 测试）
+```
+
+`quill-server/src` 合计 28554 行（原 28692）：净减因为循环搬走了，`quill-core`
+相应增加。
 
 ---
 

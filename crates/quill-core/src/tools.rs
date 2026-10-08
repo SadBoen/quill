@@ -155,6 +155,17 @@ pub struct ToolRegistry {
     handlers: Vec<(String, ToolHandler)>,
 }
 
+/// 没有任何工具的 registry：一个合法状态（对话照跑，只是模型看不到工具）。
+/// 测试用它起步再 `register` 想要的桩。
+impl Default for ToolRegistry {
+    fn default() -> Self {
+        Self {
+            specs: Vec::new(),
+            handlers: Vec::new(),
+        }
+    }
+}
+
 impl ToolRegistry {
     /// 当前实例可用的工具。没有工具时返回空 Vec —— 此时 provider 不会写
     /// `tools` 字段，请求体与接入前逐字节一致。

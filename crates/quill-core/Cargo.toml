@@ -37,3 +37,9 @@ serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "charset"] }
 # provider id 的随机源（原在壳里，跟着 `LlmProvider::new_id` 搬来）。
 getrandom = "0.4"
+
+[dev-dependencies]
+# 只为 `turn.rs` 的测试：桩 provider 要实现 `Provider::stream`，就得真造一条
+# `ProviderStream`。`futures-util` 提供 `stream::iter`，并把 `Stream` trait
+# 一并带出来（quill-provider 的 `ProviderStream` 用的就是它）。
+futures-util = "0.3"

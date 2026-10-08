@@ -25,7 +25,7 @@ use axum::response::{IntoResponse, Sse};
 use serde_json::{json, Value};
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::api_chat::{self, ReplyMode, RoundSink};
+use crate::api_chat::{self, ReplyMode, TurnObserver};
 use crate::auth::AuthUser;
 use crate::body::JsonBody;
 use crate::error::ApiError;
@@ -113,7 +113,7 @@ impl Emitter {
     }
 }
 
-impl RoundSink for Emitter {
+impl TurnObserver for Emitter {
     fn round_start(&mut self, _round: usize) {
         // 新一轮开始：上一轮的残留不算数。
         self.text.clear();

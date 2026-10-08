@@ -130,7 +130,7 @@ goose 内核的参考源（`vendor/goose/crates/`，实测各 crate 规模）：
 |---|---|---|---|
 | provider 抽象 | `goose-providers`/`-provider-types` | `quill-provider`（叶子，传输）+ `quill-core::llm`（配置与组装，Q015 已搬） | 部分；**组装只剩一套**（2026-10-08） |
 | MCP 客户端 | `goose/agents/mcp_client.rs`、`goose-mcp` | **`quill-core/src/mcp_client.rs`**（1213 行，Q014 已搬出 HTTP 层） | 部分（只铺 stdio） |
-| 对话循环 | `goose/agents/agent.rs` → `Agent::reply` | 仍在 `quill-server/src/api_chat.rs`（1648 行）—— **搬运清单已备**（`docs/KERNEL-PORTS.md §4.1`，Q012） | 部分；状态机已有（`quill-core/src/state_machine.rs`，Q020），**未接线** |
+| 对话循环 | `goose/agents/agent.rs` → `Agent::reply` | **`quill-core/src/turn.rs`**（661 行，Q012 已搬）——壳侧 `api_chat.rs` 只剩「拼 TurnInput + 映射错误 + 落库」 | 部分；状态机已有（`quill-core/src/state_machine.rs`，Q020），**未接线** |
 | 工具执行 | `goose/agents/tool_execution.rs` | **`quill-core/src/tools.rs`**（1402 行，Q013 已搬，走 `ToolSources` 端口） | 部分（只读工具，写入类故意不做） |
 | 子 agent | `goose/agents/subagent_handler.rs` | `quill-adapters::MemberExecutor` + `member_executor.rs` | 第一版（`steer`/`abort` 未做） |
 | **上下文压缩** | `goose-context-management`（1156 行） | **只有配置字段** `compaction_threshold_tokens`，**零实现** | **未做** |
@@ -166,17 +166,20 @@ crates/quill-agent/src/
 真正的 agent 循环不在这个 crate 里，而在 HTTP 层 `quill-server/src/api_chat.rs`。
 **名字与职责不符**会持续误导人。
 
-### 1.5 巨石：quill-server = 26616 行
+### 1.5 巨石：quill-server = 28554 行
+
+> 行数口径：`find crates/quill-server/src -name '*.rs' | xargs wc -l`（2026-10-09 实测）。
+> 下面这份清单同一次实测。
 
 `quill-server` 同时承担四件事：**HTTP 契约 + 业务编排 + 数据访问 + agent 内核**。
 
 ```
 2427 api_extensions     ← MCP/SKILL 的 HTTP + 校验 + 落盘（现最大，尚未拆）
-1648 api_chat           ← 对话 + 工具往返循环（**搬运清单已备**：KERNEL-PORTS §4.1 / Q012）
+1389 api_chat           ← 对话 HTTP（工具往返循环已搬 `quill-core/src/turn.rs`，Q012）
  956 api_experts        ← 专家 HTTP + 导入导出
  910 mcp_repo           ← MCP 配置的 SQL 口径（非 api_* 里最大）
  818 api_channels       ← 通道 HTTP
-（已搬出 HTTP 层：tools 1402 与 mcp_client 1213 在 quill-core；
+（已搬出 HTTP 层：tools 1402、mcp_client 1213、turn 661 在 quill-core；
   skillhub 族拆分后单文件最大 627；llm_providers 957 → 509 只剩持久化）
 ```
 

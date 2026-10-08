@@ -6,9 +6,7 @@ use axum::Json;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use quill_provider::{
-    ChatRequest, ChatResponse, Message, SharedProvider, StreamDelta, TokenUsage, ToolCall, ToolSpec,
-};
+use quill_provider::{Message, SharedProvider, TokenUsage, ToolSpec};
 
 use crate::auth::AuthUser;
 use crate::body::JsonBody;
@@ -717,66 +715,6 @@ pub(crate) async fn create_session_for_channel(
     Ok(id)
 }
 
-/// 一轮对话（可能含多次模型调用）的 token 用量累加器。
-///
-/// ## 为什么需要它
-///
-/// 工具往返那段循环每轮都 `reply = provider.chat(&follow_up)`，**只把最后一轮的
-/// `reply.usage` 存进 messages**。于是「这一轮」在统计条上只剩最后一次调用的数：
-/// 实测 50 条真实任务里有 34 条以工具轮收场，而工具轮恰恰是入参最大的一类 ——
-/// 用户拿这个数字判断「技能是不是把上下文撑爆了」，少报一半正好报在要命的地方。
-///
-/// ## 累加规则
-///
-/// 1. **只加真值**（`session_metrics::sum_reported` 的同一条规矩：「token 可加，
-///    有一条真值即可」）。一条都没报就是 `None` —— 不能因为求和就凭空造出 0，
-///    那会让界面显示「这次聊天一点没花 token」。
-/// 2. **缓存两项不加进入参**。goose 口径里 `cache_read` / `cache_write` 是
-///    `input` 的**子集**（见 migration 0008），把它们并进 `input` 会算出 >100% 的
-///    命中率。求和是**逐项**求和，语义不变。
-/// 3. `cache_read` 求和后**不允许超过 `input`**。越界只可能来自「某几轮报了
-///    `input=0`/`None`、另一轮报了 `cache_read`」这种半真值组合，夹到 `input`
-///    上，命中率就永远落在 100% 以内。诚实的上游每轮都满足子集关系，求和后
-///    必然也满足，所以这条夹取**只**动得了异常上报。
-/// 4. **单轮逐字不变**（`rounds <= 1` 时不夹）。不带工具的那一轮仍然原样存上游
-///    报来的数：那是上游的口径，不在这一层替它改写。
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct TurnUsage {
-    total: TokenUsage,
-    /// 这一轮里一共调了几次模型。第 3 条的夹取只对「真的求和过」的情形生效，
-    /// 靠它把单轮和多轮区分开。
-    rounds: u32,
-}
-
-impl TurnUsage {
-    /// 记入一次模型调用报上来的 usage。
-    pub fn push(&mut self, usage: TokenUsage) {
-        add_reported(&mut self.total.input, usage.input);
-        add_reported(&mut self.total.output, usage.output);
-        add_reported(&mut self.total.cache_read, usage.cache_read);
-        add_reported(&mut self.total.cache_write, usage.cache_write);
-        self.rounds = self.rounds.saturating_add(1);
-    }
-
-    /// 这一轮的总量。存档与响应 JSON 都用它，保证两边是同一份数。
-    pub fn finish(self) -> TokenUsage {
-        let mut total = self.total;
-        if self.rounds > 1 {
-            if let (Some(input), Some(read)) = (total.input, total.cache_read) {
-                total.cache_read = Some(read.min(input));
-            }
-        }
-        total
-    }
-}
-
-/// 只在有真值时累加；`None` 保持 `None`（「没报」不等于「报了个 0」）。
-fn add_reported(acc: &mut Option<u32>, value: Option<u32>) {
-    if let Some(v) = value {
-        *acc = Some(acc.unwrap_or(0).saturating_add(v));
-    }
-}
-
 /// 校验并取出发送内容。两个入口共用，否则流式那条路很容易漏掉长度上限。
 pub(crate) fn take_content(body: &Value) -> Result<String, ApiError> {
     let content = body
@@ -952,241 +890,42 @@ pub(crate) async fn prepare_turn(
     })
 }
 
-/// 循环跑完、还没落库也还没拼响应的东西。
-pub(crate) struct TurnOutcome {
-    reply: ChatResponse,
-    usage: TokenUsage,
-    tool_trace: Vec<Value>,
-    rounds: usize,
-    forced_final_answer: bool,
-    turn_ms: i64,
-}
-
-/// 一轮模型调用里「发生了什么」的出口。
+/// 循环本体、`TurnOutcome`、累加器 `TurnUsage`、`ReplyMode` 与出口 trait
+/// 都已搬进 `quill_core::turn`（Q012，清单见 `docs/KERNEL-PORTS.md §4.1`）。
 ///
-/// 一次性那条路用 `NullSink`（什么都不做，行为与接入流式之前逐字节一致），
-/// SSE 那条路把它换成往外发事件的实现。**循环本身只有一份。**
-///
-/// `Send` 是 supertrait 而非可选：SSE 那条路要把整个 future 交给后台任务，
-/// 没有它编译不过。
-pub(crate) trait RoundSink: Send {
-    /// 新一轮模型调用开始，`round` 从 0 起。
-    fn round_start(&mut self, _round: usize) {}
-    /// 正文增量。
-    fn text(&mut self, _delta: &str) {}
-    /// 思考增量。它不是答案，展示时必须与正文分开。
-    fn reasoning(&mut self, _delta: &str) {}
-    /// 模型请求调用工具。
-    fn tool_call(&mut self, _call: &ToolCall) {}
-    /// 工具执行完毕。**只带成败，不带结果正文**：全文在 `done` 事件的
-    /// `tool_calls` 里，每个增量都抄一遍会把一帧撑到几千字符。
-    fn tool_result(&mut self, _call: &ToolCall, _ok: bool) {}
-    /// 这一轮的正文/思考会被后面的调用覆盖掉，现在丢弃。
-    fn discard(&mut self, _round: usize) {}
-}
+/// 这里只 re-export 名字：壳的调用点与测试一行不改，SSE 侧照样实现同一个
+/// trait（它以前叫 `RoundSink`，搬进内核后定名 `TurnObserver`）。
+pub(crate) use quill_core::turn::{ReplyMode, TurnObserver, TurnOutcome};
 
-/// 一次性路由用的空出口。
+/// 一次性路由用的空出口。**留在这里而不是内核**：它是「什么都不做」这一
+/// 具体用法，内核没必要为此多一个类型。
 pub(crate) struct NullSink;
-impl RoundSink for NullSink {}
+impl TurnObserver for NullSink {}
 
-/// 一轮模型调用怎么发出去。
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum ReplyMode {
-    /// 等模型把整段回包给完再返回（老路由，语义不变）。
-    Once,
-    /// 增量一到就往外发；一个字都没吐出来就失败时退回 `Once`。
-    Streamed,
-}
-
-fn build_request(prep: &TurnPrep, msgs: &[Message]) -> ChatRequest {
-    let request = crate::llm::build_request(&prep.llm_config, msgs.to_vec());
-    if prep.tools.is_empty() {
-        request
-    } else {
-        request.with_tools(prep.tools.clone())
-    }
-}
-
-async fn one_round(
-    prep: &TurnPrep,
-    request: &ChatRequest,
-    mode: ReplyMode,
-    sink: &mut dyn RoundSink,
-) -> Result<ChatResponse, ApiError> {
-    match mode {
-        ReplyMode::Once => prep.provider.chat(request).await.map_err(provider_failure),
-        ReplyMode::Streamed => streamed_round(prep, request, sink).await,
-    }
-}
-
-/// 一次流式调用。**吐不出任何增量时的失败一律退回一次性调用。**
+/// 工具往返循环（Q012 已搬进 `quill_core::turn`）。
 ///
-/// 退路是必需的：不少 OpenAI 兼容端点对 `stream: true` 的支持并不完整
-/// （老版本 llama.cpp、部分网关直接回 400 或干脆回一整段 JSON）。
-/// 流式是锦上添花，不能让它把「聊天」本身变成不可用。
-async fn streamed_round(
-    prep: &TurnPrep,
-    request: &ChatRequest,
-    sink: &mut dyn RoundSink,
-) -> Result<ChatResponse, ApiError> {
-    let mut emitted = 0usize;
-    let result = match prep.provider.stream(request).await {
-        Ok(stream) => {
-            let mut forward = |delta: StreamDelta| {
-                emitted += 1;
-                match &delta {
-                    StreamDelta::Text(t) => sink.text(t),
-                    StreamDelta::Reasoning(r) => sink.reasoning(r),
-                    // 工具调用**不在这里让出去**：循环拿到整条回复之后自己发
-                    // 一次。在这儿也发一遍就会每个工具调用出现两帧。
-                    StreamDelta::ToolCall(_) => {}
-                    // `Done` 只是收尾摘要，没有新内容可显示。
-                    StreamDelta::Done(_) => {}
-                }
-            };
-            quill_provider::pump_stream(stream, &request.model, &mut forward).await
-        }
-        Err(e) => Err(e),
-    };
-    match result {
-        Ok(reply) => Ok(reply),
-        Err(e) if emitted == 0 => {
-            eprintln!("[chat] 流式一个字都没吐就失败（{e}），退回一次性调用");
-            prep.provider.chat(request).await.map_err(provider_failure)
-        }
-        // 已经吐过字了：再补一次一次性调用会让同一段话在界面上出现两遍，
-        // 那比报错更糟。老实报错。
-        Err(e) => Err(provider_failure(e)),
-    }
-}
-
-/// 这一轮的可见内容会被后面的调用覆盖掉 —— 现在就告诉上层丢弃。
-///
-/// 不发这个信号，用户会看着一段已经显示出来的文字中途消失，以为是界面坏了。
-fn discard_if_visible(reply: &ChatResponse, sink: &mut dyn RoundSink, round: usize) {
-    if !reply.answer().is_empty() || !reply.reasoning.trim().is_empty() {
-        sink.discard(round);
-    }
-}
-
-/// 工具往返循环。一次性与 SSE 两条路由跑的都是这一段。
+/// 壳这一层只做两件**只有壳知道**的事：把 [`TurnPrep`] 里的句柄拼成内核要的
+/// [`quill_core::turn::TurnInput`]，以及把内核的 `ProviderError` 映射成 HTTP
+/// 错误信封。循环本身（几轮、什么时候收尾、工具怎么回灌）全在内核，
+/// 一次性路由与 SSE 路由因此必然跑同一份逻辑。
 pub(crate) async fn run_turn(
     prep: &mut TurnPrep,
     mode: ReplyMode,
-    sink: &mut dyn RoundSink,
+    sink: &mut dyn TurnObserver,
 ) -> Result<TurnOutcome, ApiError> {
-    let started = std::time::Instant::now();
-    // 这一轮**所有**模型调用的 usage 都记在这里，而不是只留最后一轮 ——
-    // 工具往返的每一轮都真花了入参，漏掉它们统计条就只会报最后那次。
-    let mut turn_usage = TurnUsage::default();
-    // msgs 由本函数取走跑循环，之后没有别的读者。
-    let mut msgs = std::mem::take(&mut prep.msgs);
-
-    sink.round_start(0);
-    let request = build_request(prep, &msgs);
-    let mut reply = one_round(prep, &request, mode, sink).await?;
-    turn_usage.push(reply.usage);
-
-    let mut tool_trace: Vec<Value> = Vec::new();
-    let mut rounds = 0usize;
-    let mut round_no = 0usize;
-    while !reply.tool_calls.is_empty() {
-        if rounds >= crate::tools::MAX_TOOL_ROUNDS {
-            eprintln!(
-                "[chat] 工具往返达到上限 {} 轮，停止；未执行的调用：{:?}",
-                crate::tools::MAX_TOOL_ROUNDS,
-                reply.tool_calls.iter().map(|c| &c.name).collect::<Vec<_>>()
-            );
-            break;
-        }
-        rounds += 1;
-        discard_if_visible(&reply, sink, round_no);
-
-        let calls = reply.tool_calls.clone();
-        msgs.push(Message::assistant_tool_calls(calls.clone()));
-        for call in &calls {
-            sink.tool_call(call);
-            let result = prep.registry.call(call);
-            let ok = result.is_ok();
-            match &result {
-                Ok(text) => eprintln!("[chat] 工具 {} 执行成功（{} 字符）", call.name, text.len()),
-                Err(detail) => eprintln!("[chat] 工具 {} 失败：{detail}", call.name),
-            }
-            // 渲染一次、存两处：回灌给模型的文本与写进响应的轨迹必须是同一份，
-            // 否则界面上显示的与模型实际看到的会不一致。
-            let rendered = prep.registry.render_result(call, result);
-            tool_trace.push(json!({
-                "id": call.id,
-                "name": call.name,
-                "arguments": call.arguments,
-                "ok": ok,
-                "result": rendered,
-            }));
-            msgs.push(Message::tool_result(&call.id, &call.name, rendered));
-            sink.tool_result(call, ok);
-        }
-
-        let follow_up = build_request(prep, &msgs);
-        round_no += 1;
-        sink.round_start(round_no);
-        reply = one_round(prep, &follow_up, mode, sink).await?;
-        turn_usage.push(reply.usage);
-    }
-
-    // 轮次用尽、模型仍然只给 tool_calls 没有正文时，**再做一次收尾调用**：
-    // 把工具**摘掉**，并明确要求「用手上的信息作答」。
-    //
-    // 为什么非要这一步：模型其实完全有能力说清「我查到了什么、缺什么」——
-    // 同一批 4B 在第 1、2、3、6、9、12 条任务里都主动这么做了。
-    // 不做这一步，用户拿到的只是一条 `tool_loop_exhausted` 错误，
-    // **一句有用的正文都没有**，而那些信息本来就在上下文里。
-    let mut forced_final_answer = false;
-    if !reply.tool_calls.is_empty() && reply.answer().trim().is_empty() {
-        eprintln!("[chat] 工具往返用尽仍无正文，去掉工具再问一次，强制它作答");
-        discard_if_visible(&reply, sink, round_no);
-        msgs.push(Message::assistant_tool_calls(reply.tool_calls.clone()));
-        msgs.push(Message::user(crate::tools::FINAL_ANSWER_PROMPT.to_string()));
-        // **不带 tools**：模型此刻已经证明会一直要工具，再给一次只是再要一轮。
-        let final_request = crate::llm::build_request(&prep.llm_config, msgs.clone());
-        round_no += 1;
-        sink.round_start(round_no);
-        match one_round(prep, &final_request, mode, sink).await {
-            Ok(last) => {
-                // 收尾这一次也真花了 token：不管它最后有没有被采纳，都记上。
-                turn_usage.push(last.usage);
-                tool_trace.push(json!({
-                    "id": "final",
-                    "name": crate::tools::FINAL_ANSWER_MARKER,
-                    "arguments": json!({ "rounds_exhausted": crate::tools::MAX_TOOL_ROUNDS }),
-                    "ok": true,
-                    "result": last.answer().to_string(),
-                }));
-                if !last.answer().trim().is_empty() {
-                    reply = last;
-                    forced_final_answer = true;
-                } else {
-                    discard_if_visible(&last, sink, round_no);
-                }
-            }
-            Err(e) => {
-                // 失败不改变结论：下面照旧报 `tool_loop_exhausted`。流式那边
-                // 由调用方把这个 Err 变成 `error` 事件，不会无声断连接。
-                eprintln!("[chat] 收尾调用失败，保留原来的 tool_loop_exhausted 结论：{e}");
-            }
-        }
-    }
-    let turn_ms = started.elapsed().as_millis() as i64;
-    // 存档、汇总列、响应 JSON 三处用**同一份**总量。
-    let usage = turn_usage.finish();
-
-    Ok(TurnOutcome {
-        reply,
-        usage,
-        tool_trace,
-        rounds,
-        forced_final_answer,
-        turn_ms,
-    })
+    let input = quill_core::turn::TurnInput {
+        provider: &prep.provider,
+        llm_config: &prep.llm_config,
+        registry: &prep.registry,
+        tools: &prep.tools,
+        // msgs 由内核取走跑循环（要往里追加工具往返），壳之后不再需要它：
+        // 落库用的是 TurnOutcome，不是这份 msgs。
+        messages: std::mem::take(&mut prep.msgs),
+        mode,
+    };
+    quill_core::turn::run_turn(input, sink)
+        .await
+        .map_err(provider_failure)
 }
 
 /// 用户消息那一段。SSE 的 `user_message` 事件与 `done` 里的 `user_message`
@@ -1500,6 +1239,8 @@ async fn ensure_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+    // 累加器本体已在内核（Q012），这里测的是搬过去之后的行为没漂。
+    use quill_core::turn::TurnUsage;
 
     /// ISSUE-020 的回归：**信封里「下一步」只能有一个出口。**
     ///
