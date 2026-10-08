@@ -72,7 +72,17 @@ grep -rn "crate::tools::" crates/quill-server/src/ | grep -v "^crates/quill-serv
 
 ---
 
-## 3. 端口二：`ProviderAssembly`（给 Q015 / provider 组装）
+## 3. 端口二：provider 组装（Q015 **已落地 2026-10-08**）
+
+> **落地结果**：本节的边界已按下面执行完毕 —— `llm.rs`（配置 + `build()`）整体搬进
+> `quill-core/src/llm.rs`；探测与解析（`ModelCard` / `parse_models_payload` /
+> `probe_models` / 模型行模型 `LlmProvider`）搬进 `quill-core/src/providers.rs`；
+> 壳侧 `llm_providers.rs` 只剩 9 条 SQL 的持久化（957 → 509 行）并对内核做 re-export。
+> **复现「只剩一套」**：`grep -rn "OpenAiCompatible::new" crates/ --include=*.rs | grep -v quill-provider`
+> → 生产侧只有 `crates/quill-core/src/llm.rs:206` 一处（其余是 quill-provider 自己的测试）。
+> 未做（如实记）：`quill-provider::Provider::models()` 与内核探测仍是**两个契约**
+> —— 前者只回 `{id, owned_by}`，后者要上游原始字段来推 `context_window`/`modality`；
+> 合并不是把两者并成一个函数，见 `docs/KERNEL-ALIGNMENT.md §Q029` 的差集表。
 
 现状（`docs/KERNEL-ALIGNMENT.md §Q029` 已核实）：**两套** —— `quill-provider`（传输层，
 3241 行，不碰 DB）与 `quill-server::llm_providers` + `llm.rs`（DB 配置 / 探测 / 组装，

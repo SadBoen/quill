@@ -94,7 +94,7 @@ pub async fn create(
         .unwrap_or(existing_default.is_none());
 
     let p = LlmProvider {
-        id: LlmProvider::new_id()?,
+        id: LlmProvider::new_id().map_err(ApiError::internal)?,
         name,
         preset_id,
         kind,

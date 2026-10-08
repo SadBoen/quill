@@ -33,7 +33,8 @@ pub mod error;
 pub mod experts_repo;
 pub mod general_expert;
 pub mod jsonx;
-pub mod llm;
+/// 内核侧配置与 provider 组装（已搬到 `quill-core`；这里 re-export 保持旧路径可用）。
+pub use quill_core::llm;
 pub mod llm_providers;
 /// MBTI 人格测评：题库、计分、落库、应用到专家人格正文。
 pub mod mbti;

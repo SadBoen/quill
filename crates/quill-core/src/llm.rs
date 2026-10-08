@@ -117,7 +117,7 @@ pub const DEFAULT_COMPACTION_THRESHOLD_TOKENS: u32 = 8000;
 pub const MIN_COMPACTION_THRESHOLD_TOKENS: u32 = 4001;
 
 impl LlmConfig {
-    pub fn from_env() -> (Self, Vec<crate::config::Warning>) {
+    pub fn from_env() -> (Self, Vec<crate::warning::Warning>) {
         let mut warnings = Vec::new();
 
         let base_url = env_or(
@@ -183,14 +183,14 @@ fn env_or(
     key: &str,
     default: &str,
     source: &str,
-    warnings: &mut Vec<crate::config::Warning>,
+    warnings: &mut Vec<crate::warning::Warning>,
 ) -> String {
     match std::env::var(key) {
         Err(_) => default.to_string(),
         Ok(raw) => {
             let t = raw.trim();
             if t.is_empty() {
-                warnings.push(crate::config::Warning {
+                warnings.push(crate::warning::Warning {
                     source: source.to_string(),
                     message: format!("设为空串，已回退默认 {default}。"),
                 });

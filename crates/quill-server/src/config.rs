@@ -9,18 +9,8 @@ pub const DEFAULT_DB_PATH: &str = "data/quill.db";
 
 pub const DEFAULT_DB_MAX_CONNECTIONS: u32 = 5;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Warning {
-    pub source: String,
-
-    pub message: String,
-}
-
-impl std::fmt::Display for Warning {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {}", self.source, self.message)
-    }
-}
+/// 定义已随 `llm.rs` 搬进内核（`quill_core::warning`，queue Q015）。
+pub use quill_core::warning::Warning;
 
 #[derive(Debug, Clone)]
 pub struct Config {

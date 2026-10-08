@@ -13,6 +13,11 @@
 //! 没写清楚出处的模块，等于把「照 goose 抄」这句话变成不可核对的口号。
 
 pub mod compaction;
+pub mod llm;
+pub mod providers;
+pub mod warning;
+
+pub use warning::Warning;
 /// 内容摘要（纯字节运算）。`mcp_tool_name` 的超长截断要用它，跟着工具层一起
 /// 搬进内核 —— 内核不该为了一个哈希函数依赖 `quill-server::db`（Q013）。
 pub mod digest;

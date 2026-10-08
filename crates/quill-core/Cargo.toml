@@ -31,3 +31,9 @@ tokio = { version = "1", features = [
     "io-util",
 ] }
 serde_json = "1"
+
+# `/models` 探测要发 HTTP（Q015 把探测从壳搬进来）：内核与上游模型端点打交道是
+# 它的本职，goose 的 providers 也自带 HTTP 客户端。
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "charset"] }
+# provider id 的随机源（原在壳里，跟着 `LlmProvider::new_id` 搬来）。
+getrandom = "0.4"

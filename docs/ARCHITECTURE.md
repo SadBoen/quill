@@ -126,7 +126,7 @@ goose 内核的参考源（`vendor/goose/crates/`，实测各 crate 规模）：
 
 | 内核能力 | goose 出处 | quill 落点 | 覆盖度 |
 |---|---|---|---|
-| provider 抽象 | `goose-providers`/`-provider-types` | `quill-provider`（叶子） + `api` 层 `llm_providers.rs` 又拼一套 | 部分，**且有两套** |
+| provider 抽象 | `goose-providers`/`-provider-types` | `quill-provider`（叶子，传输）+ `quill-core::llm`（配置与组装，Q015 已搬） | 部分；**组装只剩一套**（2026-10-08） |
 | MCP 客户端 | `goose/agents/mcp_client.rs`、`goose-mcp` | `quill-server/src/mcp_client.rs`（1174 行） | 部分，**寄生在 HTTP 层** |
 | 对话循环 | `goose/agents/agent.rs` → `Agent::reply` | `quill-server/src/api_chat.rs`（2069 行） | 部分，**寄生在 HTTP 层**，无状态机/快照/重试 |
 | 工具执行 | `goose/agents/tool_execution.rs` | `quill-server/src/tools.rs`（1140 行） | 部分，**寄生在 HTTP 层** |
@@ -174,7 +174,7 @@ crates/quill-agent/src/
 1715 skillhub          ← 技能市场客户端
 1174 mcp_client        ← MCP 协议客户端（本该在内核层）
 1140 tools             ← 工具执行（本该在内核层）
- 942 llm_providers     ← provider 组装（与 quill-provider 职责重叠）
+ 509 llm_providers     ← 只剩持久化（Q015 把组装与探测搬进 quill-core）
 ```
 
 内核逻辑寄生在 HTTP crate = 内核**无法被单测**、**无法被 CLI 复用**、**无法换实现**。
@@ -187,7 +187,7 @@ crates/quill-agent/src/
 | hex 字符串转 id | **≥3** | `api_chat.rs:871/890`、`api_dispatch.rs:479`、`quill-control::secret::hex_decode_exact` |
 | `now_ms()` | 6 处同名 | 各 api_* 各写一份 |
 | 取值助手 `need_str`/`opt_str`/`s`/`n` | 5+5+… | 几乎每个 api_*.rs 复制一遍 |
-| provider 组装 | **2 套** | `quill-provider` 抽象 vs `llm_providers.rs` 组装 |
+| provider 组装 | **1 套（已修，2026-10-08 Q015）** | 组装只剩 `quill_core::llm::build`；`llm_providers.rs` 只做持久化 |
 
 复现：
 

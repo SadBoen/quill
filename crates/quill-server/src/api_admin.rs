@@ -66,7 +66,7 @@ pub async fn put(
             cur
         }
         None => LlmProvider {
-            id: LlmProvider::new_id()?,
+            id: LlmProvider::new_id().map_err(ApiError::internal)?,
             name: "默认模型服务".to_string(),
             preset_id: llm_providers::CUSTOM_PRESET_ID.to_string(),
             kind: ProviderKind::Custom,
