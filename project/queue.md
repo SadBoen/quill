@@ -231,7 +231,13 @@
 
 ## L. 死结构清理（Q044 核实后新开，按取用规则第 4 条续号）
 
-- [ ] Q102 · `skills.tool_allowlist` 存而不用（ISSUE-008）：写得进、读得出、导得出，但**没有任何消费点** · `quill-core`/`api_extensions.rs` · 要么定清「技能的允许工具表在对话里怎么生效」并真消费，要么删列（需迁移）
+- [x] Q102 · `skills.tool_allowlist` 存而不用（ISSUE-008） · `quill-core`/`api_extensions.rs` · **已完成 2026-10-09（选了「删列」）**：三条当场核过 —— ① **没有上游定义**（`grep -rn tool_allowlist .octop-ref/octop/src` 只有无关的 JWT / bridge 白名单；SkillHub 的包格式里也**没有**这个字段，`grep -rn tool_allowlist crates/quill-server/src/skillhub/` 零命中 —— 它只由客户端传进来）；② **在 quill 里没有可约束的东西**（一个 SKILL 是**一段提示词正文**，没有执行边界、也不自己调工具 → 「这个技能允许用哪些工具」在执行模型里没有落点；真要「技能沙箱」得先有执行隔离，那是另一件事）；③ **零消费者**。→ 按第 3 条指示「不自创」的口径删列，而不是替它发明一套语义。
+  - **是普通 `DROP COLUMN`**：该列没有 CHECK 引用它、也没有索引（`ix_skills_enabled` 只建在 `(user_id, enabled)` 上），所以**不需要**像 0012 那样重建表。迁移 `0014_drop_skills_tool_allowlist.sql`。
+  - **行为保持不变**（这点刻意做了）：客户端与 bundle 再传 `tool_allowlist` 仍被**接受并忽略**（`api_extensions` 与 `api_bundle` 两处都有注释）—— 这一列从来只被写、没被读过，所以忽略它之后行为与删之前**完全一样**，老客户端与老 bundle 不会 400。
+  - **同批改掉 5 处**：`skills_repo.rs`（COLUMNS / LIST_SQL / GET_SQL / 结构体字段 / 写入 / `row_from` / 响应 JSON）、`tool_sources.rs`（技能侧的 `tool_allowlist` 恒空，内核那个字段留着给 **MCP** 用）、`api_extensions.rs`（三处构造 + 键白名单保留但忽略）、`api_bundle.rs`（导出不再带它、导入忽略它）、前端 `skillsApi.ts` 的类型与 `SkillsPage.test.tsx` 的夹具。
+  - **别误删同名的另一件事**：`mcp_servers.tool_allowlist_json`（0001:144 / 0007）**不在本条范围内**，本轮一个字没动 —— 判据里专门钉了它。
+  - **判据实测**：新增 `migration_0014_drops_skills_tool_allowlist_only` → `cargo test -p quill-store` **25 + 16 passed / 0 failed**；`cargo test --workspace` → 见提交信息。**反向验证**：把 `mcp_servers` 那一列也加进迁移 → 该测试按预期报「mcp_servers 上的同名列是另一件事，不该被删」；已还原。
+  - 同批更新 `docs/CODE-TRUTH.md` 缺陷 7a 与 `BACKLOG.md`（它们还把这一列记成「待定」）。
 - [x] Q103 · `experts.skill_count` **恒写 0 且无人读** · `experts_repo.rs` · **已完成 2026-10-09（选了「删列」）**：`skills` 表只有 `user_id`、**没有 `expert_id`**，全仓也没有专家↔技能关系表 → 「这个专家有几个技能」在本 schema 里**没有答案**，所以「算出真值」不可行（上上次已核过）。新增迁移 **`0012_experts_drop_skill_count.sql`**：因为是**表级** `CHECK (skill_count >= 0)` 引用的列（`ALTER … DROP COLUMN` 会被 SQLite 直接拒），走的是**重建表** —— 建新表（列清单 = 0001 原始列 + 0004 的 `instructions`/`model` + 0005 的 `source_template`，CHECK 逐条照抄只去掉引用该列的那条）→ 整列复制 → `DROP` → `RENAME` → 重建 `ix_experts_visible`。
   - **同批改掉 6 处写它的地方**：`experts_repo.rs` 的 `PUT_SQL`（列清单 + 字面量 0）、`member_executor.rs:363` 的 INSERT、`quill-store/src/lib.rs` 的两处探针 INSERT、`tests/common/mod.rs` 的夹具 INSERT。
   - **别误删同名的那件事**：`api_expert_market.rs:87` 与 `ui/web/src/experts/api.ts:158` 的 `skill_count` 是**市场载荷**字段（`skillhub/models.rs:87`），活的、有用例覆盖 —— 本批一个字没动它。

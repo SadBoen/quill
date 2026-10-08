@@ -1,0 +1,27 @@
+-- 删掉 `skills.tool_allowlist_json`（ISSUE-008，queue Q102）。
+--
+-- **为什么删而不是「定清语义并真消费」**（两条都当场核过）：
+--   1. **没有上游定义**：`grep -rn tool_allowlist .octop-ref/octop/src` 只有无关的
+--      JWT / bridge 白名单；SkillHub 的包格式里也**没有**这个字段
+--      （`grep -rn tool_allowlist crates/quill-server/src/skillhub/` 零命中）。
+--      它只由客户端在 `POST /api/extensions/skills` 里传进来，语义从来没被定义过。
+--   2. **在 quill 里没有可约束的东西**：一个 SKILL 是**一段提示词正文**（存在
+--      `QUILL_SKILL_DIR`，`skills` 行只留摘要与路径），它没有执行边界、也不自己调工具 ——
+--      「这个技能允许用哪些工具」在 quill 的执行模型里没有落点。真要「技能沙箱」，
+--      那是先有执行隔离再谈的事，不是给这一列编一个语义。
+--   3. **零消费者**：`grep -rn tool_allowlist crates/` 里它的去处只有
+--      `quill_core::tools` 的同名字段（那一条由 **MCP** 那一列填），没有任何判定读它。
+--   → 按第 3 条指示「不自创」的口径，删列；而不是替它发明一套语义。
+--
+-- **为什么是普通 `DROP COLUMN`**：`skills.tool_allowlist_json` 没有 CHECK 引用它、
+-- 也没有索引（0001 的 `ix_skills_enabled` 只建在 `(user_id, enabled)` 上），
+-- 所以不需要像 0012 那样重建表。
+--
+-- **行为保持不变**：这一列从来只被写、从没被读 —— 删掉之后，客户端再传
+-- `tool_allowlist` 也**仍然什么都不发生**（`api_extensions` 与 bundle 导入都继续
+-- 接受这个键并忽略它，见那两处的注释），所以老客户端与老 bundle 不会 400。
+--
+-- **注意**：`mcp_servers.tool_allowlist_json` **不在此列** —— 那是另一张表上的另一件事
+-- （它由 `quill_core::tools` 的同名字段承载），本轮一个字没动。
+ALTER TABLE skills DROP COLUMN tool_allowlist_json;
+

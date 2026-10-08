@@ -41,14 +41,14 @@ const _: () = assert!(
 );
 
 pub const COLUMNS: &str = "name, version, source, source_ref, description, enabled, \
-     content_hash, install_path, tool_allowlist_json, created_at, updated_at";
+     content_hash, install_path, created_at, updated_at";
 
 pub const LIST_SQL: &str = "SELECT name, version, source, source_ref, description, enabled, \
-     content_hash, install_path, tool_allowlist_json, created_at, updated_at FROM skills \
+     content_hash, install_path, created_at, updated_at FROM skills \
      WHERE user_id = ? AND deleted_at IS NULL ORDER BY name ASC";
 
 pub const GET_SQL: &str = "SELECT name, version, source, source_ref, description, enabled, \
-     content_hash, install_path, tool_allowlist_json, created_at, updated_at FROM skills \
+     content_hash, install_path, created_at, updated_at FROM skills \
      WHERE user_id = ? AND name = ? AND deleted_at IS NULL";
 
 #[derive(Debug, Clone, PartialEq)]
@@ -61,7 +61,6 @@ pub struct SkillRow {
     pub description: String,
     pub enabled: bool,
     pub install_path: String,
-    pub tool_allowlist: Vec<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -139,21 +138,18 @@ pub async fn upsert(
     hash: Vec<u8>,
 ) -> Result<SkillRow, quill_agent::AgentError> {
     let b = crate::db::blob_of(&uid);
-    let allow =
-        serde_json::to_string(&row.tool_allowlist).map_err(|e| storage_error(OP_WRITE, e))?;
     db.call(move |pool, _rt| {
         Box::pin(async move {
             let now = now_ms();
             let r = sqlx::query(
                 "INSERT INTO skills (user_id, name, version, source, source_ref, description, \
-                 enabled, content_hash, install_path, tool_allowlist_json, created_at, updated_at, \
-                 deleted_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NULL) \
+                 enabled, content_hash, install_path, created_at, updated_at, \
+                 deleted_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,NULL) \
                  ON CONFLICT(user_id, name) DO UPDATE SET \
                    version=excluded.version, source=excluded.source, \
                    source_ref=excluded.source_ref, description=excluded.description, \
                    enabled=excluded.enabled, content_hash=excluded.content_hash, \
                    install_path=excluded.install_path, \
-                   tool_allowlist_json=excluded.tool_allowlist_json, \
                    updated_at=excluded.updated_at, deleted_at=NULL",
             )
             .bind(&b)
@@ -165,7 +161,6 @@ pub async fn upsert(
             .bind(if row.enabled { 1i64 } else { 0i64 })
             .bind(&hash)
             .bind(&row.install_path)
-            .bind(&allow)
             .bind(now)
             .bind(now)
             .execute(&pool)
@@ -275,13 +270,6 @@ fn os(row: &SqliteRow, k: &str) -> Result<Option<String>, quill_agent::AgentErro
 }
 
 fn row_from(r: &SqliteRow) -> Result<SkillRow, quill_agent::AgentError> {
-    let allow_raw = s(r, "tool_allowlist_json")?;
-    let tool_allowlist = serde_json::from_str::<Vec<String>>(&allow_raw).map_err(|e| {
-        storage_error(
-            &format!("{OP_LIST}（tool_allowlist_json 列的内容不是合法 JSON 数组）"),
-            e,
-        )
-    })?;
     Ok(SkillRow {
         name: s(r, "name")?,
         version: s(r, "version")?,
@@ -293,7 +281,6 @@ fn row_from(r: &SqliteRow) -> Result<SkillRow, quill_agent::AgentError> {
             .map_err(|e| storage_error(OP_LIST, e))?
             != 0,
         install_path: s(r, "install_path")?,
-        tool_allowlist,
         created_at: r
             .try_get::<i64, _>("created_at")
             .map_err(|e| storage_error(OP_LIST, e))?,
@@ -315,7 +302,6 @@ pub fn to_json(r: &SkillRow) -> Value {
         "kind": if r.source == "builtin" { "builtin" } else { "workspace" },
         "enabled": r.enabled,
         "path": r.install_path,
-        "tool_allowlist": r.tool_allowlist,
     })
 }
 
@@ -362,7 +348,6 @@ mod tests {
             description: "示例".into(),
             enabled: true,
             install_path: "/tmp/x".into(),
-            tool_allowlist: vec![],
             created_at: 0,
             updated_at: 0,
         }

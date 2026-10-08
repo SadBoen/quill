@@ -116,7 +116,6 @@ pub async fn export(
             "enabled": s.enabled,
             "source": s.source,
             "source_ref": s.source_ref,
-            "tool_allowlist": s.tool_allowlist,
             "content": content,
         }));
     }
@@ -237,16 +236,9 @@ pub async fn import(
                 .to_string(),
             enabled: s.get("enabled").and_then(Value::as_bool).unwrap_or(false),
             install_path: path.display().to_string(),
-            tool_allowlist: s
-                .get("tool_allowlist")
-                .and_then(Value::as_array)
-                .map(|a| {
-                    a.iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_string)
-                        .collect()
-                })
-                .unwrap_or_default(),
+            // 老 bundle 里的 `tool_allowlist` **接受并忽略**：这一列 2026-10-09 已删
+            // （Q102），而它从来只被写、没被读过 —— 忽略它，行为与删之前**一模一样**，
+            // 所以老 bundle 不会因为多一个键就导不进来。
             created_at: crate::db::now_ms(),
             updated_at: crate::db::now_ms(),
         };

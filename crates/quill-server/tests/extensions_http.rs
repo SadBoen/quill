@@ -1822,9 +1822,9 @@ async fn the_schema_itself_forbids_a_skill_from_taking_a_builtin_tools_underscor
                 Box::pin(async move {
                     sqlx::query(
                     "INSERT INTO skills (user_id, name, version, source, source_ref, description, \
-                     enabled, content_hash, install_path, tool_allowlist_json, created_at, \
+                     enabled, content_hash, install_path, created_at, \
                      updated_at, deleted_at) VALUES (?,?,'0.1.0','local',NULL,'',\
-                     1, zeroblob(32),'','[]',0,0,NULL)",
+                     1, zeroblob(32),'',0,0,NULL)",
                 )
                 .bind(&b)
                 .bind("list_experts")

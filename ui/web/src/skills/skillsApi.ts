@@ -32,7 +32,8 @@ export interface Skill {
   enabled: boolean
   /** 正文文件路径。 */
   path: string
-  tool_allowlist: string[]
+  // `tool_allowlist` 原本在这里 —— 2026-10-09 随迁移 0014 删掉了那一列（Q102 /
+  // ISSUE-008）：它从来没有消费者，界面上也从来没显示过它。
   /** 正文字数。正文文件找不到时为 0。 */
   content_chars?: number
   /** 库里有行但磁盘上没正文。 */

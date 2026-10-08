@@ -1764,7 +1764,6 @@ pub(crate) async fn install_one_skill(
             // 装完不启用。理由与技能包那条一样，见 skill_hub_install 的文档。
             enabled: false,
             install_path: path.display().to_string(),
-            tool_allowlist: Vec::new(),
             created_at: 0,
             updated_at: 0,
         },
@@ -1961,7 +1960,6 @@ pub async fn skill_hub_install(
                 // **装完不启用。** 见函数文档。
                 enabled: false,
                 install_path: path.display().to_string(),
-                tool_allowlist: Vec::new(),
                 created_at: 0,
                 updated_at: 0,
             },
@@ -2297,16 +2295,9 @@ pub async fn save_skill(
             .to_string(),
         enabled: body.get("enabled").and_then(Value::as_bool).unwrap_or(true),
         install_path: path.display().to_string(),
-        tool_allowlist: body
-            .get("tool_allowlist")
-            .and_then(Value::as_array)
-            .map(|a| {
-                a.iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_string)
-                    .collect::<Vec<String>>()
-            })
-            .unwrap_or_default(),
+        // `tool_allowlist` **接受并忽略**（2026-10-09 删列，Q102 / ISSUE-008）：
+        // 这一列从来只被写、没被读过，所以忽略它之后行为与删之前**完全一样**；
+        // 继续接受这个键是为了让老客户端不至于因为多传一个字段就 400。
         created_at: 0,
         updated_at: 0,
     };

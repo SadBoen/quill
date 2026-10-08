@@ -116,7 +116,9 @@ pub fn skill_tool_row(row: &SkillRow, body: &str) -> SkillToolRow {
         name: row.name.clone(),
         description: row.description.clone(),
         enabled: row.enabled,
-        tool_allowlist: row.tool_allowlist.clone(),
+        // `skills.tool_allowlist_json` 2026-10-09 已删（Q102 / ISSUE-008）—— 内核那一行的
+        // 同名字段留着是给 **MCP** 用的（`mcp_servers` 那一列还在），技能这一侧一律空。
+        tool_allowlist: Vec::new(),
         body: body.to_string(),
     }
 }

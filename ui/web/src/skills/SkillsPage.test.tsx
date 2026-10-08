@@ -29,7 +29,6 @@ function skill(over: Partial<Skill> = {}): Skill {
     kind: 'workspace',
     enabled: false,
     path: '/tmp/skills/alpha.md',
-    tool_allowlist: [],
     content_chars: 3867,
     model_sees_summary: '一份做法。',
     model_can_see: false,

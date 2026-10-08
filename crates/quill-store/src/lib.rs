@@ -199,6 +199,7 @@ pub const MIGRATION_0010: &str = include_str!("../migrations/0010_mbti.sql");
 pub const MIGRATION_0011: &str = include_str!("../migrations/0011_cron.sql");
 pub const MIGRATION_0012: &str = include_str!("../migrations/0012_experts_drop_skill_count.sql");
 pub const MIGRATION_0013: &str = include_str!("../migrations/0013_drop_dead_tables.sql");
+pub const MIGRATION_0014: &str = include_str!("../migrations/0014_drop_skills_tool_allowlist.sql");
 
 /// 「迁移跑完之后**应该存在**的表」清单（自检用：少一张就说明迁移链坏了）。
 ///
@@ -296,6 +297,11 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 13,
         name: "0013_drop_dead_tables",
         sql: MIGRATION_0013,
+    },
+    Migration {
+        version: 14,
+        name: "0014_drop_skills_tool_allowlist",
+        sql: MIGRATION_0014,
     },
 ];
 
@@ -1604,5 +1610,39 @@ mod tests {
                 "{t} 不该还留在 MIGRATIONS_TABLES 自检清单里"
             );
         }
+    }
+
+    /// Q102 / ISSUE-008：`skills.tool_allowlist_json` 必须真的没了，而**另一张表上的
+    /// 同名列不许被顺手删掉**。
+    ///
+    /// 后者是这条测试真正的价值：`mcp_servers.tool_allowlist_json` 是另一件事
+    /// （由 `quill_core::tools` 的同名字段承载），批量改列名时最容易连它一起删。
+    #[tokio::test]
+    async fn migration_0014_drops_skills_tool_allowlist_only() {
+        let pool = in_memory().await.expect("内存库");
+        migrate(&pool).await.expect("跑完整条迁移链");
+
+        let cols: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('skills')")
+            .fetch_all(&pool)
+            .await
+            .expect("读 skills 的列");
+        assert!(
+            !cols.iter().any(|c| c == "tool_allowlist_json"),
+            "skills 的那一列必须没了：{cols:?}"
+        );
+        // 别的列都还在（列清单抄错的话这里会直接报 no such column）。
+        for keep in ["install_path", "content_hash", "enabled"] {
+            assert!(cols.iter().any(|c| c == keep), "{keep} 不该被动：{cols:?}");
+        }
+
+        let mcp: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('mcp_servers')")
+                .fetch_all(&pool)
+                .await
+                .expect("读 mcp_servers 的列");
+        assert!(
+            mcp.iter().any(|c| c == "tool_allowlist_json"),
+            "mcp_servers 上的同名列是另一件事，不该被删：{mcp:?}"
+        );
     }
 }
