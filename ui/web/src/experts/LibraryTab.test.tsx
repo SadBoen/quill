@@ -112,7 +112,9 @@ it('没做到能用的能力只给路由名，不在表单里放假开关', asyn
   expect(within(card()).getByText('GET /api/extensions/skills')).toBeInTheDocument()
   expect(within(card()).getByText('GET /api/extensions/plugins')).toBeInTheDocument()
   expect(within(card()).getByText('GET /api/extensions/mcp')).toBeInTheDocument()
-  expect(within(card()).getByText('/api/cron')).toBeInTheDocument()
+  // 定时任务 2026-10-09 接通了（Q042），所以它**不在**这张表里了 ——
+  // 界面上不该再出现「未接通」的 cron 行。这条断言原来是反过来的。
+  expect(within(card()).queryByText('/api/cron')).toBeNull()
   const names = Array.from(form.querySelectorAll('input, select, textarea')).map((el) => el.getAttribute('name'))
   expect(names).not.toContain('skills')
   expect(names).not.toContain('mcp')
@@ -143,9 +145,10 @@ it('MCP 与技能包标「部分接通」，不标 501 —— 它们的路由是
     '技能包已挂进工具表，文案不许再写「能存能读」',
   ).toBeInTheDocument()
   expect(within(card()).queryByText(/尚未挂进|还调不到/)).toBeNull()
-  // 路由压根不存在的那两条才是「未接通」。
+  // 「已登记但处理函数没实现」的那一条才是「未接通」（插件）。
   expect(within(card()).getByText('未接通 · 501')).toBeInTheDocument()
-  expect(within(card()).getByText('未接通 · 路由未注册')).toBeInTheDocument()
+  // 定时任务的路由 2026-10-09 起是真后端（Q042），这条文案不该再出现。
+  expect(within(card()).queryByText('未接通 · 路由未注册')).toBeNull()
 })
 
 it('后端拒绝时显示服务端中文原文', async () => {

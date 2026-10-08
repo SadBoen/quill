@@ -9,10 +9,11 @@ import { AutomationsPage } from './Automations'
 /**
  * 自动化页的「点了必失败」红线（queue Q071）。
  *
- * `/api/cron*` 在 quill 后端**没有登记**（`grep -rn cron crates/quill-server/src` 零命中），
- * 所以这一页最容易长出一个能填、能提交、点下去必然 404 的表单 —— 用户会以为定时任务
- * 建成了，然后等它永远不跑。`api/capability.ts` 的 `routeMissing` 就是为这个加的：
- * 只认「服务端明说没这条路由」（404 + `not_found`），据此不画按钮、不画表单。
+ * **2026-10-09 起 `/api/cron*` 是真后端了**（Q042 接通），所以下面这些用例改成
+ * **模拟** 404 来钉住那条守卫本身：老实例（没跑过 0011 迁移、或路由被摘掉）上，
+ * 这一页仍必须不画能填能提交的表单 —— 否则用户会以为定时任务建成了，然后等它永远不跑。
+ * `api/capability.ts` 的 `routeMissing` 就是为这个加的：只认「服务端明说没这条路由」
+ * （404 + `not_found`），据此不画按钮、不画表单。
  *
  * 与 `capability.test.ts` 的分工：那边测判据本身，这边测**这一页真的照判据办事**。
  */

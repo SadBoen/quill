@@ -46,13 +46,6 @@ export const CAPABILITY_GAPS = [
     status: 'not-implemented',
     detail: '501',
   },
-  {
-    labelKey: 'chat.tools.cron',
-    fallback: '定时任务',
-    route: '/api/cron',
-    status: 'not-implemented',
-    detail: '路由未注册',
-  },
 ] as const
 
 type CapabilityGap = (typeof CAPABILITY_GAPS)[number]

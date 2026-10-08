@@ -29,12 +29,18 @@ describe('能力缺口表必须与后端路由对齐', () => {
     }
   })
 
-  it('路由压根不存在的那两条才是「未接通」', () => {
-    for (const route of ['GET /api/extensions/plugins', '/api/cron']) {
+  it('路由压根不存在的那一条才是「未接通」', () => {
+    // `/api/cron` 在 2026-10-09 接通了（Q042），所以它**不在**这张表里了 ——
+    // 表里剩下的只有「路由登记了但处理函数没实现」的插件那条。
+    for (const route of ['GET /api/extensions/plugins']) {
       const gap = CAPABILITY_GAPS.find((item) => item.route === route)
       expect(gap?.status).toBe('not-implemented')
       expect(capabilityStatusLabel(gap!, t)).toMatch(/^未接通/)
     }
+    // 定时任务不该再出现在「没做到能用」的表里（它现在是真后端）。
+    // 用 `map` 到 `string[]` 再比：直接拿 `item.route` 比会被 TS 收窄成「不可能相等」。
+    const routes: readonly string[] = CAPABILITY_GAPS.map((item) => item.route)
+    expect(routes).not.toContain('/api/cron')
   })
 
   it('每一行都要有名字和路由', () => {

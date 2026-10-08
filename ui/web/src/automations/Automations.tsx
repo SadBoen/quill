@@ -36,7 +36,6 @@ interface CronDraft {
   message: string
   kind: ScheduleKind
   everySeconds: string
-  cronExpr: string
   at: string
   timezone: string
 }
@@ -320,7 +319,9 @@ function CronForm({
         {t('automations.scheduleType', { defaultValue: '触发方式' })}
         <select name="scheduleType" autoComplete="off" value={draft.kind} onChange={(event) => onChange({ ...draft, kind: event.target.value as ScheduleKind })}>
           <option value="every">{t('automations.every', { defaultValue: '固定间隔' })}</option>
-          <option value="cron">{t('automations.cron', { defaultValue: 'cron 表达式' })}</option>
+          {/* **没有「cron 表达式」这一项**：后端不支持（要 cron 解析 + IANA 时区库，
+              时区算错一小时是用户可见的错），所以这里不画 —— 画一个点了必然 400 的
+              选项，比少一个选项坏得多（Q041 删假路由、Q037 保留诚实 501 是同一条纪律）。 */}
           <option value="at">{t('automations.once', { defaultValue: '指定时刻' })}</option>
         </select>
       </label>
@@ -332,12 +333,6 @@ function CronForm({
         <label>
           {t('automations.everySeconds', { defaultValue: '间隔秒数' })}
           <input name="everySeconds" autoComplete="off" type="number" min="60" max="31536000" required value={draft.everySeconds} onChange={(event) => onChange({ ...draft, everySeconds: event.target.value })} />
-        </label>
-      ) : null}
-      {draft.kind === 'cron' ? (
-        <label>
-          {t('automations.cronExpression', { defaultValue: 'cron 表达式' })}
-          <input name="cronExpr" autoComplete="off" required maxLength={256} value={draft.cronExpr} placeholder="0 9 * * 1-5" onChange={(event) => onChange({ ...draft, cronExpr: event.target.value })} />
         </label>
       ) : null}
       {draft.kind === 'at' ? (
@@ -369,7 +364,6 @@ function emptyCronDraft(timezone: string): CronDraft {
     message: '',
     kind: 'every',
     everySeconds: '3600',
-    cronExpr: '0 9 * * 1-5',
     at: '',
     timezone,
   }
@@ -379,9 +373,6 @@ function cronDraft(job: CronJob, fallbackTimezone: string): CronDraft {
   const draft = emptyCronDraft(fallbackTimezone)
   if (job.schedule.type === 'every') {
     return { ...draft, id: job.id, name: job.name, message: job.message, everySeconds: String(job.schedule.every_seconds) }
-  }
-  if (job.schedule.type === 'cron') {
-    return { ...draft, id: job.id, name: job.name, message: job.message, kind: 'cron', cronExpr: job.schedule.cron_expr, timezone: job.schedule.tz }
   }
   return {
     ...draft,
@@ -397,7 +388,6 @@ function cronDraft(job: CronJob, fallbackTimezone: string): CronDraft {
 function cronWrite(draft: CronDraft): CronWrite {
   const base = { name: draft.name, message: draft.message }
   if (draft.kind === 'every') return { ...base, every_seconds: Number(draft.everySeconds) }
-  if (draft.kind === 'cron') return { ...base, cron_expr: draft.cronExpr, tz: draft.timezone }
   return { ...base, at: draft.at, tz: draft.timezone }
 }
 
@@ -424,7 +414,6 @@ function ScheduleLabel({
       defaultValue: '每 {{count}} 秒',
     })
   }
-  if (schedule.type === 'cron') return `${schedule.cron_expr} · ${schedule.tz}`
   return <><time dateTime={schedule.at}>{formatTimestamp(schedule.at, schedule.tz, language)}</time> · {schedule.tz}</>
 }
 

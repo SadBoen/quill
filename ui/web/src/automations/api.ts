@@ -1,12 +1,12 @@
 import { apiJson } from '../api/client'
 
 /**
- * quill 后端没有定时任务能力：下面这些函数保留了上游的调用形状，
- * 但当前实例上 `/api/cron*` 全部返回 404，页面据此渲染「尚未接通」提示。
+ * quill 的定时任务（Q042，2026-10-09 接通）：`/api/cron*` 是真后端了 ——
+ * 排期支持 `every`（固定间隔）与 `at`（指定时刻，一次性），**不支持 `cron_expr`**
+ * （要 cron 解析 + IANA 时区库，宁可不做也不做错；表单里那个选项已同步去掉）。
  */
 export type CronSchedule =
   | { type: 'every'; every_seconds: number }
-  | { type: 'cron'; cron_expr: string; tz: string }
   | { type: 'at'; at: string; tz: string }
 
 export interface CronJobSummary {
@@ -32,7 +32,6 @@ export interface CronJobPage {
 
 export type CronWrite = { name?: string; message: string } & (
   | { every_seconds: number }
-  | { cron_expr: string; tz: string }
   | { at: string; tz: string }
 )
 
