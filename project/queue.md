@@ -98,7 +98,7 @@
 - [ ] Q063 · 在线升级本体（现在只有「升级前先备份」守卫） · `quill-upgrade` · 真能升级
 - [ ] Q064 · `quill-upgrade` 要么被真调用，要么删（现在声明了却零调用） · `quill-cli`/`quill-server` · 二选一并说明
 - [ ] Q065 · 迁移链的快照/漂移检测有测试 · `quill-store` · 改历史迁移会报红
-- [ ] Q066 · 数据库打开的并发与锁参数写清并测 · `quill-store` · 文档 + 测试
+- [x] Q066 · 数据库打开的并发与锁参数写清并测 · `quill-store` · **已完成 2026-10-08**：`configure_pool` 的四个 PRAGMA + 连接数上界逐条写进函数文档（WAL：读写不互阻，代价是两个边车文件；`synchronous = NORMAL`：掉电丢最近几次提交但**不坏库**，是有意取舍；`busy_timeout = 5s` 且是**连接级**所以 `apply_pragmas` 要再设一遍；`foreign_keys = ON`：SQLite 默认关，关着时 CASCADE 与复合外键全是装饰品；`max_connections`：写串行，开大只增竞争）。测试扩 `every_connection_has_foreign_keys_on`：逐连接补 `PRAGMA synchronous == 1`，并新增「上界被遵守」。**一条错断言留档**：最初写「借 5 次后 `pool.size() == 5`」，实测是 2 —— 池子按需开连接，改同时持有 5 条再断言（提交 19a5ad8）
 
 ## G. 前端（Web 壳）
 
