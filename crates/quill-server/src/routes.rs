@@ -434,6 +434,9 @@ pub const CONTRACT_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/sessions"),
     ("POST", "/api/sessions"),
     ("GET", "/api/sessions/{id}"),
+    // 会话改名（Q051 接通）。octop 侧确有 `PATCH .../threads/{tid}`，所以属契约路由。
+    // 此前漏登记（Q110），清单与路由表对不上。
+    ("PATCH", "/api/sessions/{id}"),
     ("DELETE", "/api/sessions/{id}"),
     ("POST", "/api/sessions/{id}/messages"),
     ("GET", "/api/sessions/{id}/metrics"),
