@@ -18,20 +18,30 @@ const OP_LIST: &str = "列出专家团";
 const OP_WRITE: &str = "写入专家团";
 
 /// 显式列清单：`*` 会在列顺序变化时静默错位。
-pub const COLUMNS: &str = "team_slug, name, description, leader_expert_id, created_at, updated_at";
+///
+/// 四个限制列（`guidelines` / `max_dispatch` / `max_replan` / `max_ask_depth`）
+/// 必须在这里——之前它们**只存在于 schema**，读写两侧一个字都没提，
+/// 于是「限制」从来没影响过任何一次派工（队列 Q043）。
+pub const COLUMNS: &str = "team_slug, name, description, guidelines, max_dispatch, max_replan, \
+     max_ask_depth, leader_expert_id, created_at, updated_at";
 
 /// 列表只给当前用户的未软删团队。
-pub const LIST_SQL: &str = "SELECT team_slug, name, description, leader_expert_id, created_at, \
+pub const LIST_SQL: &str = "SELECT team_slug, name, description, guidelines, max_dispatch, \
+     max_replan, max_ask_depth, leader_expert_id, created_at, \
      updated_at FROM teams WHERE user_id = ? AND deleted_at IS NULL \
      ORDER BY updated_at DESC, team_slug ASC";
 
 /// 单读。软删行读不出来（= 不存在），与「用户看不见」同一种结果。
-pub const GET_SQL: &str = "SELECT team_slug, name, description, leader_expert_id, created_at, \
+pub const GET_SQL: &str = "SELECT team_slug, name, description, guidelines, max_dispatch, \
+     max_replan, max_ask_depth, leader_expert_id, created_at, \
      updated_at FROM teams WHERE user_id = ? AND team_slug = ? AND deleted_at IS NULL";
 
 /// 按 16 字节 `id` 单读。派工真执行按这个走 —— 路径参数就是 32 位 hex 的 id，
 /// 而不是对外可见的 `team_slug`（两层标识的分工见文件头）。
-pub const GET_BY_ID_SQL: &str = "SELECT team_slug, name, description, leader_expert_id, \
+///
+/// 派工侧就是靠这一条把四个限制列读出来的（`TeamRow::limits`）。
+pub const GET_BY_ID_SQL: &str = "SELECT team_slug, name, description, guidelines, max_dispatch, \
+     max_replan, max_ask_depth, leader_expert_id, \
      created_at, updated_at FROM teams WHERE user_id = ? AND id = ? AND deleted_at IS NULL";
 
 /// 成员按 expert_id 升序读出，契约要求 member_ids 有序。
@@ -46,8 +56,9 @@ pub const SLUG_TAKEN_SQL: &str =
 pub const ANY_ROW_SQL: &str = "SELECT deleted_at FROM teams WHERE user_id = ? AND team_slug = ?";
 
 pub const INSERT_TEAM_SQL: &str = "INSERT INTO teams (user_id, id, name, room_id, \
-     leader_session_id, leader_expert_id, team_slug, description, state, state_changed_at, \
-     created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'IDLE', ?, ?, ?)";
+     leader_session_id, leader_expert_id, team_slug, description, guidelines, max_dispatch, \
+     max_replan, max_ask_depth, state, state_changed_at, \
+     created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'IDLE', ?, ?, ?)";
 
 /// 主持人是一个普通专家：建团时同步开一个 `team_leader` 会话作为它的工作区。
 /// 顺序上必须先于 teams 入库（teams 对 sessions 有外键）。
@@ -56,6 +67,7 @@ pub const INSERT_LEADER_SESSION_SQL: &str = "INSERT INTO sessions (user_id, id, 
      last_active_at) VALUES (?, ?, 'team_leader', ?, ?, ?, 'local', ?, 'IDLE', ?, ?, ?, ?)";
 
 pub const UPDATE_TEAM_SQL: &str = "UPDATE teams SET name = ?, description = ?, \
+     guidelines = ?, max_dispatch = ?, max_replan = ?, max_ask_depth = ?, \
      leader_expert_id = ?, updated_at = ? \
      WHERE user_id = ? AND team_slug = ? AND deleted_at IS NULL";
 
@@ -95,6 +107,12 @@ pub struct TeamRow {
     pub description: Option<String>,
     pub leader_id: String,
     pub member_ids: Vec<String>,
+    /// 团队行为约束（`teams.guidelines`）。空串 = 没有额外约束。
+    /// 派工时逐字进每个成员的提示，见 `quill_agent::team_limits`。
+    pub guidelines: String,
+    pub max_dispatch: u32,
+    pub max_replan: u32,
+    pub max_ask_depth: u32,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -125,6 +143,7 @@ impl TeamRow {
         description: Option<String>,
         leader_id: String,
         member_ids: Vec<String>,
+        limits: quill_agent::TeamLimits,
     ) -> Self {
         let now = now_ms();
         Self {
@@ -133,9 +152,26 @@ impl TeamRow {
             description,
             leader_id,
             member_ids,
+            guidelines: limits.guidelines().to_string(),
+            max_dispatch: limits.max_dispatch(),
+            max_replan: limits.max_replan(),
+            max_ask_depth: limits.max_ask_depth(),
             created_at: now,
             updated_at: now,
         }
+    }
+
+    /// 把四个限制列还原成派工侧要用的 [`quill_agent::TeamLimits`]。
+    ///
+    /// 库里存的值正常都被 schema 的 CHECK 约束过，但**不假设**：越界时如实
+    /// 报错（调用方映射成 400 并给下一步），而不是带着一个坏限制去派工。
+    pub fn limits(&self) -> Result<quill_agent::TeamLimits, quill_agent::TeamLimitsError> {
+        quill_agent::TeamLimits::new(
+            self.max_dispatch,
+            self.max_replan,
+            self.max_ask_depth,
+            self.guidelines.clone(),
+        )
     }
 }
 
@@ -146,9 +182,24 @@ fn row_to_team(row: &SqliteRow, members: Vec<String>) -> Result<TeamRow, quill_a
         description: col!(row, Option<String>, "description", OP_GET),
         leader_id: col!(row, String, "leader_expert_id", OP_GET),
         member_ids: members,
+        guidelines: col!(row, String, "guidelines", OP_GET),
+        max_dispatch: limit_col(row, "max_dispatch")?,
+        max_replan: limit_col(row, "max_replan")?,
+        max_ask_depth: limit_col(row, "max_ask_depth")?,
         created_at: col!(row, i64, "created_at", OP_GET),
         updated_at: col!(row, i64, "updated_at", OP_GET),
     })
+}
+
+/// 读一个 INTEGER 限制列并转成 `u32`。
+///
+/// 只做搬运（负数 / 溢出一律按数据损坏报），范围（2~8 / 0~5）由
+/// `TeamLimits::new` 与 schema 的 CHECK 两头把关。
+fn limit_col(row: &SqliteRow, name: &'static str) -> Result<u32, quill_agent::AgentError> {
+    // 不走 `col!`：那个宏要求列名写字面量，而这里是三个限制列共用的一份。
+    let v: i64 = sqlx::Row::try_get(row, name).map_err(|e| storage_error(OP_GET, e))?;
+    u32::try_from(v)
+        .map_err(|_| crate::db::invariant_broken(format!("teams.{name} = {v} 为负数或超出 u32")))
 }
 
 async fn sql_list(
@@ -357,6 +408,10 @@ pub async fn create(
                 .bind(team.leader_id.clone())
                 .bind(team.team_id.clone())
                 .bind(team.description.clone())
+                .bind(team.guidelines.clone())
+                .bind(i64::from(team.max_dispatch))
+                .bind(i64::from(team.max_replan))
+                .bind(i64::from(team.max_ask_depth))
                 .bind(now)
                 .bind(now)
                 .bind(now)
@@ -413,6 +468,10 @@ pub async fn update(
             sqlx::query(UPDATE_TEAM_SQL)
                 .bind(team.name.clone())
                 .bind(team.description.clone())
+                .bind(team.guidelines.clone())
+                .bind(i64::from(team.max_dispatch))
+                .bind(i64::from(team.max_replan))
+                .bind(i64::from(team.max_ask_depth))
                 .bind(team.leader_id.clone())
                 .bind(now)
                 .bind(ub.clone())
@@ -598,6 +657,26 @@ mod tests {
         assert!(
             CLEAR_MEMBERS_SQL.contains("role = 'member'"),
             "换人时不能把主持人的行一起删掉（会撞 ux_team_leader）：{CLEAR_MEMBERS_SQL}"
+        );
+    }
+
+    #[test]
+    fn every_limit_column_is_read_and_written_by_the_production_sql() {
+        // Q043：这四列曾经**只存在于 schema** —— 读写 SQL 一个字都没提，
+        // 于是「团队限制」从来没有影响过任何一次派工。这条测试钉住
+        // 「三条读 SQL + 两条写 SQL」都带着它们；少了任何一条都会变红。
+        const LIMITS: [&str; 4] = ["guidelines", "max_dispatch", "max_replan", "max_ask_depth"];
+        for sql in [COLUMNS, LIST_SQL, GET_SQL, GET_BY_ID_SQL, INSERT_TEAM_SQL] {
+            for c in LIMITS {
+                assert!(sql.contains(c), "读/写 SQL 漏了限制列 {c}：{sql}");
+            }
+        }
+        assert!(
+            UPDATE_TEAM_SQL.contains("guidelines = ?")
+                && UPDATE_TEAM_SQL.contains("max_dispatch = ?")
+                && UPDATE_TEAM_SQL.contains("max_replan = ?")
+                && UPDATE_TEAM_SQL.contains("max_ask_depth = ?"),
+            "改团时必须能改限制列（否则只有建团那一刻能设）：{UPDATE_TEAM_SQL}"
         );
     }
 

@@ -81,15 +81,19 @@ pub async fn book(
     // 不存在的团队 id 也能拿到 200 与一份空记录。它把 B2-1 从「派工记录
     // 没有消费者」推进到「派工记录也不会凭空记」—— 注意**只是**不再
     // 凭空记，真正派子 agent 仍然是 M2 未完成的部分。
-    let exists = crate::teams_repo::exists_by_id(state.db()?, user.0.user_id, team_id)
+    //
+    // 现在这里读的是整行（`get_by_id`）而不是只判存在性：记账前的那两道
+    // 团队限制闸门要用同一行里的 `max_dispatch` / `max_replan`（Q043）。
+    let row = crate::teams_repo::get_by_id(state.db()?, user.0.user_id, team_id)
         .await
-        .map_err(|e| agent_error_to_api("核对团队是否存在", e))?;
-    if !exists {
-        return Err(ApiError::entity_not_found(format!(
-            "团队 {team} 不存在（已软删的团队同样算不存在）。\
-             下一步：先用 GET /api/teams 确认这个 id 还在，再往它派工。"
-        )));
-    }
+        .map_err(|e| agent_error_to_api("读取团队", e))?
+        .ok_or_else(|| {
+            ApiError::entity_not_found(format!(
+                "团队 {team} 不存在（已软删的团队同样算不存在）。\
+                 下一步：先用 GET /api/teams 确认这个 id 还在，再往它派工。"
+            ))
+        })?;
+    let limits = row.limits().map_err(limits_error_to_api)?;
     let room_id = need_str(&body, "room_id", "派工请求")?;
     let round = need_round(&body)?;
     let leader =
@@ -145,6 +149,16 @@ pub async fn book(
         DispatchScope::new(team_id, leader, member_sessions),
     );
 
+    // 记账前的团队限制闸门（Q043）：超限**整轮拒绝**，一行台账都不写 ——
+    // 记账后才发现超限的话，调用方要么得到一个「记了但跑不了」的半状态，
+    // 要么得自己回滚，两条都比直接拒绝难用。
+    limits
+        .check_dispatch(members.len())
+        .map_err(|e| dispatch_error_to_api("派工记账", e))?;
+    limits
+        .check_replan(round)
+        .map_err(|e| dispatch_error_to_api("派工记账", e))?;
+
     let mut items = Vec::new();
     for (i, m) in members.iter().enumerate() {
         let where_ = format!("members[{i}]");
@@ -176,9 +190,12 @@ pub async fn book(
             "room_id": room_id,
             "round": round,
             "executed": false,
+            "team_limits": limits_json(&limits),
+            "guidelines_applied": false,
             "dispatches": items,
-            "note": "本版本只记账不执行：成员执行器（MemberExecutor 生产实现）尚未落地。\
-                     PENDING 记录在崩溃恢复口径下属于「可安全重派」，执行器就绪后重放同一轮即会真正执行。",
+            "note": "本路由只记账不执行（真执行走 POST /api/teams/{id}/dispatch/run）。\
+                     团队限制（max_dispatch / max_replan）已在记账前过闸：超限的一轮不会被记进来。\
+                     guidelines 不在这里生效 —— 它在真执行时逐字拼进每个成员的提示。",
         })),
     ))
 }
@@ -221,6 +238,9 @@ pub async fn run(
                  下一步：先用 GET /api/teams 确认这个 id 还在，再往它派工。"
             ))
         })?;
+    // 这个团的四个限制列（Q043）。读不出合法值就 400 + 下一步，
+    // 而不是带着一个坏限制去跑整轮模型。
+    let limits = row.limits().map_err(limits_error_to_api)?;
 
     let room_id = need_str(&body, "room_id", "派工请求")?;
     let round = need_round(&body)?;
@@ -320,6 +340,19 @@ pub async fn run(
     let dispatcher = Dispatcher::new(executor, ledger);
     let owner = user.0.user_id;
 
+    // 团队限制（Q043）：`max_dispatch` / `max_replan` 在**写台账与起成员之前**过闸，
+    // 超限整轮拒绝；`guidelines` 由 `Dispatcher::run_one` 逐字拼进每个成员的提示。
+    // 这里先过一遍是为了把错误在「还没起任何东西」的时候就返回，同时也让
+    // 派工线程里那一道成为同一条闸门的第二道保险（两条走同一份 TeamLimits）。
+    limits
+        .check_dispatch(tasks.len())
+        .map_err(|e| dispatch_error_to_api("执行派工", e))?;
+    limits
+        .check_replan(round)
+        .map_err(|e| dispatch_error_to_api("执行派工", e))?;
+    let guidelines_chars = limits.guidelines_chars();
+    let limits_state = limits_json(&limits);
+
     // `dispatch_round` 是同步的，而且会阻塞整轮（成员数 × 模型延迟）；
     // 直接在这里调会占住一个 tokio worker 直到最后一个成员答完。
     let report = tokio::task::spawn_blocking(move || {
@@ -331,6 +364,7 @@ pub async fn run(
             round,
             tasks: &tasks,
             chain: &[],
+            limits: &limits,
         };
         dispatcher.dispatch_round(&req)
     })
@@ -341,7 +375,7 @@ pub async fn run(
              下一步：看服务端日志里这一轮之前的 [chat] / 派工记录。"
         ))
     })
-    .and_then(|r| r.map_err(|e| agent_error_to_api("执行派工", e)))?;
+    .and_then(|r| r.map_err(|e| dispatch_error_to_api("执行派工", e)))?;
 
     Ok((
         axum::http::StatusCode::OK,
@@ -349,6 +383,9 @@ pub async fn run(
             "room_id": report.room_id,
             "round": report.round,
             "executed": true,
+            "team_limits": limits_state,
+            "guidelines_applied": guidelines_chars > 0,
+            "guidelines_chars": guidelines_chars,
             "delivered": report.delivered_count(),
             "failed": report.failed_count(),
             "skipped_as_duplicate": report
@@ -361,6 +398,46 @@ pub async fn run(
             "summary": report.summary(),
         })),
     ))
+}
+
+/// 把 `AgentError` 映射成 HTTP 错误，**先把团队限制超限那一类摘出来**。
+///
+/// `TeamLimitsExceeded` 是调用方的错（这一轮太大 / 轮次太靠后）：要 400，
+/// 而且要把 `TeamLimits` 里那句中文的字段级「下一步」原样带出去。让它掉进
+/// `agent_error_to_api` 的兜底分支会变成 500「真实原因已写入日志」——
+/// 用户看到的是一句无从下手的话，而其实他只要把成员数减一个就行。
+fn dispatch_error_to_api(op: &str, e: quill_agent::AgentError) -> ApiError {
+    match e {
+        quill_agent::AgentError::TeamLimitsExceeded {
+            limit,
+            got,
+            max,
+            next_step,
+        } => ApiError::bad_request(format!(
+            "超出团队限制「{limit}」：本次 {got}，上限 {max}。下一步：{next_step}"
+        )),
+        other => agent_error_to_api(op, other),
+    }
+}
+
+/// 限制列本身存坏了（越过 API 直写、或 schema 被改过）：400 + 下一步，
+/// 而不是 500 —— 用户能自己 PATCH 把这一行修好。
+fn limits_error_to_api(e: quill_agent::TeamLimitsError) -> ApiError {
+    ApiError::bad_request(format!(
+        "团队的限制列不合法：{e}。下一步：{}",
+        e.next_step()
+    ))
+}
+
+/// 响应里如实回出这个团生效中的限制：派工被拒时，用户能对着它看到是哪一条卡住了
+/// （只报「被拒」不报「上限是多少」，等于让人去猜）。
+fn limits_json(l: &quill_agent::TeamLimits) -> Value {
+    json!({
+        "max_dispatch": l.max_dispatch(),
+        "max_replan": l.max_replan(),
+        "max_ask_depth": l.max_ask_depth(),
+        "guidelines_chars": l.guidelines_chars(),
+    })
 }
 
 fn result_json(r: &MemberResult) -> Value {

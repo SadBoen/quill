@@ -26,7 +26,7 @@ use quill_server::routes::build_router;
 use quill_server::state::AppState;
 
 use common::TestDb;
-use dispatch_seed::{member_session, seed};
+use dispatch_seed::{member_session, seed, seed_limits};
 
 const UID_A: &str = "0192b7c8-0000-7000-8000-000000000001";
 const TOKEN_A: &str = "tok-a";
@@ -40,20 +40,36 @@ fn expert(name: &str) -> quill_adapters::ExpertId {
 }
 
 /// 每次调用回一段带序号的正文 —— 「调了几次、第几次是谁」一眼可判。
+/// 同时记下每个请求里的 **system 与 user 正文**（Q043 的 guidelines 用例要看
+/// 「准则有没有真的进提示」，只看调用次数证明不了这件事）。
 #[derive(Debug)]
 struct EchoProvider {
     calls: Mutex<Vec<String>>,
+    prompts: Mutex<Vec<(String, String)>>,
 }
 
 impl EchoProvider {
     fn new() -> Self {
         Self {
             calls: Mutex::new(Vec::new()),
+            prompts: Mutex::new(Vec::new()),
         }
     }
 
     fn call_count(&self) -> usize {
         self.calls.lock().expect("测试锁不该毒化").len()
+    }
+
+    /// 每个请求的 `(system, user)` 正文，按调用顺序。
+    fn prompts(&self) -> Vec<(String, String)> {
+        self.prompts.lock().expect("测试锁不该毒化").clone()
+    }
+}
+
+fn text_of(m: &quill_provider::Message) -> String {
+    match &m.content {
+        quill_provider::MessageContent::Text { text } => text.clone(),
+        other => format!("{other:?}"),
     }
 }
 
@@ -68,6 +84,24 @@ impl Provider for EchoProvider {
             c.push(request.model.clone());
             c.len()
         };
+        {
+            let sys = request
+                .messages
+                .iter()
+                .find(|m| matches!(m.role, quill_provider::Role::System))
+                .map(text_of)
+                .unwrap_or_default();
+            let user = request
+                .messages
+                .iter()
+                .find(|m| matches!(m.role, quill_provider::Role::User))
+                .map(text_of)
+                .unwrap_or_default();
+            self.prompts
+                .lock()
+                .expect("测试锁不该毒化")
+                .push((sys, user));
+        }
         let model = request.model.clone();
         Box::pin(async move {
             Ok(ChatResponse {
@@ -302,5 +336,270 @@ async fn dispatching_to_an_expert_outside_the_team_runs_nobody() {
         provider.call_count(),
         0,
         "🔴 名册校验没拦住：不属于这个团的专家被真的执行了"
+    );
+}
+
+// ---------------------------------------------------------------- Q043：团队限制
+
+/// 把 `body()` 的 round 换掉（限制用例要测 round 1+）。
+fn body_round(
+    f: &dispatch_seed::Fixture,
+    round: u32,
+    members: Vec<serde_json::Value>,
+) -> serde_json::Value {
+    let mut v = body(f, members);
+    v["round"] = serde_json::json!(round);
+    v
+}
+
+#[tokio::test]
+async fn a_round_over_the_team_max_dispatch_is_400_and_calls_no_model() {
+    let t = TestDb::new("dispatch-run-over-max-dispatch");
+    // 团队限制：一轮最多 2 个成员；这一轮要派 3 个。
+    let f = seed_limits(
+        &t.bridge(),
+        user_id(),
+        0x31,
+        &["cost-analyst", "growth-analyst", "risk-reviewer"],
+        2,
+        2,
+        3,
+        "",
+    );
+    let provider = Arc::new(EchoProvider::new());
+    let app = state(&t, Arc::clone(&provider));
+
+    let members = vec![
+        member_entry(0x31, "cost-analyst", 1),
+        member_entry(0x31, "growth-analyst", 1),
+        member_entry(0x31, "risk-reviewer", 1),
+    ];
+    let (status, v) = call(
+        &app,
+        "POST",
+        &format!("/api/teams/{}/dispatch/run", team_hex(f.team_id)),
+        Some(body(&f, members)),
+    )
+    .await;
+
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "超过 max_dispatch 必须 400：{v}"
+    );
+    let text = v.to_string();
+    assert!(text.contains("max_dispatch"), "要点名是哪条限制：{text}");
+    assert!(
+        text.contains('3') && text.contains('2'),
+        "要带实际值与上限：{text}"
+    );
+    assert!(text.contains("下一步"), "必须给下一步：{text}");
+    assert_eq!(
+        provider.call_count(),
+        0,
+        "🔴 超限的一轮不许调模型（那是一次真实的钱与时间开销）"
+    );
+
+    // 台账里也不许留下任何记录：被拒的一轮不是「记了没跑」。
+    let (status, listed) = call(
+        &app,
+        "GET",
+        &format!(
+            "/api/teams/{}/dispatch?room_id={}&round=0",
+            team_hex(f.team_id),
+            f.room_id
+        ),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_eq!(
+        listed["count"],
+        serde_json::json!(0),
+        "🔴 被拒的一轮不许在台账留下记录：{listed}"
+    );
+}
+
+#[tokio::test]
+async fn booking_a_round_over_the_team_max_dispatch_is_400_without_ledger_rows() {
+    // book（只记账那条）与 run 走**同一道**闸门：不能出现「记账放行、执行拒绝」
+    // 这种两边口径不一致的岔子。
+    let t = TestDb::new("dispatch-book-over-max-dispatch");
+    let f = seed_limits(
+        &t.bridge(),
+        user_id(),
+        0x32,
+        &["cost-analyst", "growth-analyst", "risk-reviewer"],
+        2,
+        2,
+        3,
+        "",
+    );
+    let provider = Arc::new(EchoProvider::new());
+    let app = state(&t, Arc::clone(&provider));
+
+    let book_members = serde_json::json!([
+        {"expert": "cost-analyst", "member": "cost-analyst-1",
+         "member_session_id": member_session(0x32, &expert("cost-analyst")).to_compact_hex()},
+        {"expert": "growth-analyst", "member": "growth-analyst-1",
+         "member_session_id": member_session(0x32, &expert("growth-analyst")).to_compact_hex()},
+        {"expert": "risk-reviewer", "member": "risk-reviewer-1",
+         "member_session_id": member_session(0x32, &expert("risk-reviewer")).to_compact_hex()},
+    ]);
+    let (status, v) = call(
+        &app,
+        "POST",
+        &format!("/api/teams/{}/dispatch", team_hex(f.team_id)),
+        Some(body(&f, book_members.as_array().expect("数组").clone())),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "book 也必须过 max_dispatch 闸门：{v}"
+    );
+    assert!(v.to_string().contains("max_dispatch"), "{v}");
+
+    let (_, listed) = call(
+        &app,
+        "GET",
+        &format!(
+            "/api/teams/{}/dispatch?room_id={}&round=0",
+            team_hex(f.team_id),
+            f.room_id
+        ),
+        None,
+    )
+    .await;
+    assert_eq!(listed["count"], serde_json::json!(0), "{listed}");
+}
+
+#[tokio::test]
+async fn a_round_beyond_the_team_max_replan_is_400_and_calls_no_model() {
+    let t = TestDb::new("dispatch-run-over-max-replan");
+    // max_replan = 0：只允许首派（round 0），这一轮用 round 1。
+    let f = seed_limits(&t.bridge(), user_id(), 0x33, &["cost-analyst"], 4, 0, 3, "");
+    let provider = Arc::new(EchoProvider::new());
+    let app = state(&t, Arc::clone(&provider));
+
+    // 先证明 round 0 在同一个团上是放行的（否则「拒绝 round 1」可能只是因为别的原因）。
+    let (status, first) = call(
+        &app,
+        "POST",
+        &format!("/api/teams/{}/dispatch/run", team_hex(f.team_id)),
+        Some(body(&f, vec![member_entry(0x33, "cost-analyst", 1)])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "round 0 是首派，必须放行：{first}");
+    assert_eq!(provider.call_count(), 1);
+
+    let (status, v) = call(
+        &app,
+        "POST",
+        &format!("/api/teams/{}/dispatch/run", team_hex(f.team_id)),
+        Some(body_round(
+            &f,
+            1,
+            vec![member_entry(0x33, "cost-analyst", 1)],
+        )),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "超过 max_replan 必须 400：{v}"
+    );
+    let text = v.to_string();
+    assert!(text.contains("max_replan"), "要点名是哪条限制：{text}");
+    assert!(text.contains("下一步"), "{text}");
+    assert_eq!(
+        provider.call_count(),
+        1,
+        "🔴 被拒的重规划轮不许调模型（第 1 轮不该有任何调用）"
+    );
+}
+
+#[tokio::test]
+async fn team_guidelines_reach_every_member_prompt() {
+    let t = TestDb::new("dispatch-run-guidelines");
+    let f = seed_limits(
+        &t.bridge(),
+        user_id(),
+        0x34,
+        &["cost-analyst", "growth-analyst"],
+        4,
+        2,
+        3,
+        "结论必须给出数据来源；不确定的地方要标注假设",
+    );
+    let provider = Arc::new(EchoProvider::new());
+    let app = state(&t, Arc::clone(&provider));
+
+    let (status, v) = call(
+        &app,
+        "POST",
+        &format!("/api/teams/{}/dispatch/run", team_hex(f.team_id)),
+        Some(body(
+            &f,
+            vec![
+                member_entry(0x34, "cost-analyst", 1),
+                member_entry(0x34, "growth-analyst", 1),
+            ],
+        )),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "1 个成员在默认上限内，必须放行：{v}"
+    );
+    assert_eq!(v["guidelines_applied"], serde_json::json!(true), "{v}");
+    assert_eq!(
+        v["guidelines_chars"],
+        serde_json::json!("结论必须给出数据来源；不确定的地方要标注假设"
+            .chars()
+            .count()),
+        "{v}"
+    );
+    assert_eq!(
+        v["team_limits"]["max_dispatch"],
+        serde_json::json!(4),
+        "{v}"
+    );
+
+    let prompts = provider.prompts();
+    assert_eq!(prompts.len(), 2, "两个成员各调一次模型");
+    for (system, user) in &prompts {
+        let g_at = user
+            .find("结论必须给出数据来源")
+            .unwrap_or_else(|| panic!("🔴 团队准则没进成员提示：sys={system} user={user}"));
+        let t_at = user
+            .find("给出三点结论")
+            .unwrap_or_else(|| panic!("任务正文不见了：{user}"));
+        assert!(g_at < t_at, "准则必须排在任务正文之前：{user}");
+    }
+}
+
+#[tokio::test]
+async fn a_team_without_guidelines_keeps_the_member_prompt_clean() {
+    let t = TestDb::new("dispatch-run-no-guidelines");
+    let f = seed(&t.bridge(), user_id(), 0x35, &["cost-analyst"]);
+    let provider = Arc::new(EchoProvider::new());
+    let app = state(&t, Arc::clone(&provider));
+
+    let (status, v) = call(
+        &app,
+        "POST",
+        &format!("/api/teams/{}/dispatch/run", team_hex(f.team_id)),
+        Some(body(&f, vec![member_entry(0x35, "cost-analyst", 1)])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(v["guidelines_applied"], serde_json::json!(false), "{v}");
+    let prompts = provider.prompts();
+    assert!(
+        !prompts[0].1.contains("团队准则"),
+        "没有准则时不许拼一个空标题：{}",
+        prompts[0].1
     );
 }

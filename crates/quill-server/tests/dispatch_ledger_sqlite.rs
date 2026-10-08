@@ -409,6 +409,8 @@ fn dispatcher_agrees_with_the_ledger_on_replay() {
         e("cost-analyst"),
     )
     .expect("团队应可建");
+    // 默认限制（max_dispatch=4 / max_replan=2）：这条用例只关心幂等重放。
+    let limits = quill_agent::TeamLimits::default();
     let req = quill_agent::RoundRequest {
         owner: u(1),
         session: SessionId::from_bytes([0x18; 16]),
@@ -417,6 +419,7 @@ fn dispatcher_agrees_with_the_ledger_on_replay() {
         round: 0,
         tasks: std::slice::from_ref(&task),
         chain: &[],
+        limits: &limits,
     };
 
     let r1 = d.dispatch_round(&req).expect("首轮派工应成功");

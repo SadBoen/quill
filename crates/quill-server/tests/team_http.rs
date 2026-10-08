@@ -657,6 +657,142 @@ async fn delete_is_soft_idempotent_and_hides_the_team() {
     assert_eq!(status, StatusCode::CREATED, "软删后同名应可重建：{v}");
 }
 
+/// Q043：四个限制列必须能设、能读回、能被校验；它们就是派工闸门的输入。
+#[tokio::test]
+async fn team_limits_are_settable_at_creation_and_patch_and_reported_back() {
+    let (_t, app) = fixture("team-limits");
+    make_experts(&app, &["cost-analyst", "growth-analyst", "risk-reviewer"]).await;
+
+    let (status, created) = call(
+        &app,
+        "POST",
+        "/api/teams",
+        TOKEN_A,
+        Some(serde_json::json!({
+            "team_id": "growth-squad",
+            "name": "增长小队",
+            "leader_id": "cost-analyst",
+            "member_ids": ["growth-analyst", "risk-reviewer"],
+            "guidelines": "结论必须给出数据来源",
+            "max_dispatch": 2,
+            "max_replan": 1,
+            "max_ask_depth": 4,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "带限制建团应 201：{created}");
+    assert_eq!(
+        created["guidelines"],
+        serde_json::json!("结论必须给出数据来源")
+    );
+    assert_eq!(created["max_dispatch"], serde_json::json!(2));
+    assert_eq!(created["max_replan"], serde_json::json!(1));
+    assert_eq!(created["max_ask_depth"], serde_json::json!(4));
+
+    // 回读必须一致（限制列真落库了，而不是只在回包里）。
+    let (status, got) = call(&app, "GET", "/api/teams/growth-squad", TOKEN_A, None).await;
+    assert_eq!(status, StatusCode::OK, "{got}");
+    assert_eq!(got, created, "GET 回来的限制列必须与建团回包一致");
+
+    // PATCH 只改限制：省略的列沿用，成员集合不动。
+    let (status, patched) = call(
+        &app,
+        "PATCH",
+        "/api/teams/growth-squad",
+        TOKEN_A,
+        Some(serde_json::json!({"max_replan": 5, "guidelines": "先给结论，再给依据"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "改限制应 200：{patched}");
+    assert_eq!(patched["max_replan"], serde_json::json!(5));
+    assert_eq!(
+        patched["guidelines"],
+        serde_json::json!("先给结论，再给依据")
+    );
+    assert_eq!(
+        patched["max_dispatch"],
+        serde_json::json!(2),
+        "省略的限制列必须沿用（不是重置成默认 4）"
+    );
+    assert_eq!(
+        patched["member_ids"],
+        serde_json::json!(["growth-analyst", "risk-reviewer"]),
+        "改限制不得动成员集合"
+    );
+
+    // 越界值：400 + 下一步（与数据库 CHECK 同口径，不让它拖到写库时才炸）。
+    for (field, v) in [
+        ("max_dispatch", serde_json::json!(9)),
+        ("max_replan", serde_json::json!(6)),
+        ("max_ask_depth", serde_json::json!(6)),
+    ] {
+        let (status, err) = call(
+            &app,
+            "PATCH",
+            "/api/teams/growth-squad",
+            TOKEN_A,
+            Some(serde_json::json!({ field: v })),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "{field}={v} 必须 400：{err}"
+        );
+        let text = err.to_string();
+        assert!(text.contains(field), "要点名出错的字段：{text}");
+        assert!(text.contains("下一步"), "{text}");
+    }
+
+    // 超长准则：400（不截断 —— 截断的团队号令只发一半）。
+    let (status, err) = call(
+        &app,
+        "PATCH",
+        "/api/teams/growth-squad",
+        TOKEN_A,
+        Some(serde_json::json!({"guidelines": "字".repeat(2001)})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "超长准则必须 400：{err}");
+    assert!(err.to_string().contains("团队准则太长"), "{err}");
+
+    // guidelines: null 与 description 同语义 = 清空。
+    let (status, cleared) = call(
+        &app,
+        "PATCH",
+        "/api/teams/growth-squad",
+        TOKEN_A,
+        Some(serde_json::json!({"guidelines": null})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{cleared}");
+    assert_eq!(cleared["guidelines"], serde_json::json!(""));
+}
+
+#[tokio::test]
+async fn a_new_team_reports_the_schema_defaults_for_the_four_limit_columns() {
+    let (_t, app) = fixture("team-limits-default");
+    make_experts(&app, &["cost-analyst", "growth-analyst", "risk-reviewer"]).await;
+
+    let (status, v) = call(
+        &app,
+        "POST",
+        "/api/teams",
+        TOKEN_A,
+        Some(team_body(
+            "cost-analyst",
+            &["growth-analyst", "risk-reviewer"],
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{v}");
+    // 与 0001_init.sql:296-299 的 DEFAULT 同值。
+    assert_eq!(v["max_dispatch"], serde_json::json!(4), "{v}");
+    assert_eq!(v["max_replan"], serde_json::json!(2), "{v}");
+    assert_eq!(v["max_ask_depth"], serde_json::json!(3), "{v}");
+    assert_eq!(v["guidelines"], serde_json::json!(""), "{v}");
+}
+
 #[tokio::test]
 async fn deleting_a_team_that_never_existed_is_404_with_a_next_step() {
     let (_t, app) = fixture("team-delete-missing");

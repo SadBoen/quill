@@ -8,6 +8,7 @@ use quill_adapters::{
 use quill_domain::Team;
 
 use crate::error::{chain_check_error, AgentError, MemberRejectKind};
+use crate::team_limits::TeamLimits;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DispatchKey {
@@ -438,6 +439,12 @@ pub struct RoundRequest<'a> {
     pub tasks: &'a [DispatchTask],
 
     pub chain: &'a [ChainHop],
+
+    /// 这个团的运行限制（`teams` 表四列，见 [`crate::team_limits`]）。
+    ///
+    /// `dispatch_round` 用它做**整轮闸门**（成员数 / 重规划轮次），
+    /// `run_one` 用它的 `guidelines` 拼进每个成员的提示。
+    pub limits: &'a TeamLimits,
 }
 
 #[derive(Debug)]
@@ -464,10 +471,17 @@ impl<E: MemberExecutor, L: DispatchLedger> Dispatcher<E, L> {
             round,
             tasks,
             chain,
+            limits,
         } = *req;
         let mut results = Vec::new();
         let mut skipped = Vec::new();
         let mut recovered = Vec::new();
+
+        // 团队限制先过闸（`teams.max_dispatch` / `max_replan`）。放在最前面是有意的：
+        // 被拒的一轮**不写台账、不起成员、不花模型的钱**，调用方改小成员数或改用
+        // 已用过的轮次后重发即可 —— 与「幂等」同一条口径：不能留下半派状态。
+        limits.check_dispatch(tasks.len())?;
+        limits.check_replan(round)?;
 
         for task in tasks {
             if !team.has_member(&task.expert) && !team.is_leader(&task.expert) {
@@ -504,7 +518,7 @@ impl<E: MemberExecutor, L: DispatchLedger> Dispatcher<E, L> {
                 }
             }
 
-            results.push(self.run_one(owner, session, key, task, chain)?);
+            results.push(self.run_one(owner, session, key, task, chain, limits)?);
         }
 
         Ok(DispatchReport {
@@ -523,10 +537,16 @@ impl<E: MemberExecutor, L: DispatchLedger> Dispatcher<E, L> {
         key: DispatchKey,
         task: &DispatchTask,
         chain: &[ChainHop],
+        limits: &TeamLimits,
     ) -> Result<MemberResult, AgentError> {
         let mut record = DispatchRecord::pending(key, task.member.clone());
         record.mark_running()?;
         self.ledger.put(&record)?;
+
+        // 团队准则逐字拼在任务正文之前 —— 这是 `teams.guidelines` 唯一的生效点：
+        // 成员执行器拿到的是这段文本本身，它不需要知道「准则」是个单独的列。
+        // 空准则原样返回（见 `TeamLimits::apply_guidelines`），不拼空标题。
+        let instructions = limits.apply_guidelines(&task.instructions);
 
         let mut req = MemberStartRequest::new(
             owner,
@@ -534,7 +554,7 @@ impl<E: MemberExecutor, L: DispatchLedger> Dispatcher<E, L> {
             task.expert.clone(),
             task.member.clone(),
             task.title.clone(),
-            task.instructions.clone(),
+            instructions,
         )
         .map_err(|e| AgentError::DispatchRequestInvalid {
             reason: e.to_string(),

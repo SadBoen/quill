@@ -26,7 +26,11 @@ use axum::Json;
 use serde_json::{json, Value};
 
 use quill_adapters::ExpertId;
-use quill_agent::ExpertRepository;
+use quill_agent::team_limits::{
+    DEFAULT_MAX_ASK_DEPTH, DEFAULT_MAX_DISPATCH, DEFAULT_MAX_REPLAN, MAX_MAX_ASK_DEPTH,
+    MAX_MAX_DISPATCH, MAX_MAX_REPLAN, MIN_MAX_DISPATCH,
+};
+use quill_agent::{ExpertRepository, TeamLimits};
 use quill_domain::{Team, TeamError, TeamId};
 
 use crate::api_experts::{map_agent_error, only_keys};
@@ -54,7 +58,17 @@ pub async fn create(
 ) -> Result<Response, ApiError> {
     only_keys(
         &body,
-        &["team_id", "name", "description", "leader_id", "member_ids"],
+        &[
+            "team_id",
+            "name",
+            "description",
+            "leader_id",
+            "member_ids",
+            "guidelines",
+            "max_dispatch",
+            "max_replan",
+            "max_ask_depth",
+        ],
         "POST /api/teams",
     )?;
 
@@ -63,6 +77,8 @@ pub async fn create(
     let description = opt_str(&body, "description", "建团请求")?;
     let leader = parse_expert(&need_str(&body, "leader_id", "建团请求")?, "leader_id")?;
     let members = parse_member_ids(&body)?;
+    // 四个限制列建团就可以设，不设就走 schema 默认值（4 / 2 / 3 / 空准则）。
+    let limits = read_limits(&body, "建团请求", None)?;
     let roster = roster_of(&state, user.0.user_id)?;
 
     let domain = build_domain(team_id.clone(), &name, &leader, &members, &roster)?;
@@ -93,6 +109,7 @@ pub async fn create(
         description.clone(),
         leader_name,
         member_names,
+        limits,
     );
 
     let team_uuid = new_uuid()?;
@@ -160,7 +177,16 @@ pub async fn patch(
 ) -> Result<Response, ApiError> {
     only_keys(
         &body,
-        &["name", "description", "leader_id", "member_ids"],
+        &[
+            "name",
+            "description",
+            "leader_id",
+            "member_ids",
+            "guidelines",
+            "max_dispatch",
+            "max_replan",
+            "max_ask_depth",
+        ],
         "PATCH /api/teams/{id}",
     )?;
     let team_id = parse_team_id(&id, "路径参数 {id}")?;
@@ -217,6 +243,9 @@ pub async fn patch(
         .validate()
         .map_err(|e| team_error_to_api("修改团队", e))?;
 
+    // 限制列：省略 = 沿用库里那份；`guidelines: null` = 清空（与 description 同语义）。
+    let limits = read_limits(&body, "改团请求", Some(&current))?;
+
     let row = TeamRow {
         team_id: team_id.as_str().to_string(),
         name,
@@ -226,6 +255,10 @@ pub async fn patch(
             .iter()
             .map(|m| m.as_str().to_string())
             .collect::<Vec<String>>(),
+        guidelines: limits.guidelines().to_string(),
+        max_dispatch: limits.max_dispatch(),
+        max_replan: limits.max_replan(),
+        max_ask_depth: limits.max_ask_depth(),
         created_at: current.created_at,
         updated_at: crate::db::now_ms(),
     };
@@ -280,9 +313,103 @@ fn team_json(t: &TeamRow) -> Value {
         "description": t.description,
         "leader_id": t.leader_id,
         "member_ids": t.member_ids,
+        // 四个限制列：**在建团/PATCH 里可设、在派工时真的生效**（见
+        // `quill_agent::team_limits`），所以必须回给客户端 —— 不回的话
+        // 用户就无从知道派工为什么会被拒。
+        "guidelines": t.guidelines,
+        "max_dispatch": t.max_dispatch,
+        "max_replan": t.max_replan,
+        "max_ask_depth": t.max_ask_depth,
         "created_at": t.created_at,
         "updated_at": t.updated_at,
     })
+}
+
+/// 读四个限制列。
+///
+/// - `current = None`（建团）：缺省用 schema 默认值（4 / 2 / 3 / 空准则）。
+/// - `current = Some(row)`（PATCH）：缺省沿用库里那一份。
+///
+/// 数字列**不接受 null**：省略已经表示「沿用」，再给 null 一个含义只会让调用方
+/// 猜它到底是「沿用」还是「重置成默认」。`guidelines` 例外 —— 它与 `description`
+/// 同语义，显式 null = 清空。
+fn read_limits(
+    body: &Value,
+    where_: &str,
+    current: Option<&TeamRow>,
+) -> Result<TeamLimits, ApiError> {
+    let guidelines = match body.get("guidelines") {
+        Some(_) => opt_str(body, "guidelines", where_)?.unwrap_or_default(),
+        None => current.map(|c| c.guidelines.clone()).unwrap_or_default(),
+    };
+    let max_dispatch = read_limit_num(
+        body,
+        "max_dispatch",
+        where_,
+        current
+            .map(|c| c.max_dispatch)
+            .unwrap_or(DEFAULT_MAX_DISPATCH),
+        MIN_MAX_DISPATCH,
+        MAX_MAX_DISPATCH,
+    )?;
+    let max_replan = read_limit_num(
+        body,
+        "max_replan",
+        where_,
+        current.map(|c| c.max_replan).unwrap_or(DEFAULT_MAX_REPLAN),
+        0,
+        MAX_MAX_REPLAN,
+    )?;
+    let max_ask_depth = read_limit_num(
+        body,
+        "max_ask_depth",
+        where_,
+        current
+            .map(|c| c.max_ask_depth)
+            .unwrap_or(DEFAULT_MAX_ASK_DEPTH),
+        0,
+        MAX_MAX_ASK_DEPTH,
+    )?;
+    TeamLimits::new(max_dispatch, max_replan, max_ask_depth, guidelines)
+        .map_err(|e| ApiError::bad_request(format!("{e}。下一步：{}", e.next_step())))
+}
+
+fn read_limit_num(
+    body: &Value,
+    key: &str,
+    where_: &str,
+    current: u32,
+    min: u32,
+    max: u32,
+) -> Result<u32, ApiError> {
+    match body.get(key) {
+        None => Ok(current),
+        Some(Value::Number(n)) => {
+            let v = n.as_i64().ok_or_else(|| {
+                ApiError::bad_request(format!(
+                    "{where_} 的字段 {key} 必须是整数（实际 {n}）。\
+                     下一步：填 {min}~{max} 之间的整数。"
+                ))
+            })?;
+            if !(i64::from(min)..=i64::from(max)).contains(&v) {
+                return Err(ApiError::bad_request(format!(
+                    "{where_} 的字段 {key} = {v} 超出范围（{min}~{max}）。\
+                     下一步：改成范围内的整数 —— 团队限制列与数据库 CHECK 同口径，\
+                     放行越界值只会在派工时才炸。"
+                )));
+            }
+            Ok(v as u32)
+        }
+        Some(Value::Null) => Err(ApiError::bad_request(format!(
+            "{where_} 的字段 {key} 不接受 null。\
+             下一步：省略这个字段表示沿用当前值；要改就填 {min}~{max} 之间的整数。"
+        ))),
+        Some(other) => Err(ApiError::bad_request(format!(
+            "{where_} 的字段 {key} 必须是整数，实际收到 {}。\
+             下一步：填 {min}~{max} 之间的整数（不要带引号）。",
+            type_name(other)
+        ))),
+    }
 }
 
 fn team_not_found(id: &str) -> ApiError {
@@ -513,6 +640,10 @@ mod tests {
             description: None,
             leader_id: "cost-analyst".into(),
             member_ids: vec!["growth-analyst".into(), "risk-reviewer".into()],
+            guidelines: String::new(),
+            max_dispatch: 4,
+            max_replan: 2,
+            max_ask_depth: 3,
             created_at: 1,
             updated_at: 2,
         };
@@ -524,6 +655,10 @@ mod tests {
             "description",
             "leader_id",
             "member_ids",
+            "guidelines",
+            "max_dispatch",
+            "max_replan",
+            "max_ask_depth",
             "created_at",
             "updated_at",
         ] {
@@ -531,6 +666,74 @@ mod tests {
         }
         assert!(v["description"].is_null(), "未填描述必须是 JSON null");
         assert_eq!(v["member_ids"], json!(["growth-analyst", "risk-reviewer"]));
+        // 限制列必须回给客户端：不回的话用户无从知道派工为什么被拒。
+        assert_eq!(v["max_dispatch"], json!(4));
+        assert_eq!(v["max_replan"], json!(2));
+        assert_eq!(v["max_ask_depth"], json!(3));
+        assert_eq!(v["guidelines"], json!(""));
+    }
+
+    #[test]
+    fn limits_default_to_the_schema_values_and_an_override_is_read_back() {
+        // 建团缺省：与 0001_init.sql 的 DEFAULT 同值。
+        let default = read_limits(&json!({}), "建团请求", None).expect("缺省必须合法");
+        assert_eq!(default.max_dispatch(), 4);
+        assert_eq!(default.max_replan(), 2);
+        assert_eq!(default.max_ask_depth(), 3);
+        assert!(!default.has_guidelines());
+
+        // 显式设置四个值都要被读进来。
+        let set = read_limits(
+            &json!({
+                "max_dispatch": 2,
+                "max_replan": 0,
+                "max_ask_depth": 1,
+                "guidelines": "结论必须给出数据来源"
+            }),
+            "建团请求",
+            None,
+        )
+        .expect("合法设置应通过");
+        assert_eq!(set.max_dispatch(), 2);
+        assert_eq!(set.max_replan(), 0);
+        assert_eq!(set.max_ask_depth(), 1);
+        assert!(set.has_guidelines());
+    }
+
+    #[test]
+    fn limits_out_of_the_schema_range_are_400_with_a_next_step() {
+        // 与 0001_init.sql:308-310 的 CHECK 同口径 —— API 放行越界值只会在
+        // 写库（或派工）时才炸，那是最难查的一种失败。
+        for (field, value) in [
+            ("max_dispatch", json!(1)),
+            ("max_dispatch", json!(9)),
+            ("max_replan", json!(6)),
+            ("max_ask_depth", json!(6)),
+        ] {
+            let body = json!({ field: value });
+            let err = read_limits(&body, "建团请求", None).expect_err("越界值必须判红");
+            assert_eq!(err.status(), StatusCode::BAD_REQUEST, "{field}: {err:?}");
+            let text = format!("{}{}", err.detail(), err.next_step());
+            assert!(text.contains(field), "要点名出错的字段 {field}：{text}");
+            assert!(text.contains("下一步"), "必须给下一步：{text}");
+        }
+        // 边界值本身必须放行（否则「上限」就成了排他上界）。
+        for (field, value) in [
+            ("max_dispatch", json!(2)),
+            ("max_dispatch", json!(8)),
+            ("max_replan", json!(5)),
+            ("max_ask_depth", json!(5)),
+        ] {
+            read_limits(&json!({ field: value }), "建团请求", None)
+                .unwrap_or_else(|e| panic!("{field}={value} 是边界值，必须放行：{e}"));
+        }
+        // 数字列不接受 null；guidelines 的 null = 清空。
+        let err = read_limits(&json!({"max_dispatch": null}), "建团请求", None)
+            .expect_err("数字列写 null 必须判红");
+        assert!(err.detail().contains("max_dispatch"), "{}", err.detail());
+        let cleared = read_limits(&json!({"guidelines": null}), "建团请求", None)
+            .expect("guidelines 的 null 表示清空");
+        assert!(!cleared.has_guidelines());
     }
 
     #[test]

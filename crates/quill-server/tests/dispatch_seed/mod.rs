@@ -230,3 +230,46 @@ pub fn seed(db: &Arc<DbBridge>, owner: UserId, team_seed: u8, members: &[&str]) 
         room_id,
     }
 }
+
+/// 与 [`seed`] 相同，但把四个团队限制列设成指定值（Q043 的用例要用）。
+///
+/// 单独一个函数而不是给 `seed` 加参数：`seed` 的三个调用方都只关心
+/// schema 默认限制，给它们各加四个用不上的参数只会把「这条用例在测什么」淹掉。
+// 夹具函数：参数按表列一一对应，多而直白好过 builder 样板；被哪些集成测试
+// 用到随各自的用例走，这里不把「某个测试文件暂时没用到」当错误。
+#[allow(dead_code, clippy::too_many_arguments)]
+pub fn seed_limits(
+    db: &Arc<DbBridge>,
+    owner: UserId,
+    team_seed: u8,
+    members: &[&str],
+    max_dispatch: i64,
+    max_replan: i64,
+    max_ask_depth: i64,
+    guidelines: &str,
+) -> Fixture {
+    let f = seed(db, owner, team_seed, members);
+    let team_id = f.team_id.to_vec();
+    let owner_blob = owner.as_bytes().to_vec();
+    let g = guidelines.to_string();
+    db.call(move |pool, _rt| {
+        Box::pin(async move {
+            sqlx::query(
+                "UPDATE teams SET guidelines = ?, max_dispatch = ?, max_replan = ?, \
+                 max_ask_depth = ? WHERE user_id = ? AND id = ?",
+            )
+            .bind(g)
+            .bind(max_dispatch)
+            .bind(max_replan)
+            .bind(max_ask_depth)
+            .bind(owner_blob)
+            .bind(team_id)
+            .execute(&pool)
+            .await
+            .map_err(|e| storage_error("设置团队限制列", e))?;
+            Ok(())
+        })
+    })
+    .unwrap_or_else(|e| panic!("设置团队限制列失败：{e}"));
+    f
+}

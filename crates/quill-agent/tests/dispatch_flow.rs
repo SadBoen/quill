@@ -6,6 +6,7 @@ use quill_adapters::{
 use quill_agent::{
     AgentError, DispatchKey, DispatchLedger, DispatchRecord, DispatchState, DispatchTask,
     Dispatcher, MemDispatchLedger, MemberResult, RoundPrefix, RoundRequest, SharedExecutor,
+    TeamLimits,
 };
 use quill_domain::team::{roster, team_of};
 use quill_domain::Team;
@@ -58,6 +59,9 @@ fn dispatcher(steps: Vec<Step>) -> (Arc<MockMemberExecutor>, TestDispatcher) {
     (m, d)
 }
 
+// 测试夹具：把一次往返要用的东西一次摆全，参数多是有意的（拆成 builder
+// 只会让每条用例多三行样板）。这是 lint 允许，不是行为改动。
+#[allow(clippy::too_many_arguments)]
 fn req<'a>(
     owner: UserId,
     session: SessionId,
@@ -66,6 +70,7 @@ fn req<'a>(
     round_no: u32,
     tasks: &'a [DispatchTask],
     chain: &'a [ChainHop],
+    limits: &'a TeamLimits,
 ) -> RoundRequest<'a> {
     RoundRequest {
         owner,
@@ -75,6 +80,7 @@ fn req<'a>(
         round: round_no,
         tasks,
         chain,
+        limits,
     }
 }
 
@@ -84,7 +90,10 @@ fn round<'a>(
     round_no: u32,
     tasks: &'a [DispatchTask],
 ) -> Result<quill_agent::DispatchReport, AgentError> {
-    d.dispatch_round(&req(u(1), s(1), ROOM, team, round_no, tasks, &[]))
+    // 这些用例跑在 schema 默认限制下（max_dispatch=4 / max_replan=2）；
+    // 限制本身的行为在 `tests/team_limits_flow.rs` 里单独钉。
+    let limits = TeamLimits::default();
+    d.dispatch_round(&req(u(1), s(1), ROOM, team, round_no, tasks, &[], &limits))
 }
 
 fn ok_step(member: &str, output: &str) -> Step {
@@ -198,7 +207,16 @@ fn a_cycle_in_a_later_task_also_prevents_every_earlier_dispatch() {
     let hops = chain(&[("growth-analyst", "t-001")]);
     let tasks = [task("cost-analyst", 1), task("growth-analyst", 1)];
     let err = d
-        .dispatch_round(&req(u(1), s(1), ROOM, &team3(), 0, &tasks, &hops))
+        .dispatch_round(&req(
+            u(1),
+            s(1),
+            ROOM,
+            &team3(),
+            0,
+            &tasks,
+            &hops,
+            &TeamLimits::default(),
+        ))
         .expect_err("成环必须判红");
     assert_eq!(err.code(), "chain_cycle");
     assert_eq!(m.count_of("start"), 0, "已检查：合法成员也**不该**被执行");
@@ -372,10 +390,11 @@ fn a_different_room_is_a_different_dispatch_and_does_run() {
     ]);
     let t = team3();
     let tasks = [task("cost-analyst", 1)];
-    d.dispatch_round(&req(u(1), s(1), "room-a", &t, 0, &tasks, &[]))
+    let limits = TeamLimits::default();
+    d.dispatch_round(&req(u(1), s(1), "room-a", &t, 0, &tasks, &[], &limits))
         .expect("A 房应成功");
     let second = d
-        .dispatch_round(&req(u(1), s(1), "room-b", &t, 0, &tasks, &[]))
+        .dispatch_round(&req(u(1), s(1), "room-b", &t, 0, &tasks, &[], &limits))
         .expect("B 房应成功");
     assert_eq!(second.delivered_count(), 1, "新房间必须真的执行");
     assert_eq!(m.count_of("start"), 2);
@@ -391,7 +410,16 @@ fn the_same_room_and_round_are_isolated_between_users() {
     let tasks = [task("cost-analyst", 1)];
     let a = round(&d, &t, 0, &tasks).expect("A 应成功");
     let b = d
-        .dispatch_round(&req(u(2), s(2), ROOM, &t, 0, &tasks, &[]))
+        .dispatch_round(&req(
+            u(2),
+            s(2),
+            ROOM,
+            &t,
+            0,
+            &tasks,
+            &[],
+            &TeamLimits::default(),
+        ))
         .expect("B 应成功");
     assert_eq!(a.delivered_count(), 1);
     assert_eq!(b.delivered_count(), 1, "B 不得被 A 的幂等键挡掉");
@@ -704,6 +732,7 @@ fn dispatching_an_expert_already_on_the_chain_is_rejected_before_the_executor_ru
             0,
             &[task("cost-analyst", 1)],
             &hops,
+            &TeamLimits::default(),
         ))
         .expect_err("成环必须判红");
     assert_eq!(err.code(), "chain_cycle");
@@ -727,6 +756,7 @@ fn chain_deeper_than_the_limit_is_rejected() {
             0,
             &[task("cost-analyst", 1)],
             &hops,
+            &TeamLimits::default(),
         ))
         .expect_err("超深必须判红");
     assert_eq!(err.code(), "chain_too_deep");
@@ -747,6 +777,7 @@ fn a_legal_chain_passes_through_and_is_forwarded_to_the_request() {
             0,
             &[task("cost-analyst", 1)],
             &hops,
+            &TeamLimits::default(),
         ))
         .expect("合法链应放行");
     assert_eq!(report.delivered_count(), 1);

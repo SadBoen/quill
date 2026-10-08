@@ -83,6 +83,24 @@ pub enum AgentError {
 
     TeamInvalid(TeamError),
 
+    /// 超出团队限制列（`teams.max_dispatch` / `max_replan` / `max_ask_depth`）。
+    ///
+    /// **不是内部故障**：调用方把本轮减量、或把该列调大就能过，所以 HTTP 层
+    /// 应把它映射成 400 而不是 500（见 `crates/quill-server/src/api_dispatch.rs`）。
+    TeamLimitsExceeded {
+        /// 哪一条限制（中文说明，直接进文案）。
+        limit: &'static str,
+
+        /// 本次的数量（成员数 / 轮次 / 提问深度）。
+        got: u32,
+
+        /// 该列允许的上限。
+        max: u32,
+
+        /// 中文的下一步 —— 由提出限制的那一处给出（这里不猜）。
+        next_step: String,
+    },
+
     DispatchRequestInvalid {
         reason: String,
     },
@@ -136,6 +154,7 @@ impl AgentError {
 
             Self::MemberRejected { kind, .. } => kind.as_wire(),
             Self::TeamInvalid(_) => "team_invalid",
+            Self::TeamLimitsExceeded { .. } => "team_limits_exceeded",
             Self::DispatchRequestInvalid { .. } => "dispatch_request_invalid",
             Self::Storage { .. } => "storage_error",
             Self::InvariantBroken { .. } => "invariant_broken",
@@ -159,7 +178,9 @@ impl AgentError {
             Self::DispatchIllegalTransition { .. }
             | Self::DispatchRequestInvalid { .. }
             | Self::MemberRejected { .. } => format!("{DOCTOR_CMD} --section=dispatch"),
-            Self::TeamInvalid(_) => format!("{DOCTOR_CMD} --section=teams"),
+            Self::TeamInvalid(_) | Self::TeamLimitsExceeded { .. } => {
+                format!("{DOCTOR_CMD} --section=teams")
+            }
             Self::Storage { .. } | Self::InvariantBroken { .. } => {
                 format!("{DOCTOR_CMD} --section=db")
             }
@@ -268,6 +289,18 @@ impl fmt::Display for AgentError {
                 write!(f, "专家团配置不合法：{e}")?;
                 tail(f, self)
             }
+            Self::TeamLimitsExceeded {
+                limit,
+                got,
+                max,
+                next_step,
+            } => {
+                write!(
+                    f,
+                    "超出团队限制「{limit}」：本次 {got}，上限 {max}。{next_step}"
+                )?;
+                tail(f, self)
+            }
             Self::DispatchRequestInvalid { reason } => {
                 write!(f, "派工参数不合法：{reason}")?;
                 tail(f, self)
@@ -344,7 +377,8 @@ impl From<AgentError> for AdapterError {
             | AgentError::ChainTooDeep { .. }
             | AgentError::DispatchIllegalTransition { .. }
             | AgentError::DispatchRequestInvalid { .. }
-            | AgentError::TeamInvalid(_) => AdapterError::Conflict(code.to_string()),
+            | AgentError::TeamInvalid(_)
+            | AgentError::TeamLimitsExceeded { .. } => AdapterError::Conflict(code.to_string()),
             AgentError::ExpertBuiltinProtected { .. } | AgentError::ExpertNotModifiable { .. } => {
                 AdapterError::Forbidden(code.to_string())
             }
@@ -417,6 +451,12 @@ mod tests {
                 retryable: false,
             },
             AgentError::TeamInvalid(TeamError::EmptyName),
+            AgentError::TeamLimitsExceeded {
+                limit: "max_dispatch（一轮最多派几个成员）",
+                got: 5,
+                max: 4,
+                next_step: "把成员减到 4 个以内再重试。".into(),
+            },
             AgentError::DispatchRequestInvalid {
                 reason: "标题为空".into(),
             },
@@ -432,7 +472,7 @@ mod tests {
     #[test]
     fn every_error_carries_a_copyable_command() {
         let all = one_of_each();
-        assert_eq!(all.len(), 17, "变体数变了，请同步本测试的样本清单");
+        assert_eq!(all.len(), 18, "变体数变了，请同步本测试的样本清单");
         for e in &all {
             let cmd = e.fix_command();
             assert!(!cmd.contains('\n'), "[{}] 命令不是单行：{cmd}", e.code());
@@ -472,7 +512,7 @@ mod tests {
         for e in one_of_each() {
             assert!(seen.insert(e.code()), "错误码重复：{}", e.code());
         }
-        assert_eq!(seen.len(), 17, "已检查 17 个变体，17 个码必须互不相同");
+        assert_eq!(seen.len(), 18, "已检查 18 个变体，18 个码必须互不相同");
     }
 
     #[test]
