@@ -125,8 +125,8 @@
 
 - [ ] Q081 · 每新增能力补「能证明会失败」的反向验证测试（持续项） · 全仓 · 抽查可见
 - [ ] Q082 · 给关键并发路径（派工、SSE）做确定性/压力测试 · `crates/quill-server/tests/` · 有可复现测试
-- [ ] Q083 · 限流（`ratelimit.rs`）的边界测试 · `crates/quill-server/` · 有测试
-- [ ] Q084 · `pathsafe` 的跨平台（Windows `\\?\`）测试补齐 · `pathsafe.rs` · 有测试
+- [x] Q083 · 限流（`ratelimit.rs`）的边界测试 · `crates/quill-server/` · **已完成 2026-10-08**：新增 5 条钉**窗口边界语义**的测试（恰好满一窗的失败被丢掉、被拦期间继续失败不延长封锁且等待秒数单调不增、淘汰的键不继承旧计数、`reset` 连键一起忘）。**反向验证真做**：`*t <= cutoff` 改 `<` → 1 条红；删掉 `record_failure` 的满额早退 → 1 条红。测试时钟用 epoch 量级固定值（小刻度会走 `saturating_sub` 下界分支，不是生产路径）（提交 825a90b）
+- [x] Q084 · `pathsafe` 的跨平台（Windows `\\?` 前缀）测试补齐 · `pathsafe.rs` · **已完成 2026-10-08（一半可验、一半未验证，如实分开写）**：`#[cfg(not(windows))]` 一条在**本环境真跑**（非 Windows 上带逐字前缀的串是普通分量：不 panic、不误放行、`strip_verbatim` 不嗅探字符串就动手）；`#[cfg(windows)]` 两条**本机跑不到、未验证**（带前缀的 root 认不带前缀的子路径；`UNC` 前缀还原成真正的 UNC 拼法），与文件里既有三条 Windows 测试同一纪律（提交 825a90b）
 - [ ] Q085 · 错误响应统一带上「下一步」指引（抽查缺的补上） · `error.rs` + `api_*` · 清单
 - [ ] Q086 · 应用日志里不泄漏凭据（MCP env/headers、token） · 全仓 · 有测试
 - [ ] Q087 · 健康检查 `/healthz` 覆盖新增依赖 · `routes.rs` · 字段有真来源
