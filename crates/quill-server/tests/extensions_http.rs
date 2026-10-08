@@ -1592,10 +1592,15 @@ async fn one_user_never_sees_another_users_skills() {
 // 界面上一切正常，模型却永远不知道技能的存在 —— 没有任何报错会指向它。
 
 /// 按某个用户的身份，造出这次对话真正会用的那一份工具表。
+///
+/// 素材走**真**的壳侧端口实现（`DbToolSources`）+ 真库、真技能目录 ——
+/// 端口只是搬运，读的口径（可见性 / 正文读不到就当空串）必须在这条真路径上钉住。
 async fn tool_table(harness: &Harness, uid: &str) -> quill_server::tools::ToolRegistry {
     let u = user_id(uid);
-    quill_server::tools::ToolRegistry::builtin(Arc::new(harness.state()), u)
-        .with_skills(harness.db.bridge().as_ref(), u, &harness.skill_dir())
+    let sources =
+        quill_server::tool_sources::DbToolSources::shared(&harness.state(), harness.skill_dir());
+    quill_server::tools::ToolRegistry::builtin(std::sync::Arc::clone(&sources), u)
+        .with_skills(sources.as_ref(), u)
         .await
         .expect("挂 SKILL 进工具表必须成功")
 }
@@ -1606,15 +1611,13 @@ async fn tool_table(harness: &Harness, uid: &str) -> quill_server::tools::ToolRe
 /// 另拼的话，这条测试就只在验证测试自己，而不是验证对话。
 async fn chat_tool_table(harness: &Harness, uid: &str) -> quill_server::tools::ToolRegistry {
     let u = user_id(uid);
-    quill_server::tools::ToolRegistry::builtin(Arc::new(harness.state()), u)
-        .with_skills(harness.db.bridge().as_ref(), u, &harness.skill_dir())
+    let sources =
+        quill_server::tool_sources::DbToolSources::shared(&harness.state(), harness.skill_dir());
+    quill_server::tools::ToolRegistry::builtin(std::sync::Arc::clone(&sources), u)
+        .with_skills(sources.as_ref(), u)
         .await
         .expect("挂 SKILL 进工具表必须成功")
-        .with_mcp_tools(
-            harness.db.bridge().as_ref(),
-            u,
-            &quill_server::tools::user_key(u),
-        )
+        .with_mcp_tools(sources.as_ref(), u, &quill_server::tools::user_key(u))
         .await
         .expect("挂 MCP 进工具表必须成功")
 }

@@ -13,7 +13,13 @@
 //! 没写清楚出处的模块，等于把「照 goose 抄」这句话变成不可核对的口号。
 
 pub mod compaction;
+/// 内容摘要（纯字节运算）。`mcp_tool_name` 的超长截断要用它，跟着工具层一起
+/// 搬进内核 —— 内核不该为了一个哈希函数依赖 `quill-server::db`（Q013）。
+pub mod digest;
 pub mod mcp;
 pub mod mcp_client;
 pub mod retry;
 pub mod state_machine;
+/// 工具执行：内置专家工具、SKILL 即工具、MCP 工具挂载（Q013 搬入）。
+/// 素材来源走 `tools::ToolSources` 端口，壳侧实现在 `quill_server::tool_sources`。
+pub mod tools;

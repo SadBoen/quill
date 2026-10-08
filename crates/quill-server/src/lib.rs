@@ -57,7 +57,14 @@ pub mod skills_repo;
 pub mod sse;
 pub mod state;
 pub mod teams_repo;
-pub mod tools;
+/// 壳侧的 `ToolSources` 实现：把内核要的三份清单（专家 / SKILL / MCP）从既有
+/// 查询函数里取出来；内核侧的定义在 `quill_core::tools`。
+pub mod tool_sources;
+/// 工具执行（内核层，已搬到 `quill-core`；这里 re-export 保持
+/// `quill_server::tools::*` 旧路径全部可用）。纯逻辑（工具名 / 可见性 / 匹配 /
+/// 渲染）照旧；`ToolRegistry::builtin*` / `with_skills` / `with_mcp_tools` 收的是
+/// `ToolSources` 端口，壳侧实现见 `crate::tool_sources::DbToolSources`。
+pub use quill_core::tools;
 pub mod ui;
 
 pub use config::Config;

@@ -12,6 +12,13 @@ use quill_agent::AgentError;
 
 pub const DB_CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// 内容摘要：实现已搬进内核（`quill_core::digest`，queue Q013），
+/// 这里 re-export 保持 `crate::db::digest32` / `crate::db::digest16` 全部可用 ——
+/// `skills_repo` / `experts_repo` / `mcp_repo` / `dispatch_ledger` 的调用点零改动。
+/// 搬家的理由：内核的 `tools::mcp_tool_name` 要用 `digest32`，而内核不能
+/// 反向依赖 `quill-server`（层次倒挂）。
+pub use quill_core::digest::{digest16, digest32};
+
 const WORKER_THREAD_NAME: &str = "quill-db";
 
 pub const REQUIRED_TABLES: [&str; 2] = ["experts", "task_dispatches"];
@@ -417,43 +424,6 @@ pub fn col_i64(row: &sqlx::sqlite::SqliteRow, name: &str) -> i64 {
         .unwrap_or(0)
 }
 
-fn fnv128(seed: u64, parts: &[&[u8]]) -> [u8; 16] {
-    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
-    let mut h = seed;
-    for p in parts {
-        for b in *p {
-            h ^= u64::from(*b);
-            h = h.wrapping_mul(FNV_PRIME);
-        }
-
-        h ^= 0xff;
-        h = h.wrapping_mul(FNV_PRIME);
-    }
-    let mut out = [0u8; 16];
-    out[..8].copy_from_slice(&h.to_be_bytes());
-    out[8..].copy_from_slice(&h.rotate_left(32).wrapping_add(seed).to_be_bytes());
-    out
-}
-
-pub fn digest32(label: &str, parts: &[&[u8]]) -> [u8; 32] {
-    let mut all: Vec<&[u8]> = Vec::with_capacity(parts.len() + 1);
-    all.push(label.as_bytes());
-    all.extend_from_slice(parts);
-    let a = fnv128(0x243f_6a88_85a3_08d3, &all);
-    let b = fnv128(0x1319_8a2e_0370_7344, &all);
-    let mut out = [0u8; 32];
-    out[..16].copy_from_slice(&a);
-    out[16..].copy_from_slice(&b);
-    out
-}
-
-pub fn digest16(label: &str, parts: &[&[u8]]) -> [u8; 16] {
-    let mut all: Vec<&[u8]> = Vec::with_capacity(parts.len() + 1);
-    all.push(label.as_bytes());
-    all.extend_from_slice(parts);
-    fnv128(0x9e37_79b9_7f4a_7c15, &all)
-}
-
 pub fn user_id_from_blob(raw: &[u8]) -> Option<quill_adapters::UserId> {
     let arr: [u8; 16] = raw.try_into().ok()?;
     Some(quill_adapters::UserId::from_bytes(arr))
@@ -466,24 +436,6 @@ pub fn blob_of(id: &quill_adapters::UserId) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn digest_is_deterministic_and_label_sensitive() {
-        let a = digest32("asset", &[b"cost-analyst"]);
-        let b = digest32("asset", &[b"cost-analyst"]);
-        let c = digest32("persona", &[b"cost-analyst"]);
-        let d = digest32("asset", &[b"cost-analyst-2"]);
-        assert_eq!(a, b, "同输入必须同摘要（否则 upsert 每次都写新摘要）");
-        assert_ne!(a, c, "标签不同必须不同摘要");
-        assert_ne!(a, d, "输入不同必须不同摘要");
-    }
-
-    #[test]
-    fn digest16_distinguishes_segment_boundaries() {
-        let a = digest16("dispatch-id", &[b"ab", b"c"]);
-        let b = digest16("dispatch-id", &[b"a", b"bc"]);
-        assert_ne!(a, b, "分段边界不同必须产出不同标识");
-    }
 
     #[test]
     fn blob_roundtrip() {

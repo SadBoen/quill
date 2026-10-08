@@ -131,7 +131,13 @@ fn kv_section(acc: &mut Vec<u8>, section: &[u8], pairs: &[(String, String)]) {
     }
 }
 
-pub async fn list(
+/// 与 `list` 同一条 SQL、同一套映射，只是**同步**入口。
+///
+/// 为什么要有它：内核端口 `quill_core::tools::ToolSources::mcp_servers` 是同步
+/// 方法（`ToolRegistry::builtin*` 本身同步），而 `DbBridge::call` 本来就是阻塞
+/// 调用 —— 真正的实现放在这里，`list` 只是它的 async 外壳（搬进内核前，
+/// `list` 自己就是那个外壳，行为一字未改）。
+pub fn list_blocking(
     db: &DbBridge,
     uid: UserId,
 ) -> Result<Vec<McpServerRow>, quill_agent::AgentError> {
@@ -146,6 +152,13 @@ pub async fn list(
             rows.iter().map(row_from).collect()
         })
     })
+}
+
+pub async fn list(
+    db: &DbBridge,
+    uid: UserId,
+) -> Result<Vec<McpServerRow>, quill_agent::AgentError> {
+    list_blocking(db, uid)
 }
 
 /// 单条读取（同一用户的可见行）。`PATCH` 的前置读用这一条。

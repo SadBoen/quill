@@ -8,6 +8,14 @@ publish = false
 
 [dependencies]
 
+# `UserId` 是工具签名（`builtin(sources, uid)` / `ToolSources`）的一部分：
+# 工具按用户过滤，这个类型本身就是内核接口面，绕不开。
+# 两个都是 **workspace 内的 path 依赖**（L0，严格低于本 crate 的 L3），
+# 不新增任何第三方依赖。`quill-provider` 给 `ToolSpec` / `ToolCall` ——
+# 工具表要交给 provider 发请求，这是内核自己该拿的类型，不是壳的。
+quill-adapters = { path = "../quill-adapters" }
+quill-provider = { path = "../quill-provider" }
+
 # rmcp 是 MCP 协议客户端，`vendor/goose` 的 `mcp_client.rs` 用的是同一族 API
 # （goose 也用 rmcp），移植时按 goose 的调用序列照抄，见 `src/mcp_client.rs` 头注。
 # `default-features = false`：默认那组带 server / macros / base64，客户端用不上。

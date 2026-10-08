@@ -13,12 +13,95 @@
 //! **安全边界**：工具只做只读的事。写文件、跑命令这类能改系统状态的**故意不做** ——
 //! 一个能被网页里的任意文本驱动的执行器是远程代码执行，不是 Agent 能力。
 //! 写入类操作等 MCP 接入后由用户显式配置允许的工具提供。
+//!
+//! **搬家记录（queue Q013）**：本文件原在 `quill-server/src/tools.rs`，
+//! 2026-10-08 原样搬进内核层。行为未改，改动只有两处**形状**：
+//!  1. 工具素材（专家 / SKILL / MCP 三份清单）不再由本文件现查壳侧的应用状态
+//!     与数据库句柄，而是走 `ToolSources` 端口 —— 壳侧实现
+//!     （`quill_server::tool_sources::DbToolSources`）转发到既有函数；
+//!  2. `digest32` 跟着 `mcp_tool_name` 搬进 `quill_core::digest`。
+//! 测试随文件搬走：注册表逻辑留在内核、用**假端口**（内存 Vec）测；
+//! 真库路径的覆盖在 `quill-server/tests/`（那里用真 `DbToolSources` + 真库
+//! 跑同一批断言）。「测试数量不减」按 workspace 总数算。
+//!
+//! 移植出处：工具往返与执行形状照 `vendor/goose/crates/goose/src/agents/tool_execution.rs`；
+//! MCP 工具的挂载名 `{服务器}__{工具}` 与 goose
+//! `agents/extension_manager/mod.rs` 第 853 行的 `format!("{}__{}", name, tool.name)`
+//! 同构；「SKILL 即工具」对应 `goose/skills/`。本文件里 quill 自有的是：
+//! 专家工具两件套、SKILL/MCP 的挂载口径（`*_visibility`），以及把素材来源
+//! 端口化（`ToolSources`）。
 
 use std::sync::Arc;
 
 use serde_json::{json, Value};
 
 use quill_provider::{ToolCall, ToolSpec};
+
+// ------------------------------------------------------------------ 素材端口
+
+/// 内核要的「工具素材从哪来」。**内核只声明需要什么，壳负责从哪拿**：
+/// `quill-core` 不认识数据库、也不认识 SKILL 正文放在磁盘哪个目录，
+/// 它要的就是三份**已经查好的清单**。
+///
+/// 壳侧实现在 `quill_server::tool_sources::DbToolSources`，逐个方法转发到既有
+/// 函数：专家走 `api_experts::list_for_tools`；SKILL 走 `skills_repo::list_blocking`
+/// 加上 `api_extensions::{skill_body_path, read_skill_body}`；MCP 走
+/// `mcp_repo::list_blocking`。那两处 `*_blocking` 就是既有 `async fn list` 的
+/// 同步入口（`list` 现在只是它的外壳），行为一个字不改。
+///
+/// **方法是同步的**：`ToolRegistry::builtin*` 本身就是同步构造（构造工具表不该
+/// 是一次 IO 往返），而且壳侧的 `DbBridge::call` 本来就是阻塞调用 ——
+/// 异步外壳在这里只会把「注册表要拿三份清单」这件事变得更绕。
+pub trait ToolSources: Send + Sync {
+    /// 这次对话可用的专家（**按 uid 过滤，与 `GET /api/experts` 同一套可见性**）。
+    fn experts_for_tools(
+        &self,
+        uid: quill_adapters::UserId,
+    ) -> Result<Vec<ExpertToolRow>, ToolSourceError>;
+
+    /// 该用户已启用的 SKILL。`body` 是**已读好的正文** —— 内核不该知道
+    /// 技能文件放在哪（那是壳的路径口径）。
+    fn skills(&self, uid: quill_adapters::UserId) -> Result<Vec<SkillToolRow>, ToolSourceError>;
+
+    /// 该用户的 MCP 服务器配置行（含停用的）。**只是配置**：连接、`tools/list`
+    /// 与调用仍由内核的 `mcp_client` 做（Q014 已在内核里），这里不握手。
+    fn mcp_servers(
+        &self,
+        uid: quill_adapters::UserId,
+    ) -> Result<Vec<crate::mcp::McpServerRow>, ToolSourceError>;
+}
+
+/// 一行专家素材。字段就是工具要用的那几样，**不带存储细节**（`owner` /
+/// `visibility` / 时间戳都不进来）：可见性过滤已经在
+/// `ToolSources::experts_for_tools` 的实现里按既有规则做完。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpertToolRow {
+    pub id: String,
+    pub display_name: String,
+    pub description: String,
+    pub instructions: Option<String>,
+}
+
+/// 一行 SKILL 素材。`body` 是已读好的正文（读不到就是空串，与既有口径一致）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillToolRow {
+    pub name: String,
+    pub description: String,
+    pub enabled: bool,
+    pub tool_allowlist: Vec<String>,
+    pub body: String,
+}
+
+/// 素材读取失败。**只带给人看的一句中文消息**，内核不解释它、也不按它分支 ——
+/// 消息由壳侧实现带上来，与搬进内核前逐字相同。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolSourceError(pub String);
+
+impl std::fmt::Display for ToolSourceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
 
 /// 一次对话里最多允许多少轮工具往返。
 ///
@@ -140,14 +223,15 @@ impl ToolRegistry {
 
     /// 本实例的内置工具。
     ///
-    /// **按用户过滤**：`uid` 会一并传进来，工具查询走 `list_visible(&uid)`，
+    /// **按用户过滤**：`uid` 会一并传进来，工具查询走端口的
+    /// `experts_for_tools(uid)`（壳侧转发到 `api_experts::list_for_tools`），
     /// 也就是和 `GET /api/experts` 同一套可见性规则。用一个「全体专家」
     /// 的工具会泄露别人的私有专家 —— 工具是模型触发的，等于用户自己点的。
     ///
-    /// `app` 传 `Arc` 而不是 `&`，是为了让闭包能持有它；请求结束时
+    /// `sources` 传 `Arc` 而不是 `&`，是为了让闭包能持有它；请求结束时
     /// registry 一起被丢弃，里面的 `Arc` 也随之释放。
-    pub fn builtin(app: Arc<crate::state::AppState>, uid: quill_adapters::UserId) -> Self {
-        Self::builtin_with_expert_tools(app, uid, true)
+    pub fn builtin(sources: Arc<dyn ToolSources>, uid: quill_adapters::UserId) -> Self {
+        Self::builtin_with_expert_tools(sources, uid, true)
     }
 
     /// `include_expert_tools=false` 时**不挂** `list_experts` / `get_expert_detail`。
@@ -158,7 +242,7 @@ impl ToolRegistry {
     /// 花在 `list_experts` → `get_expert_detail` 上反复试水，
     /// 真正该调的 `notes__*` 根本没轮到。见 ISSUE-041。
     pub fn builtin_with_expert_tools(
-        app: Arc<crate::state::AppState>,
+        sources: Arc<dyn ToolSources>,
         uid: quill_adapters::UserId,
         include_expert_tools: bool,
     ) -> Self {
@@ -167,9 +251,9 @@ impl ToolRegistry {
             handlers: Vec::new(),
         };
 
-        // 两个闭包各自持有一份 Arc：AppState 里的 DbBridge/LLM 都是 Arc，
-        // 克隆是廉价的引用计数递增，不会复制任何运行状态。
-        let app2 = Arc::clone(&app);
+        // 两个闭包各自持有一份 Arc：端口实现里是壳侧那些 Arc 的引用计数，
+        // 克隆是廉价的递增，不会复制任何运行状态。
+        let sources2 = Arc::clone(&sources);
 
         // **一个专家都没有时，这两个工具一律不挂**；角色已经定了的时候也不挂。
         //
@@ -185,7 +269,7 @@ impl ToolRegistry {
         //
         // **查库失败时不因此少挂** —— 那是 quill 自己的存储出问题，
         // 静默少挂两个工具会变成「模型好像没学过专家」且毫无迹象。
-        let has_experts = match crate::api_experts::list_for_tools(&app, uid) {
+        let has_experts = match sources.experts_for_tools(uid) {
             Ok(list) => !list.is_empty(),
             Err(e) => {
                 eprintln!("[tools] 判断是否挂载专家工具时读库失败，按「有专家」挂上：{e}");
@@ -216,13 +300,13 @@ impl ToolRegistry {
                         .unwrap_or("")
                         .trim()
                         .to_lowercase();
-                    let list = crate::api_experts::list_for_tools(&app, uid)?;
+                    let list = sources.experts_for_tools(uid).map_err(|e| e.to_string())?;
                     let mut names = Vec::new();
                     for e in list {
-                        let name = e.display_name().to_lowercase();
-                        let desc = e.description().to_lowercase();
+                        let name = e.display_name.to_lowercase();
+                        let desc = e.description.to_lowercase();
                         if query.is_empty() || name.contains(&query) || desc.contains(&query) {
-                            names.push(format!("{}（{}）", e.display_name(), e.id()));
+                            names.push(format!("{}（{}）", e.display_name, e.id));
                         }
                     }
                     if names.is_empty() {
@@ -257,12 +341,10 @@ impl ToolRegistry {
                     if name.is_empty() {
                         return Err("name 不能是空串。".to_string());
                     }
-                    let list = crate::api_experts::list_for_tools(&app2, uid)?;
+                    let list = sources2.experts_for_tools(uid).map_err(|e| e.to_string())?;
                     let found = list
                         .into_iter()
-                        .find(|e| {
-                            matches_expert_query(e.id().as_str(), e.display_name(), &name)
-                        })
+                        .find(|e| matches_expert_query(&e.id, &e.display_name, &name))
                         .ok_or(format!(
                             "没有名为「{name}」的专家。\
                              下一步：list_experts 的返回值是「显示名（id）」这种形状，\
@@ -270,11 +352,11 @@ impl ToolRegistry {
                         ))?;
                     Ok(format!(
                         "{}：{}",
-                        found.display_name(),
-                        if found.description().trim().is_empty() {
+                        found.display_name,
+                        if found.description.trim().is_empty() {
                             "（没有写简介）"
                         } else {
-                            found.description()
+                            found.description.as_str()
                         }
                     ))
                 }),
@@ -287,7 +369,8 @@ impl ToolRegistry {
     /// 把该用户**已启用**的 SKILL 挂进工具表 —— 「SKILL 即工具」的落地点。
     ///
     /// 这一步是 async 而 `builtin` 是 sync：SKILL 的行在库里、正文在磁盘上，
-    /// 两处都得读。`builtin` 只闭包 `AppState`、不发 IO，所以那个签名不动。
+    /// 两处都得由端口的实现去读。`builtin` 只闭包素材端口、不发 IO，
+    /// 所以那个签名不动。
     ///
     /// **失败就整条请求失败，不静默降级成「只有内置工具」。** 静默降级是最难查
     /// 的一种故障：用户看到的是「模型好像没学过我的技能」，却没有任何迹象说明
@@ -298,25 +381,18 @@ impl ToolRegistry {
     /// 还显示这个技能是启用的。
     pub async fn with_skills(
         mut self,
-        db: &crate::db::DbBridge,
+        sources: &dyn ToolSources,
         uid: quill_adapters::UserId,
-        root: &std::path::Path,
     ) -> Result<Self, String> {
-        let rows = crate::skills_repo::list(db, uid)
-            .await
+        // 正文由端口实现读好（壳侧走 `api_extensions::skill_body_path` +
+        // `read_skill_body`，路径算不出或文件读不到就是空串）—— 内核不该知道
+        // 技能文件在哪，也就不必在搬家之后还揣着一个 `root` 参数。
+        let rows = sources
+            .skills(uid)
             .map_err(|e| format!("加载 SKILL 列表失败：{e}"))?;
 
         for row in rows {
-            // 正文路径由 `api_extensions::skill_body_path` 一处算出来 ——
-            // 这里自己拼一份，就会出现「界面显示已启用、模型读不到正文」。
-            // 算不出路径（DB 里名字不合法）就退化成「磁盘上没正文」，
-            // 与「文件被删了」同一种形状：下面的 `NotMounted` 会照常
-            // 报出「库里有行但磁盘上没有正文」，不另造一套说法。
-            let body = match crate::api_extensions::skill_body_path(root, &row.name) {
-                Ok(p) => crate::api_extensions::read_skill_body(&p),
-                Err(_) => String::new(),
-            };
-            match skill_visibility(&self.specs, &row, &body) {
+            match skill_visibility(&self.specs, &row) {
                 SkillVisibility::Visible => {}
                 // 停用是用户的明确选择，不是故障 —— 记日志只会把真正的告警淹掉。
                 SkillVisibility::Disabled => continue,
@@ -325,8 +401,8 @@ impl ToolRegistry {
                     continue;
                 }
             }
-            let spec = crate::skills_repo::as_tool_spec(&row, &body);
-            let handler = skill_handler(&row.name, &body);
+            let spec = skill_tool_spec(&row.name, &row.description, &row.body);
+            let handler = skill_handler(&row.name, &row.body);
             self.register(spec, handler);
         }
         Ok(self)
@@ -347,12 +423,12 @@ impl ToolRegistry {
     /// 「已知代价」里，真到扛不住时再上带 TTL 的缓存，并且**界面上要显示缓存年龄**。
     pub async fn with_mcp_tools(
         mut self,
-        db: &crate::db::DbBridge,
+        sources: &dyn ToolSources,
         uid: quill_adapters::UserId,
         user_key: &str,
     ) -> Result<Self, String> {
-        let rows = crate::mcp_repo::list(db, uid)
-            .await
+        let rows = sources
+            .mcp_servers(uid)
             .map_err(|e| format!("加载 MCP 服务器列表失败：{e}"))?;
         if rows.is_empty() {
             return Ok(self);
@@ -411,15 +487,11 @@ impl ToolRegistry {
 /// 界面上「挂了几个」与模型「真能调几个」迟早漂 —— 而这正是本项目最不能出的错
 /// （与 `skill_visibility` 存在的理由完全一样）。
 pub async fn baseline_specs(
-    app: Arc<crate::state::AppState>,
-    db: &crate::db::DbBridge,
+    sources: Arc<dyn ToolSources>,
     uid: quill_adapters::UserId,
-    skill_root: &std::path::Path,
 ) -> Result<Vec<ToolSpec>, String> {
-    Ok(ToolRegistry::builtin(app, uid)
-        .with_skills(db, uid, skill_root)
-        .await?
-        .specs())
+    let registry = ToolRegistry::builtin(Arc::clone(&sources), uid);
+    Ok(registry.with_skills(sources.as_ref(), uid).await?.specs())
 }
 
 /// 把 `UserId` 编成给并发闸门当键用的字符串。
@@ -500,7 +572,7 @@ fn truncate_to_limit(name: String) -> String {
     if name.len() <= MAX_MCP_TOOL_NAME {
         return name;
     }
-    let digest = crate::db::digest32("mcp.tool_name", &[name.as_bytes()]);
+    let digest = crate::digest::digest32("mcp.tool_name", &[name.as_bytes()]);
     let hex: String = digest[..4].iter().map(|b| format!("{b:02x}")).collect();
     // 留 9 个字符给 `-` 加 8 位摘要。
     let keep = MAX_MCP_TOOL_NAME - 9;
@@ -587,11 +659,7 @@ pub fn mcp_tool_spec(server: &str, tool: &crate::mcp_client::RemoteTool) -> Tool
 }
 
 /// MCP 工具的执行体。**每次调用重新握手**，理由见 `mcp_client::call_tool`。
-fn mcp_handler(
-    row: crate::mcp_repo::McpServerRow,
-    remote_name: String,
-    user_key: &str,
-) -> ToolHandler {
+fn mcp_handler(row: crate::mcp::McpServerRow, remote_name: String, user_key: &str) -> ToolHandler {
     let user_key = user_key.to_string();
     Arc::new(move |args: &Value| {
         crate::mcp_client::call_tool_blocking(&row, &user_key, &remote_name, args)
@@ -626,21 +694,86 @@ impl SkillVisibility {
 /// 挑出**启用**的 MCP 服务器。抽成独立函数是为了能单测 ——
 /// `with_mcp_tools` 本体要真起 stdio 进程，测不了「过滤」这一层，
 /// 而「停用之后到底还挂不挂」恰恰是最该被钉住的那一条（ISSUE-026）。
-pub fn enabled_servers(
-    rows: Vec<crate::mcp_repo::McpServerRow>,
-) -> Vec<crate::mcp_repo::McpServerRow> {
+pub fn enabled_servers(rows: Vec<crate::mcp::McpServerRow>) -> Vec<crate::mcp::McpServerRow> {
     rows.into_iter().filter(|r| r.enabled).collect()
 }
 
-pub fn skill_visibility(
-    existing: &[ToolSpec],
-    row: &crate::skills_repo::SkillRow,
-    body: &str,
-) -> SkillVisibility {
+/// 工具描述里最多放多少字符的技能摘要。
+///
+/// **这个数字是算出来的，不是拍的**：实测一个 8192 上下文的模型上，
+/// 13 个启用技能的正文合计 32430 字符（≈10810 tokens），**光固定开销就已经
+/// 超窗**，于是连「1+1 等于几」都必然 503。见 ISSUE-036。
+/// 描述改成有界摘要之后，同样的 13 个技能常驻开销降到 3k 字符量级。
+///
+/// 算法住在这里（而不是壳侧的 `skills_repo`）：挂进工具表的描述由内核构造，
+/// 而界面上的「模型实际看到的那段字」必须与它**逐字相同** —— 两处各写一份
+/// 迟早会漂，漂了界面就在说谎。壳侧 `skills_repo::{skill_summary, as_tool_spec}`
+/// 现在转发到这里（queue Q013）。
+pub const MAX_SKILL_DESCRIPTION_CHARS: usize = 240;
+
+/// 从正文开头取一段有界摘要，给「frontmatter 的 description 为空」的情况兜底。
+///
+/// 仍然要有摘要：模型得先知道这个技能**管不管用得上**，才会决定调不调它。
+/// 完全没有描述的话，模型就只能靠工具名瞎猜。
+fn body_summary(content: &str) -> String {
+    let mut out: String = content.chars().take(MAX_SKILL_DESCRIPTION_CHARS).collect();
+    if content.chars().count() > MAX_SKILL_DESCRIPTION_CHARS {
+        out.push_str("……（完整方法正文在调用该技能时回灌，这里只是摘要。）");
+    }
+    out
+}
+
+/// 工具描述用的摘要。
+///
+/// 优先用 SKILL 自己 frontmatter 里的 `description` —— 那本来就是给它看的；
+/// 没有就退回正文开头一段。
+pub fn skill_summary(description: &str, body: &str) -> String {
+    let desc = description.trim();
+    if !desc.is_empty() {
+        let mut out: String = desc.chars().take(MAX_SKILL_DESCRIPTION_CHARS).collect();
+        if desc.chars().count() > MAX_SKILL_DESCRIPTION_CHARS {
+            out.push_str("……（完整方法正文在调用该技能时回灌，这里只是摘要。）");
+        }
+        return out;
+    }
+    body_summary(body)
+}
+
+/// 把 SKILL 变成一个 `ToolSpec`，挂进 `ToolRegistry`。
+///
+/// 这就是「SKILL 即工具」的落地点：模型自己决定何时调用这个技能。
+///
+/// **描述里只放摘要，不放整段正文。** 正文在技能被调用时才回灌。
+/// 之前是把正文整段塞进 `description` 的，注释还写着「SKILL 不占常驻上下文
+/// ——用不到就完全不出现」——**那句话是反的**：工具描述每轮请求都带着，
+/// 所以每个启用技能的全文都是**常驻**开销，用户装十几个技能就会把上下文窗口
+/// 顶爆，而界面一个字都不说。见 ISSUE-036。
+///
+/// 名字 / 描述 / 正文三个参数而不是收一个 `SkillToolRow`：壳侧的
+/// `skills_repo::as_tool_spec` 只有自己的 `SkillRow` + 正文，没必要为了拼
+/// 一个 `ToolSpec` 先造一份内核行。
+pub fn skill_tool_spec(name: &str, description: &str, body: &str) -> ToolSpec {
+    ToolSpec::new(name, skill_summary(description, body)).with_parameters(json!({
+        "type": "object",
+        "properties": {
+            "task": {
+                "type": "string",
+                "description": "要交给这套方法处理的具体任务描述。"
+            }
+        },
+        "required": ["task"]
+    }))
+}
+
+/// 这次对话里，模型到底看不看得见这个 SKILL。
+///
+/// 正文来自 `SkillToolRow::body`（壳侧实现读好的）——「库里有行、磁盘上没有
+/// 正文」这一条与搬进内核前同一种形状：空正文一定被否决。
+pub fn skill_visibility(existing: &[ToolSpec], row: &SkillToolRow) -> SkillVisibility {
     if !row.enabled {
         return SkillVisibility::Disabled;
     }
-    match veto(existing, row, body) {
+    match veto(existing, row) {
         None => SkillVisibility::Visible,
         Some(why) => SkillVisibility::NotMounted(why),
     }
@@ -657,12 +790,8 @@ pub fn skill_visibility(
 /// 收的是 `existing: &[ToolSpec]` 而不是 `&ToolRegistry`，是为了让
 /// `api_extensions::list_skills` 在**不构造 registry** 的前提下复用同一条判断 ——
 /// 两处各写一份是这个项目最容易出的错（界面上说一套、`with_skills` 做另一套）。
-fn veto(
-    existing: &[ToolSpec],
-    row: &crate::skills_repo::SkillRow,
-    body: &str,
-) -> Option<&'static str> {
-    if body.trim().is_empty() {
+fn veto(existing: &[ToolSpec], row: &SkillToolRow) -> Option<&'static str> {
+    if row.body.trim().is_empty() {
         return Some("库里有行但磁盘上没有正文（文件被删了，或目录没挂上）");
     }
     if existing.iter().any(|s| s.name == row.name) {
@@ -691,7 +820,7 @@ fn veto(
 /// 空转到 4 轮上限（实跑第 5、7 条任务），报成 `tool_loop_exhausted`，
 /// 看起来像模型弱，其实是自己两个工具的契约错位。见 ISSUE-040。
 ///
-/// 抽成独立纯函数是为了能单测：真起 AppState 要数据库与配置。
+/// 抽成独立纯函数是为了能单测：真起一份带库、带配置的夹具要数据库与配置。
 pub fn matches_expert_query(id: &str, display_name: &str, query: &str) -> bool {
     let q = query.trim();
     if q.is_empty() {
@@ -766,24 +895,85 @@ mod tests {
         r
     }
 
-    /// 内置表里挂了 AppState 的闭包，单测里造一个够用的替身即可 ——
-    /// 这里只断言「结构完整」，不碰数据库。
-    fn dummy_app() -> Arc<crate::state::AppState> {
-        Arc::new(crate::state::AppState {
-            config: crate::config::Config::from_env(),
-            tokens: Arc::new(crate::auth::EnvTokenResolver::default()),
-            db: None,
-            db_problem: Some("测试注入：未建库".to_string()),
-            llm: Arc::new(std::sync::RwLock::new(None)),
-            llm_config: Arc::new(std::sync::RwLock::new(Default::default())),
-            providers: Arc::new(std::sync::RwLock::new(Default::default())),
-            login_limiter: Arc::new(crate::ratelimit::RateLimiter::default()),
-            pbkdf2: quill_control::Pbkdf2Params::for_tests(),
-        })
+    /// 假端口：三份清单都在内存里（Vec），内核的测试**不碰数据库** ——
+    /// 真库读取口径由壳侧的集成测试盯着（`quill-server/tests/extensions_http.rs`
+    /// 用真 `DbToolSources` + 真库），这里只钉注册表逻辑。
+    #[derive(Default)]
+    struct FakeSources {
+        experts: Vec<ExpertToolRow>,
+        skills: Vec<SkillToolRow>,
+        mcp: Vec<crate::mcp::McpServerRow>,
     }
 
+    impl FakeSources {
+        /// 一位专家 + 一个可挂载的技能：够 `builtin` 把内置表填满，
+        /// 也够 `with_skills` 走出「注册成功」那一条路。
+        fn with_one_expert() -> Self {
+            Self {
+                experts: vec![ExpertToolRow {
+                    id: "cost-analyst".into(),
+                    display_name: "成本分析师".into(),
+                    description: "算成本的".into(),
+                    instructions: Some("你是成本分析师。".into()),
+                }],
+                ..Self::default()
+            }
+        }
+    }
+
+    impl ToolSources for FakeSources {
+        fn experts_for_tools(
+            &self,
+            _uid: quill_adapters::UserId,
+        ) -> Result<Vec<ExpertToolRow>, ToolSourceError> {
+            Ok(self
+                .experts
+                .iter()
+                .map(|e| ExpertToolRow {
+                    id: e.id.clone(),
+                    display_name: e.display_name.clone(),
+                    description: e.description.clone(),
+                    instructions: e.instructions.clone(),
+                })
+                .collect())
+        }
+
+        fn skills(
+            &self,
+            _uid: quill_adapters::UserId,
+        ) -> Result<Vec<SkillToolRow>, ToolSourceError> {
+            Ok(self
+                .skills
+                .iter()
+                .map(|r| SkillToolRow {
+                    name: r.name.clone(),
+                    description: r.description.clone(),
+                    enabled: r.enabled,
+                    tool_allowlist: r.tool_allowlist.clone(),
+                    body: r.body.clone(),
+                })
+                .collect())
+        }
+
+        fn mcp_servers(
+            &self,
+            _uid: quill_adapters::UserId,
+        ) -> Result<Vec<crate::mcp::McpServerRow>, ToolSourceError> {
+            Ok(self.mcp.clone())
+        }
+    }
+
+    fn fake_sources() -> Arc<dyn ToolSources> {
+        Arc::new(FakeSources::with_one_expert())
+    }
+
+    /// 内置表里闭包持有的是 `Arc<dyn ToolSources>`，单测里给一个内存替身即可 ——
+    /// 这里只断言「结构完整」，不发任何 IO。
     fn dummy_builtin() -> ToolRegistry {
-        ToolRegistry::builtin(dummy_app(), quill_adapters::UserId::from_bytes([7u8; 16]))
+        ToolRegistry::builtin(
+            fake_sources(),
+            quill_adapters::UserId::from_bytes([7u8; 16]),
+        )
     }
 
     #[test]
@@ -885,10 +1075,10 @@ mod tests {
         // ISSUE-041：角色在界面上定过之后，这两个工具对模型就是纯噪音 ——
         // 实测 11 条真实任务里 5 条因此以 tool_loop_exhausted 收场。
         let uid = quill_adapters::UserId::from_bytes([7u8; 16]);
-        let app = dummy_app();
+        let sources = fake_sources();
 
-        let with = ToolRegistry::builtin_with_expert_tools(Arc::clone(&app), uid, true);
-        let without = ToolRegistry::builtin_with_expert_tools(Arc::clone(&app), uid, false);
+        let with = ToolRegistry::builtin_with_expert_tools(Arc::clone(&sources), uid, true);
+        let without = ToolRegistry::builtin_with_expert_tools(Arc::clone(&sources), uid, false);
 
         let names = |r: &ToolRegistry| {
             r.specs()
@@ -1022,18 +1212,13 @@ mod tests {
         }
     }
 
-    fn skill_row_named(name: &str) -> crate::skills_repo::SkillRow {
-        crate::skills_repo::SkillRow {
+    fn skill_row_named(name: &str, body: &str) -> SkillToolRow {
+        SkillToolRow {
             name: name.to_string(),
-            version: "0.1.0".into(),
-            source: "local".into(),
-            source_ref: None,
             description: String::new(),
             enabled: true,
-            install_path: "/tmp/x".into(),
             tool_allowlist: vec![],
-            created_at: 0,
-            updated_at: 0,
+            body: body.to_string(),
         }
     }
 
@@ -1043,10 +1228,10 @@ mod tests {
         // 而界面上这个技能还显示「已启用」。
         let specs = with_one_tool().specs();
         for body in ["", "   ", "\n\t "] {
-            let why = veto(&specs, &skill_row_named("gone"), body).expect("正文为空必须否决");
+            let why = veto(&specs, &skill_row_named("gone", body)).expect("正文为空必须否决");
             assert!(why.contains("正文"), "要说清是正文没了：{why}");
         }
-        assert_eq!(veto(&specs, &skill_row_named("gone"), "有正文"), None);
+        assert_eq!(veto(&specs, &skill_row_named("gone", "有正文")), None);
     }
 
     #[test]
@@ -1056,14 +1241,14 @@ mod tests {
         let mut r = with_one_tool();
         let specs = r.specs();
         let why =
-            veto(&specs, &skill_row_named("echo"), "一套叫 echo 的方法").expect("同名必须否决");
+            veto(&specs, &skill_row_named("echo", "一套叫 echo 的方法")).expect("同名必须否决");
         assert!(why.contains("顶掉"), "要说清后果：{why}");
         r.register(
             ToolSpec::new("read-file", "模拟一个 MCP 工具"),
             Arc::new(|_| Ok(String::new())),
         );
         assert!(
-            veto(&r.specs(), &skill_row_named("read-file"), "方法").is_some(),
+            veto(&r.specs(), &skill_row_named("read-file", "方法")).is_some(),
             "MCP 工具名常用连字符，那条路一通这个守卫就要真的生效"
         );
     }
@@ -1072,14 +1257,11 @@ mod tests {
     fn a_disabled_skill_is_reported_as_disabled_not_as_a_mounting_failure() {
         // 停用是用户的选择，界面上要说「已停用」。混进「没挂上，原因是正文没了」
         // 那一类，会让用户去查一个根本不存在的问题。
-        let mut row = skill_row_named("off");
+        let mut row = skill_row_named("off", "有正文");
         row.enabled = false;
         let specs = with_one_tool().specs();
-        assert_eq!(
-            skill_visibility(&specs, &row, "有正文"),
-            SkillVisibility::Disabled
-        );
-        assert!(!skill_visibility(&specs, &row, "有正文").model_can_see());
+        assert_eq!(skill_visibility(&specs, &row), SkillVisibility::Disabled);
+        assert!(!skill_visibility(&specs, &row).model_can_see());
     }
 
     /// ISSUE-026 的回归：**停用的 MCP 服务器不许进这一轮的工具表。**
@@ -1087,8 +1269,8 @@ mod tests {
     /// 修之前 `with_mcp_tools` 一行都没判 `enabled` —— 用户在配置里关掉了
     /// 一台服务器，它的工具照样出现在模型的工具表里，界面上也看不出差别。
     /// 与 ISSUE-008（`tool_allowlist` 只存不用）同一类病。
-    fn mcp_row(name: &str, enabled: bool) -> crate::mcp_repo::McpServerRow {
-        crate::mcp_repo::McpServerRow {
+    fn mcp_row(name: &str, enabled: bool) -> crate::mcp::McpServerRow {
+        crate::mcp::McpServerRow {
             name: name.into(),
             transport: "stdio".into(),
             command: Some("echo".into()),
@@ -1139,18 +1321,82 @@ mod tests {
     #[test]
     fn a_mounted_skill_reports_itself_visible_and_an_unmountable_one_says_why() {
         let specs = with_one_tool().specs();
-        let ok = skill_visibility(&specs, &skill_row_named("code-review"), "一套方法");
+        let ok = skill_visibility(&specs, &skill_row_named("code-review", "一套方法"));
         assert_eq!(ok, SkillVisibility::Visible);
         assert!(ok.model_can_see(), "挂了就是看得见，界面上不能显示成没挂");
 
-        let why = match skill_visibility(&specs, &skill_row_named("code-review"), "  ") {
+        let why = match skill_visibility(&specs, &skill_row_named("code-review", "  ")) {
             SkillVisibility::NotMounted(w) => w,
             other => panic!("正文为空必须是「没挂上」，实际：{other:?}"),
         };
         assert!(why.contains("正文"), "要把原因说给用户听：{why}");
         assert!(
-            !skill_visibility(&specs, &skill_row_named("code-review"), "  ").model_can_see(),
+            !skill_visibility(&specs, &skill_row_named("code-review", "  ")).model_can_see(),
             "挂不上就不许显示成模型看得见"
         );
+    }
+
+    /// 端口装进注册表这条线：假端口给三行（可挂 / 停用 / 正文没了），
+    /// 内核只该挂第一行。真库上的同一条口径由壳侧集成测试盯
+    /// （`quill-server/tests/extensions_http.rs` 用真 `DbToolSources` + 真库）。
+    #[tokio::test]
+    async fn a_fake_port_mounts_the_enabled_skill_with_a_body_and_skips_the_rest() {
+        let uid = quill_adapters::UserId::from_bytes([7u8; 16]);
+        let mut fake = FakeSources::with_one_expert();
+        fake.skills = vec![
+            SkillToolRow {
+                name: "code-review".into(),
+                description: "审代码的固定流程".into(),
+                enabled: true,
+                tool_allowlist: vec![],
+                body: "第一步：读 diff。".into(),
+            },
+            SkillToolRow {
+                name: "turned-off".into(),
+                description: String::new(),
+                enabled: false,
+                tool_allowlist: vec![],
+                body: "一套做法。".into(),
+            },
+            SkillToolRow {
+                name: "body-gone".into(),
+                description: String::new(),
+                enabled: true,
+                tool_allowlist: vec![],
+                body: String::new(),
+            },
+        ];
+        let sources: Arc<dyn ToolSources> = Arc::new(fake);
+
+        let r = ToolRegistry::builtin(Arc::clone(&sources), uid)
+            .with_skills(sources.as_ref(), uid)
+            .await
+            .expect("假端口不该失败");
+        let names: Vec<String> = r.specs().into_iter().map(|s| s.name).collect();
+        assert!(names.contains(&"code-review".to_string()), "{names:?}");
+        assert!(
+            !names.contains(&"turned-off".to_string()),
+            "停用的技能不许进工具表：{names:?}"
+        );
+        assert!(
+            !names.contains(&"body-gone".to_string()),
+            "正文没了不许进工具表（挂上去也只能空手）：{names:?}"
+        );
+        // 正文在调用时才回灌 —— 这正是「SKILL 即工具」与常驻描述的分界。
+        let out = r
+            .call(&ToolCall::new(
+                "c1",
+                "code-review",
+                json!({ "task": "审一下 x.rs" }),
+            ))
+            .expect("应成功");
+        assert!(out.contains("第一步：读 diff。"), "{out}");
+
+        // 假端口没有 MCP 行：`with_mcp_tools` 应当原地返回，不发起任何握手。
+        let r = r
+            .with_mcp_tools(sources.as_ref(), uid, "key")
+            .await
+            .expect("空清单不该失败");
+        assert_eq!(r.specs().len(), names.len());
     }
 }

@@ -456,23 +456,27 @@ pub async fn context(
     let persona = resolve_persona(db, uid, sid).await?;
     let skill_root = crate::api_extensions::skill_dir(&state.config);
     let role_already_picked = persona.expert_id.is_some();
+    // 工具素材走端口：专家 / SKILL / MCP 三份清单由 `DbToolSources` 转发到
+    // 既有查询函数（逐个见该模块的表格）。
+    let sources = crate::tool_sources::DbToolSources::shared(&state, skill_root);
     let registry = crate::tools::ToolRegistry::builtin_with_expert_tools(
-        // clone 而非 move：上面 `state.db()` 借的是 `state` 自己，后面还要用
-        // 同一个 db 去加技能/ MCP。AppState 内部全是 Arc，克隆是廉价的。
-        Arc::new(state.clone()),
+        // `Arc::clone` 而不是把 `state` move 进来：这之后还要用 `db` 读历史
+        // （`load_history_chars`），而且 `sources` 后面还要交给 `with_skills` /
+        // `with_mcp_tools`。AppState 内部全是 Arc，这里那次克隆是廉价的。
+        Arc::clone(&sources),
         uid,
         !role_already_picked,
     );
     let builtin_specs = registry.specs();
     let n_builtin = builtin_specs.len();
     let registry = registry
-        .with_skills(db.as_ref(), uid, &skill_root)
+        .with_skills(sources.as_ref(), uid)
         .await
         .map_err(|e| ApiError::internal(format!("统计上下文时加载 SKILL 失败：{e}")))?;
     let skill_specs = registry.specs();
     let n_skills = skill_specs.len();
     let all_specs = registry
-        .with_mcp_tools(db.as_ref(), uid, &crate::tools::user_key(uid))
+        .with_mcp_tools(sources.as_ref(), uid, &crate::tools::user_key(uid))
         .await
         .map_err(|e| ApiError::internal(format!("统计上下文时加载 MCP 失败：{e}")))?
         .specs();
@@ -903,27 +907,30 @@ pub(crate) async fn prepare_turn(
     // 凭空消失、HTTP 照样 200，没有任何迹象。现在改为：执行工具 → 把结果
     // 以 role=tool 回灌 → 再问一次，直到模型给出真正的正文。
     //
-    // 技能目录要在 `state` 被 move 进 Arc 之前取出来。
+    // 技能目录要在 `state` 被 move 进端口之前取出来。
     let skill_root = crate::api_extensions::skill_dir(&state.config);
     // 角色已经在界面上定下来的会话，不再挂 list_experts / get_expert_detail：
     // 模型不需要（也不该）替用户挑角色，那两个工具只是噪音。实测它们会吃掉
     // 4 轮工具预算里的 3 轮，直接把本来能答的任务压成 tool_loop_exhausted。
     // 见 ISSUE-041。
     let role_already_picked = persona.expert_id.is_some();
+    // 工具素材走端口：专家 / SKILL / MCP 三份清单由 `DbToolSources` 转发到
+    // 既有查询函数（逐个见该模块的表格）。
+    let sources = crate::tool_sources::DbToolSources::shared(&state, skill_root);
     let registry = crate::tools::ToolRegistry::builtin_with_expert_tools(
-        Arc::new(state),
+        Arc::clone(&sources),
         uid,
         !role_already_picked,
     );
     // SKILL 与内置工具在模型看来没有区别：都是 `tools` 字段里的一条。
     let registry = registry
-        .with_skills(db.as_ref(), uid, &skill_root)
+        .with_skills(sources.as_ref(), uid)
         .await
         .map_err(|e| ApiError::internal(format!("对话无法开始：{e}")))?;
     // MCP 同理：`tools/list` 报出来的条目走同一个 registry，所以「内置的」与
     // 「MCP 来的」在模型看来没有区别。一台服务器连不上只跳过它，不让整条对话失败。
     let registry = registry
-        .with_mcp_tools(db.as_ref(), uid, &crate::tools::user_key(uid))
+        .with_mcp_tools(sources.as_ref(), uid, &crate::tools::user_key(uid))
         .await
         .map_err(|e| ApiError::internal(format!("对话无法开始：{e}")))?;
 

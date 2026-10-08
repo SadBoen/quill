@@ -161,18 +161,18 @@ async fn mount_from(
     uid: quill_adapters::UserId,
     found: &[mcp_client::Discovery],
 ) -> Vec<MountedFor> {
-    let Ok(db) = state.db() else {
+    // 没有库时不必建基线：与从前一样直接回空（端口内部的读取也会探到同一件事，
+    // 这里早退只是省一次必然失败的往返，也不把「没库」报成「建基线失败」）。
+    if state.db().is_err() {
         return Vec::new();
-    };
+    }
     let dir = skill_dir(&state.config);
     // 基线 = 内置 + SKILL。与 `with_mcp_tools` 的前半段完全一致，所以
     // 「已被占住的名字」在两处是同一份 —— 否则界面上会说一个工具挂上了，
-    // 而对话里它被内置工具顶掉了。
+    // 而对话里它被内置工具顶掉了。素材走与对话同一条端口实现。
     let mut taken = match crate::tools::baseline_specs(
-        std::sync::Arc::new(state.clone()),
-        db.as_ref(),
+        crate::tool_sources::DbToolSources::shared(state, dir),
         uid,
-        &dir,
     )
     .await
     {
@@ -2048,7 +2048,8 @@ pub(crate) fn hub_description(body: &str) -> String {
 
 /// SKILL 正文目录。优先 `QUILL_SKILL_DIR`，否则用数据库同级的 `skills/`。
 ///
-/// `pub(crate)` 是因为 `tools::ToolRegistry::with_skills` 也要按同一个目录读正文 ——
+/// `pub(crate)` 是因为 `tool_sources::DbToolSources`（挂工具表时读技能正文）
+/// 也要按同一个目录读正文 ——
 /// 挂进工具表时如果自己另算一份路径，界面上「已保存」与模型「能调用」就会
 /// 悄悄指向两个地方。
 pub(crate) fn skill_dir(cfg: &crate::config::Config) -> std::path::PathBuf {
@@ -2065,8 +2066,8 @@ pub(crate) fn skill_dir(cfg: &crate::config::Config) -> std::path::PathBuf {
 
 /// 技能正文路径 —— 全项目**唯一**的算法。
 ///
-/// 三个调用点（写入 `skill_file`、列举 `list_skills`、挂载
-/// `ToolRegistry::with_skills`）必须都走这里：各写一份必然漂，而漂了的后果
+/// 三个调用点（写入 `skill_file`、列举 `list_skills`、挂载工具表时读正文的
+/// `tool_sources::DbToolSources::skills`）必须都走这里：各写一份必然漂，而漂了的后果
 /// 是「界面说一个位置、模型读另一个位置」，而且没有任何迹象指向原因。
 ///
 /// **为什么一个函数要同时服务两类名字**：
@@ -2153,9 +2154,10 @@ pub async fn list_skills(
     let dir = skill_dir(&state.config);
     // 内置工具名是「已占住」的名字。SKILL 之间的重名在当前 schema 下不存在
     // （`UNIQUE(user_id, name)`），所以拿内置这一份就够判定。
+    // 素材走与对话同一条端口实现（`DbToolSources` → 既有查询函数）。
+    let sources = crate::tool_sources::DbToolSources::shared(&state, dir.clone());
     let builtin_names: Vec<quill_provider::ToolSpec> =
-        crate::tools::ToolRegistry::builtin(std::sync::Arc::new(state.clone()), user.0.user_id)
-            .specs();
+        crate::tools::ToolRegistry::builtin(sources, user.0.user_id).specs();
 
     let mut items = Vec::with_capacity(rows.len());
     let mut taken = builtin_names;
@@ -2186,7 +2188,10 @@ pub async fn list_skills(
                 "model_sees_summary".into(),
                 json!(skills_repo::skill_summary(r, &body)),
             );
-            let vis = crate::tools::skill_visibility(&taken, r, &body);
+            let vis = crate::tools::skill_visibility(
+                &taken,
+                &crate::tool_sources::skill_tool_row(r, &body),
+            );
             obj.insert("model_can_see".into(), json!(vis.model_can_see()));
             if let crate::tools::SkillVisibility::NotMounted(why) = vis {
                 obj.insert("not_mounted_reason".into(), json!(why));

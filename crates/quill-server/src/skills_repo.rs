@@ -83,7 +83,13 @@ pub fn content_hash(content: &str) -> Vec<u8> {
     digest32("skills.content_hash", &[content.as_bytes()]).to_vec()
 }
 
-pub async fn list(db: &DbBridge, uid: UserId) -> Result<Vec<SkillRow>, quill_agent::AgentError> {
+/// 与 `list` 同一条 SQL、同一套映射，只是**同步**入口。
+///
+/// 为什么要有它：内核端口 `quill_core::tools::ToolSources::skills` 是同步方法
+/// （`ToolRegistry::builtin*` 本身同步），而 `DbBridge::call` 本来就是阻塞调用
+/// —— 真正的实现放在这里，`list` 只是它的 async 外壳（搬进内核前，`list`
+/// 自己就是那个外壳，行为一字未改）。
+pub fn list_blocking(db: &DbBridge, uid: UserId) -> Result<Vec<SkillRow>, quill_agent::AgentError> {
     let b = crate::db::blob_of(&uid);
     db.call(move |pool, _rt| {
         Box::pin(async move {
@@ -95,6 +101,10 @@ pub async fn list(db: &DbBridge, uid: UserId) -> Result<Vec<SkillRow>, quill_age
             rows.iter().map(row_from).collect()
         })
     })
+}
+
+pub async fn list(db: &DbBridge, uid: UserId) -> Result<Vec<SkillRow>, quill_agent::AgentError> {
+    list_blocking(db, uid)
 }
 
 pub async fn get(
@@ -311,38 +321,18 @@ pub fn to_json(r: &SkillRow) -> Value {
 
 /// 工具描述里最多放多少字符的技能摘要。
 ///
-/// **这个数字是算出来的，不是拍的**：实测一个 8192 上下文的模型上，
-/// 13 个启用技能的正文合计 32430 字符（≈10810 tokens），**光固定开销就已经
-/// 超窗**，于是连「1+1 等于几」都必然 503。见 ISSUE-036。
-/// 描述改成有界摘要之后，同样的 13 个技能常驻开销降到 3k 字符量级。
-pub const MAX_SKILL_DESCRIPTION_CHARS: usize = 240;
-
-/// 从正文开头取一段有界摘要，给「frontmatter 的 description 为空」的情况兜底。
-///
-/// 仍然要有摘要：模型得先知道这个技能**管不管用得上**，才会决定调不调它。
-/// 完全没有描述的话，模型就只能靠工具名瞎猜。
-fn body_summary(content: &str) -> String {
-    let mut out: String = content.chars().take(MAX_SKILL_DESCRIPTION_CHARS).collect();
-    if content.chars().count() > MAX_SKILL_DESCRIPTION_CHARS {
-        out.push_str("……（完整方法正文在调用该技能时回灌，这里只是摘要。）");
-    }
-    out
-}
+/// 算法与常量都住在内核（`quill_core::tools`，queue Q013）：挂进工具表的描述
+/// 由内核构造，而界面上的「模型实际看到的那段字」必须与它**逐字相同** ——
+/// 两处各写一份迟早会漂，漂了界面就在说谎。这里 re-export 保持旧路径可用。
+pub use quill_core::tools::MAX_SKILL_DESCRIPTION_CHARS;
 
 /// 工具描述用的摘要。
 ///
 /// 优先用 SKILL 自己 frontmatter 里的 `description` —— 那本来就是给它看的；
-/// 没有就退回正文开头一段。
+/// 没有就退回正文开头一段。实现已搬进内核（`quill_core::tools::skill_summary`），
+/// 这个壳侧入口只是把 `SkillRow` 的字段递进去，行为不变。
 pub fn skill_summary(r: &SkillRow, content: &str) -> String {
-    let desc = r.description.trim();
-    if !desc.is_empty() {
-        let mut out: String = desc.chars().take(MAX_SKILL_DESCRIPTION_CHARS).collect();
-        if desc.chars().count() > MAX_SKILL_DESCRIPTION_CHARS {
-            out.push_str("……（完整方法正文在调用该技能时回灌，这里只是摘要。）");
-        }
-        return out;
-    }
-    body_summary(content)
+    quill_core::tools::skill_summary(&r.description, content)
 }
 
 /// 把 SKILL 变成一个 `ToolSpec`，挂进 `ToolRegistry`。
@@ -354,17 +344,9 @@ pub fn skill_summary(r: &SkillRow, content: &str) -> String {
 /// ——用不到就完全不出现」——**那句话是反的**：工具描述每轮请求都带着，
 /// 所以每个启用技能的全文都是**常驻**开销，用户装十几个技能就会把上下文窗口
 /// 顶爆，而界面一个字都不说。见 ISSUE-036。
+/// 实现已搬进内核（`quill_core::tools::skill_tool_spec`，queue Q013）。
 pub fn as_tool_spec(r: &SkillRow, content: &str) -> quill_provider::ToolSpec {
-    quill_provider::ToolSpec::new(&r.name, skill_summary(r, content)).with_parameters(json!({
-        "type": "object",
-        "properties": {
-            "task": {
-                "type": "string",
-                "description": "要交给这套方法处理的具体任务描述。"
-            }
-        },
-        "required": ["task"]
-    }))
+    quill_core::tools::skill_tool_spec(&r.name, &r.description, content)
 }
 
 #[cfg(test)]
