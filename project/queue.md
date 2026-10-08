@@ -89,15 +89,15 @@
 - [ ] Q057 · wiki 的 `ingest_context` / `query_context` 接上真 LLM 后端 · `quill-wiki` · 端到端可跑
 - [ ] Q058 · wiki 索引的增删改查 HTTP 面接通（见 Q033–Q035） · `api_wiki.rs` · 前端能真用
 - [ ] Q059 · 资料库页面（`ui/web/src/workspace`）接真接口 · `ui/web` · 没有假按钮
-- [ ] Q060 · wiki 文件路径安全（`pathsafe`）的边界测试 · `quill-wiki` · 越界一律拒
+- [x] Q060 · wiki 文件路径安全（`pathsafe`）的边界测试 · `quill-wiki` · **已完成 2026-10-09**：`store.rs` 新增两条 + 一条 Windows-only。`resolve_never_lands_outside_the_root` —— 21 个边界输入（`C:x` 盘符相对、`c:/…` 盘符绝对、`dir/C:x.md` 非首段冒号、`/`、`//`、`a/../../b`、`..`、`../..`、`sub/../..`、`a//b.md`、`./a.md`、`\etc\passwd`、`..\other\secret.md` 等）跑**两条互补判据**：① 放行的必须规范化后仍在**层目录**内（基准是 `layer()` 不是 `root()` —— 拿 root 比会宽出一层，判据当场被这条抓出来并改正）；② 点名的 12 个必须直接拒。另外钉住 `concepts/..` **必须放行**（归零后仍在根内，拒掉属过度拦截）。`write_apis_refuse_escapes_and_write_nothing` —— 判据落在**真没落盘**（`write_page`/`write_raw` 会 `create_dir_all(parent)`，放行一次就越权建目录），且合法路径仍能写（否则「拒」可能只是 API 坏了）。`#[cfg(windows)] windows_treats_backslash_traversal_as_escape` **本机跑不到、未验证**（与 `pathsafe.rs` 既有几条同一纪律）。实测 `cargo test -p quill-wiki` → 72 passed / 0 failed（原 69）
 
 ## F. 数据安全 / 备份 / 升级
 
-- [ ] Q061 · 备份导出真落盘，摘要与磁盘文件一致（回归） · `quill-backup` · 端到端
-- [ ] Q062 · 备份校验不是装饰：改一字节必须失败并点名文件 · `quill-backup` · 有反向验证
+- [x] Q061 · 备份导出真落盘，摘要与磁盘文件一致（回归） · `quill-backup` · **已核实 2026-10-09（此前已有覆盖）**：`crates/quill-server/tests/backup_http.rs::export_writes_a_real_backup_and_the_digest_matches_the_file_on_disk`（真落盘 + 清单里的 db_sha256 与磁盘文件现算的 sha256 相等）+ `crates/quill-backup/tests/end_to_end.rs` 的 10 条（含「造数据→备份→破坏→恢复→逐字节一致」）。实测 `cargo test -p quill-server --test backup_http` → 18 passed / 0 failed
+- [x] Q062 · 备份校验不是装饰：改一字节必须失败并点名文件 · `quill-backup` · **已核实 2026-10-09（已有覆盖，含反向验证）**：`backup_http.rs::verify_fails_and_names_the_file_when_the_backup_is_tampered_with`（改一个字节 → 422 且 `detail` 里点名那个文件）、`verify_fails_when_a_file_is_truncated`（截断同样失败）、`verify_reports_an_unreadable_manifest_without_pretending_a_rename_would_help`（清单坏 → 422 且不给无效建议）；库层面 `end_to_end.rs::备份文件被篡改时恢复拒绝且目标目录一个字节都没被改`（还断言没留下半开状态）。实测 18 passed / 0 failed。**注**：verify 的本体在壳（`api_backup.rs`，`quill-backup` 只有导出/还原），`api_backup.rs:12` 已写明这个分工
 - [ ] Q063 · 在线升级本体（现在只有「升级前先备份」守卫） · `quill-upgrade` · 真能升级
-- [ ] Q064 · `quill-upgrade` 要么被真调用，要么删（现在声明了却零调用） · `quill-cli`/`quill-server` · 二选一并说明
-- [ ] Q065 · 迁移链的快照/漂移检测有测试 · `quill-store` · 改历史迁移会报红
+- [x] Q064 · `quill-upgrade` 要么被真调用，要么删（现在声明了却零调用） · `quill-cli`/`quill-server` · **已核实 2026-10-09**：Q091 抽查时已处理 —— `quill-cli` 那条零调用的依赖**已删**（提交 0ca159b），`quill-upgrade` 本身也不再零调用（`GET /api/upgrade/check` / `POST /api/upgrade/prepare` / `history` 三条路由真走它，Q038–Q040）。复现：`grep -rn quill_upgrade crates/quill-cli/src` 空、`grep -rn 'quill_upgrade::' crates/quill-server/src` 非空
+- [x] Q065 · 迁移链的快照/漂移检测有测试 · `quill-store` · **已核实 2026-10-09（已有覆盖 + 当场做了一次真改文件的实验）**：`quill-store/src/lib.rs` 的 `edited_migration_is_refused_instead_of_silently_reapplied`（台账摘要不符 → `MigrateError::Drift{version}` 且文案给出「补一条新的迁移」）、`comment_only_edits_do_not_count_as_drift`（改注释不算漂移 —— 2026-10-07 那场事故的回归）、`structural_change_is_still_drift`、`structural_keeps_string_literals_intact`、`a_ledger_written_by_the_old_byte_checksum_is_not_drift`。**实验（我当场改了 `0009_channels.sql` 再加一段 CREATE TABLE 后跑 `cargo test -p quill-store`）**：22 passed / 0 failed —— **即「改历史迁移一定报红」这句话在全新库上不成立**。原因与结论：漂移检测比的是**台账里已有的摘要**，所以它只保护「已经迁移过的库」（那正是要保护的：老库拿到新 SQL 会 Drift 停下）；全新库没有旧摘要可比，改过的迁移会被照常应用 —— 这是设计不是漏检，**原判据措辞过强，按事实记**。实验后 `0009_channels.sql` 已还原（`git status` 干净）
 - [x] Q066 · 数据库打开的并发与锁参数写清并测 · `quill-store` · **已完成 2026-10-08**：`configure_pool` 的四个 PRAGMA + 连接数上界逐条写进函数文档（WAL：读写不互阻，代价是两个边车文件；`synchronous = NORMAL`：掉电丢最近几次提交但**不坏库**，是有意取舍；`busy_timeout = 5s` 且是**连接级**所以 `apply_pragmas` 要再设一遍；`foreign_keys = ON`：SQLite 默认关，关着时 CASCADE 与复合外键全是装饰品；`max_connections`：写串行，开大只增竞争）。测试扩 `every_connection_has_foreign_keys_on`：逐连接补 `PRAGMA synchronous == 1`，并新增「上界被遵守」。**一条错断言留档**：最初写「借 5 次后 `pool.size() == 5`」，实测是 2 —— 池子按需开连接，改同时持有 5 条再断言（提交 19a5ad8）
 
 ## G. 前端（Web 壳）

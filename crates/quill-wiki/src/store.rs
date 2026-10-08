@@ -437,6 +437,137 @@ mod tests {
         assert!(s.resolve("etc", "a.md").is_err());
     }
 
+    /// 路径安全的**边界批量**（queue Q060）。
+    ///
+    /// 两条互补的断言，合起来才是「越界一律拒」的完整判据：
+    /// 1. **每个输入都不得落到根外面** —— 对 `Ok` 也要把返回路径规范化后比对根前缀，
+    ///    而不是只看 `is_err()`。只断言 `is_err` 的写法会漏掉「放行了但放到了别处」
+    ///    这种更糟的错；
+    /// 2. 点名的那几个必须**直接拒**（不靠「恰好没跑出去」）。
+    ///
+    /// **为什么跨平台分开写**：`..\other` 在 Unix 是一个普通文件名（反斜杠不是分隔符），
+    /// 在 Windows 是两级上跳。所以这里不假设某一侧的具体结果，只测两边都该成立的不变量；
+    /// Windows 侧另有一条 `#[cfg(windows)]` 钉住它确实拒。
+    #[test]
+    fn resolve_never_lands_outside_the_root() {
+        let s = WikiStore::new("/base", user(1));
+        // 判据的基准是**层目录**：`resolve(layer, rel)` 是相对 `root/<layer>` 解析的，
+        // 拿 `root()` 去比会宽出一层，即便真跑到了 `raw/` 里也照样绿。
+        let layer_root = normalize(&s.layer(DIR_WIKI).expect("wiki 层"));
+        let cases = [
+            // 老测试覆盖过的：必须直接拒。
+            "../other-user/secret.md",
+            "concepts/../../other/secret.md",
+            "/etc/passwd",
+            "\\\\server\\share\\x.md",
+            "",
+            "   ",
+            // Q060 补的边界。
+            "C:x",                      // 盘符相对（冒号）
+            "c:/windows/system32/x.md", // 盘符绝对
+            "dir/C:x.md",               // 非首段的冒号（ADS / 盘符）
+            "/",                        // 只给分隔符
+            "//",                       // 双分隔符
+            "a/../../b",                // 中途越出
+            "..",                       // 就是父目录
+            "../..",
+            "sub/../..",   // 深度恰好归零后再上跳
+            "concepts/..", // 合法：归零仍在根内（见下方断言）
+            "a//b.md",     // 重复分隔符
+            "./a.md",      // 当前目录前缀
+            "a/./b.md",
+            "\\etc\\passwd",        // 反斜杠开头（Windows 绝对路径）
+            "..\\other\\secret.md", // 反斜杠上跳（Windows 才是上跳）
+        ];
+
+        for case in cases {
+            match s.resolve(DIR_WIKI, case) {
+                Err(_) => {}
+                Ok(path) => {
+                    let resolved = normalize(&path);
+                    assert!(
+                        resolved.starts_with(&layer_root),
+                        "路径 {case:?} 被放行，但规范化后落到了层目录外面：{resolved:?}"
+                    );
+                }
+            }
+        }
+
+        // 点名必须直接拒的那几个。
+        for must_reject in [
+            "../other-user/secret.md",
+            "concepts/../../other/secret.md",
+            "a/../../b",
+            "..",
+            "../..",
+            "/etc/passwd",
+            "C:x",
+            "c:/windows/system32/x.md",
+            "dir/C:x.md",
+            "/",
+            "//",
+            "\\etc\\passwd",
+        ] {
+            assert!(
+                s.resolve(DIR_WIKI, must_reject).is_err(),
+                "{must_reject:?} 必须直接拒"
+            );
+        }
+
+        // 合法的那种也要钉住：`concepts/..` 归零后仍在根内 —— 拒掉它属于过度拦截，
+        // 会让「列出目录再按相对路径回读」这类正常用法失效。
+        let ok = s
+            .resolve(DIR_WIKI, "concepts/..")
+            .expect("归零后仍在根内，应放行");
+        assert_eq!(normalize(&ok), layer_root, "concepts/.. 应当就是 wiki 层根");
+    }
+
+    /// Windows 侧：反斜杠真的是分隔符，`..\other` 就是上跳，必须拒。
+    ///
+    /// **本机（WSL/Linux）跑不到，未验证**；与 `pathsafe.rs` 里既有的几条
+    /// `#[cfg(windows)]` 测试同一纪律。
+    #[cfg(windows)]
+    #[test]
+    fn windows_treats_backslash_traversal_as_escape() {
+        let s = WikiStore::new("C:\\base", user(1));
+        assert!(
+            s.resolve(DIR_WIKI, "..\\other\\secret.md").is_err(),
+            "Windows 上 `..\\\\other` 是上跳，必须拒"
+        );
+        assert!(s.resolve(DIR_WIKI, "sub\\..\\..\\x.md").is_err());
+    }
+
+    /// 写路径也要拒（不只是 `resolve` 拒）：`write_page` / `write_raw` 会
+    /// `create_dir_all(parent)`，放行一次就越权建目录。判据落在**真没落盘**上。
+    #[test]
+    fn write_apis_refuse_escapes_and_write_nothing() {
+        let base = tmp_root("escape");
+        let s = WikiStore::new(&base, user(3));
+        s.ensure_layout().expect("建三层");
+
+        let outside = base.join("outside-marker.md");
+        for bad in [
+            "../outside-marker.md",
+            "sub/../../outside-marker.md",
+            "/tmp/quill-wiki-abs.md",
+        ] {
+            assert!(
+                s.write_page(bad, "越权").is_err(),
+                "write_page 放行了 {bad:?}"
+            );
+            assert!(
+                s.write_raw(bad, "越权").is_err(),
+                "write_raw 放行了 {bad:?}"
+            );
+        }
+        assert!(!outside.exists(), "越权写入竟然真的落了盘：{outside:?}");
+
+        // 合法路径照常能写 —— 否则上面的「拒」可能只是因为整个 API 坏了。
+        s.write_page("ok/page.md", "---\ntitle: OK\n---\n\n正文\n")
+            .expect("合法路径必须能写");
+        assert!(s.read_page("ok/page.md").is_ok());
+    }
+
     #[test]
     fn two_users_get_disjoint_roots() {
         let a = WikiStore::new("/base", user(1));
