@@ -119,6 +119,33 @@ ASCII 4 字符 1 token、非 ASCII 1 字符 1 token；内核侧 `TokenEstimator`
 **为什么**：这是「先有真后端再放按钮」的纪律（最高指示第 2/5 条），
 宁可页面上少一个开关，也不给一个点了必失败的东西。
 
+### B3. 资料库的写入面（`PUT/DELETE /api/wiki/pages/{path}`）：**自创**，两边都没有
+
+**上游怎么做**：`.octop-ref/octop` 的知识库是 **embedding/RAG** 那套
+（`src/octop/api/routers/knowledge_bases.py`，961 行：上传 / OCR / 向量 / 检索），
+**没有「页面」这一层**，也没有「人直接编辑知识库页面」的入口；goose 侧根本没有知识库概念。
+quill 这套资料库（raw/wiki/schema 三层 + `index.md` + 变更日志）来自用户自己的
+**xu-wiki**，而它**不在本地**（`vendor/` 只有 goose 与 openoctopus-frontend）——
+所以「页面怎么读写」这件事**没有可抄的源**。
+
+**quill 怎么做**（`crates/quill-server/src/api_wiki.rs`，2026-10-09 / Q058）：
+- 版本号 = **磁盘上那份原文的 sha256**（`page_version`），不是 `parse_page` + `render_page`
+  之后重排的形状 —— 后者会让「用户手上那版」与「库里那版」算出的版本对不上；
+- `expected_version` **缺省或 null** = 「这一页必须还不存在」（新建）；给值 = 「我看到的就是这一版」；
+- 删除**必须**带版本号（缺 → 400），因为删除不可逆，不带版本的删除会删掉别人刚写的那版；
+- 写入前先用 `page_from_wire` 校验内容能解析成合法页面，否则 400 —— 不许把坏页写进库
+  （坏页会进 `index.md`，而下次 ingest 会把它当既有页）。
+
+**为什么自创**：没有可抄的源（见上），而这是产品里必须有的一条路 —— 前端
+`ui/web/src/memory/api.ts` 的 `WIKI_WRITE_ROUTE` 早就把 `PUT /api/wiki/pages/{path}`
+这条契约写死了，后端一直没接（2026-10-09 才接上）。
+
+**代价（如实记）**：① 版本号是**内容哈希**，不是「第几版」——历史不可追溯（要历史得另做）；
+② 与 ingest 的关系未定：模型摄入写出的页也进同一目录，版本号同样由这个函数算，
+所以两边不会打架，但「谁改的」只能从变更日志读；
+③ `expected_version` 是**我们自己起的名字**（不是 `ETag`/`If-Match`），
+而工作区页（Q059）说的是「ETag 乐观并发」—— 两套说法，真做工作区时要统一。
+
 ---
 
 ## C. 工程侧（对两边都不抄）

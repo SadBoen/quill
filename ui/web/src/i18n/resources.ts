@@ -217,7 +217,7 @@ export const en = {
       notFound: 'This page does not exist in the knowledge base.',
       notFoundHint: 'Enter an existing path above, or wire up the write route to create pages.',
       editTitle: 'Edit knowledge base',
-      writeNotWired: 'Quill currently only exposes read-only wiki routes, so this page cannot save or delete anything. Next step: implement {{route}}, together with the expected_version used for optimistic concurrency.',
+      writeNotWired: 'The wiki write routes are implemented ({{route}} and DELETE, both with expected_version optimistic concurrency), but this page has no editor yet, so it still cannot save or delete. Next step: make the body editable, send version on save and expected_version on delete, and surface 409 conflicts as-is.',
     },
     collection: {
       viewCard: 'Cards',
@@ -1241,7 +1241,7 @@ export const zhCN = {
       notFound: '资料库里还没有这个页面。',
       notFoundHint: '在上面「页面路径」填一个存在的路径再打开，或先接入写入接口新建页面。',
       editTitle: '编辑资料库',
-      writeNotWired: 'quill 后端目前只有资料库的只读路由，写入接口尚未接通，因此本页不能保存或删除页面。下一步：实现 {{route}}，并把乐观并发用的 expected_version 一起做出来。',
+      writeNotWired: '资料库的写入接口已经接通（{{route}} 与 DELETE，都带 expected_version 乐观并发），但这一页还没接上编辑界面，所以这里仍不能保存或删除。下一步：把正文框改成可编辑，保存时带上 version、删除时带上 expected_version，并把 409 冲突原样显示出来。',
     },
     mcp: {
       saveDevice: '保存 MCP 配置',
