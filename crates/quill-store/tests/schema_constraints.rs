@@ -149,8 +149,9 @@ const EXPERT: &str =
                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?)";
 const SESS: &str = "INSERT INTO sessions(user_id,id,kind,room_id,workspace_path,created_at,\
                     updated_at,last_active_at) VALUES(?,?,?,?,?,?,?,?)";
-const WIKI: &str = "INSERT INTO wiki_index(user_id,term,doc_id,term_kind,tf,field_len,rel_path,\
-                    page_title,content_hash,bytes,indexed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)";
+// `wiki_index` 的夹具原本在这里 —— **2026-10-09 随迁移 0013 删掉了那张死表**（Q104），
+// 所以覆盖它的用例（b5 / a2 的那半 / g1 的一条 / g2）同批删掉了：那些用例守的是
+// 「迁移链跑完之后并不存在」的表。
 const INV: &str =
     "INSERT INTO invites(id,code_hash,created_by,expires_at,created_at) VALUES(?,?,?,?,?)";
 
@@ -319,23 +320,20 @@ async fn a2_delete_user_cascades_only_own_rows() {
     let pool = fresh_pool().await;
     seed_two_users(&pool).await;
 
-    for n in [1u8, 2] {
-        sqlx::query(WIKI)
-            .bind(id(n))
-            .bind("rust")
-            .bind(id(0x60 + n))
-            .bind(0i64)
-            .bind(3i64)
-            .bind(100i64)
-            .bind(format!("{n}.md"))
-            .bind("T")
-            .bind(h32(n))
-            .bind(900i64)
-            .bind(NOW)
-            .execute(&pool)
-            .await
-            .expect("种 wiki_index");
-    }
+    // 用 `sessions` 验级联：原来这一条用的是 `wiki_index`，而那张表随迁移 0013
+    // 删掉了（Q104）。**判据没变**（删 B 只清 B 的行、A 的行不动），只是换到一张真实
+    // 存在的表上；行数**删之前现数**，不写死（`seed_two_users` 给两个用户各建了一条会话）。
+    let a_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE user_id=?")
+        .bind(id(1))
+        .fetch_one(&pool)
+        .await
+        .expect("查 A");
+    let b_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE user_id=?")
+        .bind(id(2))
+        .fetch_one(&pool)
+        .await
+        .expect("查 B");
+    assert!(a_before > 0 && b_before > 0, "夹具应当给两个用户都建了会话");
 
     sqlx::query("DELETE FROM users WHERE id=?")
         .bind(id(2))
@@ -343,18 +341,18 @@ async fn a2_delete_user_cascades_only_own_rows() {
         .await
         .expect("删 B");
 
-    let a_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM wiki_index WHERE user_id=?")
+    let a_after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE user_id=?")
         .bind(id(1))
         .fetch_one(&pool)
         .await
         .expect("查 A");
-    assert_eq!(a_rows, 1, "删 B 影响了 A 的索引行");
-    let b_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM wiki_index WHERE user_id=?")
+    let b_after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE user_id=?")
         .bind(id(2))
         .fetch_one(&pool)
         .await
         .expect("查 B");
-    assert_eq!(b_rows, 0, "删 B 未级联清空其索引行");
+    assert_eq!(a_after, a_before, "删 B 影响了 A 的行");
+    assert_eq!(b_after, 0, "删 B 未级联清空其行");
 }
 
 #[tokio::test]
@@ -474,29 +472,6 @@ async fn b4_workspace_path_rejects_traversal() {
         })
         .await;
     }
-}
-
-#[tokio::test]
-async fn b5_wiki_rel_path_rejects_traversal() {
-    let pool = fresh_pool().await;
-    seed_two_users(&pool).await;
-    expect_constraint("wiki_index rel_path 含 ..", || async {
-        sqlx::query(WIKI)
-            .bind(id(1))
-            .bind("t")
-            .bind(id(0x42))
-            .bind(0i64)
-            .bind(1i64)
-            .bind(5i64)
-            .bind("../B/secret.md")
-            .bind("T")
-            .bind(h32(1))
-            .bind(10i64)
-            .bind(NOW)
-            .execute(&pool)
-            .await
-    })
-    .await;
 }
 
 #[tokio::test]
@@ -918,8 +893,6 @@ async fn g1_key_queries_use_indexes() {
         ("会话内消息倒序分页（深翻页）",
          "SELECT seq,content FROM messages WHERE user_id=? AND session_id=? \
           ORDER BY seq DESC LIMIT 50"),
-        ("BM25 检索：按词取倒排",
-         "SELECT doc_id,tf,field_len FROM wiki_index WHERE user_id=? AND term=?"),
         ("登录查用户",
          "SELECT id,password_hash FROM users WHERE username_norm=? AND deleted_at IS NULL"),
         ("refresh token 校验（每请求都跑）",
@@ -948,21 +921,6 @@ async fn g1_key_queries_use_indexes() {
         );
         assert!(!joined.is_empty(), "❌ [{name}] 执行计划为空");
     }
-}
-
-#[tokio::test]
-async fn g2_wiki_index_is_without_rowid() {
-    let pool = fresh_pool().await;
-    let sql: String = sqlx::query_scalar(
-        "SELECT COALESCE(sql,'') FROM sqlite_master WHERE type='table' AND name='wiki_index'",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("查表定义");
-    assert!(
-        sql.to_uppercase().contains("WITHOUT ROWID"),
-        "wiki_index 不是 WITHOUT ROWID —— 倒排表多了一层无用的 B-tree"
-    );
 }
 
 #[tokio::test]

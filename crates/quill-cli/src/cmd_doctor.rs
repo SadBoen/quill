@@ -54,7 +54,10 @@ pub async fn run(o: &Opts) -> Outcome {
                 &format!("已打开并确认 schema（{}）", dbp.display()),
             );
 
-            let need = ["users", "experts", "task_dispatches", "wiki_index"];
+            // `wiki_index` 原本在这份清单里 —— **2026-10-09 随迁移 0013 删掉了那张死表**（Q104）。
+            // 它零写者、零读者，而资料库检索按设计读的是 `index.md`，所以「表在不在」
+            // 不再是这个实例健康的判据。
+            let need = ["users", "experts", "task_dispatches"];
             let mut missing = Vec::new();
             for t in need {
                 let n: i64 = sqlx::query_scalar(

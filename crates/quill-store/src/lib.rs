@@ -198,7 +198,12 @@ pub const MIGRATION_0009: &str = include_str!("../migrations/0009_channels.sql")
 pub const MIGRATION_0010: &str = include_str!("../migrations/0010_mbti.sql");
 pub const MIGRATION_0011: &str = include_str!("../migrations/0011_cron.sql");
 pub const MIGRATION_0012: &str = include_str!("../migrations/0012_experts_drop_skill_count.sql");
+pub const MIGRATION_0013: &str = include_str!("../migrations/0013_drop_dead_tables.sql");
 
+/// 「迁移跑完之后**应该存在**的表」清单（自检用：少一张就说明迁移链坏了）。
+///
+/// `plugins` / `wiki_index` 原本在这里，**2026-10-09 已由迁移 0013 删除**（Q104）——
+/// 两张表零写者、零读者，也没有上游对应物，见那条迁移的头注。
 pub const MIGRATIONS_TABLES: &[&str] = &[
     "schema_version",
     "users",
@@ -207,8 +212,6 @@ pub const MIGRATIONS_TABLES: &[&str] = &[
     "experts",
     "mcp_servers",
     "skills",
-    "plugins",
-    "wiki_index",
     "sessions",
     "teams",
     "team_members",
@@ -288,6 +291,11 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 12,
         name: "0012_experts_drop_skill_count",
         sql: MIGRATION_0012,
+    },
+    Migration {
+        version: 13,
+        name: "0013_drop_dead_tables",
+        sql: MIGRATION_0013,
     },
 ];
 
@@ -1570,5 +1578,31 @@ mod tests {
         .await
         .expect("读索引");
         assert_eq!(idx, 1, "ix_experts_visible 必须重建");
+    }
+
+    /// Q104：两张死表必须**真的被删掉**（跑完整条迁移链之后）。
+    ///
+    /// 判据不是「迁移跑过了」，而是「`sqlite_master` 里查不到它们了」；顺带钉住
+    /// 自检清单 `MIGRATIONS_TABLES` 里也不该再有这两个名字 —— 那份清单被
+    /// `migrate_creates_every_contract_table_and_records_the_ledger` 用来判断
+    /// 「迁移跑完之后该有哪些表」，留着旧名字就等于自检还在期待一张已经不存在的表。
+    #[tokio::test]
+    async fn migration_0013_drops_the_two_dead_tables() {
+        let pool = in_memory().await.expect("内存库");
+        migrate(&pool).await.expect("跑完整条迁移链");
+        for t in ["wiki_index", "plugins"] {
+            let n: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
+            )
+            .bind(t)
+            .fetch_one(&pool)
+            .await
+            .expect("查表");
+            assert_eq!(n, 0, "{t} 应当已被迁移 0013 删掉");
+            assert!(
+                !MIGRATIONS_TABLES.contains(&t),
+                "{t} 不该还留在 MIGRATIONS_TABLES 自检清单里"
+            );
+        }
     }
 }

@@ -373,12 +373,18 @@ export const ITEMS = [
   {
     id: 'B5-3',
     milestone: 'M5',
-    title: '不再上报没有真来源的字段（plugins / wiki_index / skill_count / tool_allowlist）',
-    // 「逐列复核」是人脑里的判断，机器做不了；但「这几个名字还在代码里」
-    // 机器完全做得了，而且那才是这条待办的实质 —— 字段还在，就还在上报。
-    // 真要逐列判断某字段的来源是否成立，那是另一件事，见 BACKLOG B5-3 的复核表。
-    // 2026-10-07 实测 28 处引用 → exit=1，如实报「未通过」。
-    verify: { kind: 'cmd', cmd: '! grep -rqE "wiki_index|skill_count|tool_allowlist" crates/quill-server/src crates/quill-store/src', cwd: 'wsl' },
+    // 2026-10-09 重绑（Q103/Q104）：这条原来叫「不再上报没有真来源的字段
+    // （plugins / wiki_index / skill_count / tool_allowlist）」，命令是
+    // `! grep -rqE "wiki_index|skill_count|tool_allowlist" …`。2026-10-08 的 Q044
+    // 逐条核过之后，那句话的前提就不成立了（那几个名字要么有真来源、要么压根没在上报），
+    // 于是那条命令**永远不可能通过** —— 一条恒红的判据等于真实状态未知。
+    // 真正还在的洞是三处**死结构**，其中两处现在已清掉：`experts.skill_count` 由迁移
+    // 0012 删列、`plugins`/`wiki_index` 两张死表由 0013 删除。剩下 `skills.tool_allowlist`
+    // 存而不用（要不要真消费是 Q102 的产品决定，与「上报」无关）。
+    title: '死结构已清掉（experts.skill_count 与 plugins / wiki_index 两张死表）',
+    // 判据绑在那两条迁移的测试上：它们验的是「列真的没了 / 表真的没了」，
+    // 而不是「grep 不到某个名字」（后者会被注释、夹具、迁移文件本身命中）。
+    verify: { kind: 'cmd', cmd: 'cargo test -p quill-store migration_001', cwd: 'wsl' },
     blocks: [],
   },
 

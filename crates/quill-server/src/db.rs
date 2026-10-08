@@ -29,8 +29,8 @@ const WORKER_THREAD_NAME: &str = "quill-db";
 /// `/healthz` 照样回 `ready: true`，而聊天路由一进去就 500 —— 健康检查比它担保的
 /// 东西弱，等于没担保。现在按「哪张表缺了会让一条**已接线**的路由坏掉」来列。
 ///
-/// 刻意**不**列 `wiki_index` 与 `plugins`：它们是迁移里存在的死表（Rust 侧零读写，
-/// 见 `docs/CODE-TRUTH.md` 缺陷 7c 与 queue Q104），缺了不影响任何路由。
+/// `wiki_index` 与 `plugins` **原本也不列**（当时是「迁移里存在的死表」）——
+/// 2026-10-09 这两张表已由迁移 0013 **删掉**（Q104），所以它们连表都不存在了。
 /// `schema_version` 也不列：它由迁移器自己维护。
 pub const REQUIRED_TABLES: [&str; 15] = [
     // 登录 / 账号（api_auth、middleware）

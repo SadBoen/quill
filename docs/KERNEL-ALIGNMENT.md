@@ -654,9 +654,11 @@ ui/web/src/account/Account.tsx:86:                <dd>{user.approval_mode}</dd>
 - `approval_mode` 是 `/api/auth/me` 里**写死的常量 `"manual"`**（`api_auth.rs:382/406/419`），
   前端只在 `ui/web/src/account/Account.tsx:86` 当一个词条展示。**它背后没有任何审批实现**：
   全仓库没有代码读它来决定行为，唯一的「消费者」是契约测试 `http_contract.rs:169` 与 UI 展示。
-- `plugins.permissions_json`（`crates/quill-store/migrations/0001_init.sql:199`）**零读写**：
-  `grep -rn "permissions_json" crates/ ui/ --include=*.rs --include=*.ts --include=*.tsx` 无输出；
-  对应路由 `/api/extensions/plugins` 是 501（`crates/quill-server/src/routes.rs:203-205`）。
+- `plugins` 表**已删**（`crates/quill-store/migrations/0013_drop_dead_tables.sql`，2026-10-09 / Q104）：
+  它零写者、零读者，也没有上游对应物（octop 没有这张表）。原来这里记的
+  `plugins.permissions_json` 零读写随之结案 —— 列和表一起没了。
+  对应路由 `/api/extensions/plugins` 仍是**刻意**的 501（`crates/quill-server/src/routes.rs`，
+  前端 `capabilityGaps.ts` 如实登记「已登记路由、处理函数未实现」）。
 - `skills.tool_allowlist` 存得下、读得出（`crates/quill-server/src/skills_repo.rs:64,133,268-286`），
   但**工具挂载/执行完全不查它** —— `crates/quill-server/src/tools.rs:365` 自己的注释把这类问题
   叫「`tool_allowlist` 只存不用」；`with_skills`（`:299-338`）与 `call`（`:108-124`）都没有引用。
@@ -702,8 +704,8 @@ crates/quill-store/migrations/0001_init.sql:199:  permissions_json TEXT NOT NULL
 - **其余 24 行**全部落在 `quill-core/src/state_machine.rs` —— 那是**没有 I/O、没有 provider、
   没有工具、没有会话存储**的纯状态模型（文件头 `:1-5` 自述），里面 `AwaitingApproval` /
   `ApprovalRequested` 等只是把 goose 审批语义**画进状态机图**，没有任何判定实现。
-- 去噪后只剩上面 5 行：3 条写死的 `approval_mode: "manual"` + 1 条契约断言 + 1 个零读写的
-  `plugins.permissions_json` 列。
+- 去噪后只剩上面 4 行：3 条写死的 `approval_mode: "manual"` + 1 条契约断言
+  （原来的第 5 行是零读写的 `plugins.permissions_json` 列 —— 那张表 2026-10-09 已删，Q104）。
 
 再证「工具执行路径无门禁」：
 
@@ -727,7 +729,7 @@ $ grep -rn "prep.registry.call\|registry.call" crates/quill-server/src/api_chat.
 | 1 | goose 审批链的端到端运行行为（`ActionRequired` 在客户端如何呈现、`AlwaysAllow` 何时落 `permission.yaml`） | 本仓只 vendored 源码，无 goose 可执行体与配置，无法真跑；本轮只核到实现与接线位置 |
 | 2 | `ToolPermissionStore` 无调用点的原因 | 代码只能证明「vendor 整棵树里没有调用点」；「是不是废弃/待接线」属于历史与规划，不是代码事实 |
 | 3 | `permission.yaml` 多进程并发下的一致性 | 有文件锁实现（`config/permission.rs:196-222`），未实跑并发场景 |
-| 4 | `plugins.permissions_json` / `skills.tool_allowlist` 是否被仓库外的消费者使用 | 只核了本仓库；Octop 前端等外部消费者未查 |
+| 4 | `skills.tool_allowlist` 是否被仓库外的消费者使用（`plugins.permissions_json` 那半**已结案**：表 2026-10-09 删除，Q104） | 只核了本仓库；Octop 前端等外部消费者未查 |
 | 5 | goose security/egress/adversary 三类 inspector 的判定细节与叠加顺序 | 本轮只核到「能覆盖 permission 结论」的机制（`tool_inspection.rs:170-261`），未逐条读 `security/*.rs` 的规则 |
 
 ---

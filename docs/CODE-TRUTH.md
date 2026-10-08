@@ -220,7 +220,7 @@ cd ui/web && npx vitest run
 | 7 | `wiki_index`/`skill_count`/`tool_allowlist` 仍在上报，无真实来源 | `grep ... crates/*/src` | **已核实并更正（2026-10-08，queue Q044）**：四个名字逐个核过，**没有一个在「上报」里是无来源的** —— ① `plugins`：没有任何响应上报它，只有 `GET /api/extensions/plugins` 的诚实 501（Q037）+ 前端 `capabilityGaps.ts` 如实登记；② `wiki_index`：没有任何响应上报它（wiki 检索读的是 `index.md`，见 Q035）；③ `skill_count`：唯一的响应字段在专家市场（`api_expert_market.rs:87` 的 `s.skill_count`），来源是上游 SkillHub 载荷（`skillhub/models.rs:87`）；④ `tool_allowlist`：出现在 bundle 导出里，来源是 `skills` 表的真实列（`skills_repo.rs:44-64`）。真正的洞改记为下面 7a–7c |
 | 7a | `skills.tool_allowlist` **存而不用**（ISSUE-008）：写得进、读得出、导得出，但没有任何消费点 | `grep -rn tool_allowlist crates/quill-core/src/tools.rs`（只有数据结构与注释） | 待做（新开 queue Q102：真消费或删列 —— 需要先定「技能的允许工具表在对话里怎么生效」） |
 | 7b | `experts.skill_count` **恒写 0 且无人读** | 复现：`grep -rn 'skill_count' crates/quill-server/src/experts_repo.rs crates/quill-server/src/member_executor.rs`（**空**）；列已不在：`grep -n skill_count crates/quill-store/migrations/0012_*.sql` | **已删（2026-10-09，queue Q103）**：这一列从建库起就只被写成字面量 0、没有任何读者，而「算出真值」**不可行**（`skills` 表没有 `expert_id`，全仓也没有专家↔技能关系表）。删列走的是**重建表**（0001 的表级 `CHECK (skill_count >= 0)` 让 `ALTER … DROP COLUMN` 被拒）：建新表 → 整列复制 → `DROP` → `RENAME` → 重建 `ix_experts_visible`。判据 `migration_0012_drops_skill_count_and_keeps_every_row`（旧 schema 上造一行真数据 → 迁移后逐列核对 + 其余 CHECK 仍生效 + 索引仍在）；**反向验证**：把 `INSERT … SELECT` 的 `created_at/updated_at` 对调 → 该测试按预期报「时间戳这类数据不许在重建里被改动」 |
-| 7c | `plugins` / `wiki_index` **两张死表**（迁移里存在，Rust 侧零读写） | `grep -rn '"plugins"\|wiki_index' crates/quill-server/src` 只剩 501 路由与检索测试 | 待做（新开 queue Q104：接真读者或删表） |
+| 7c | `plugins` / `wiki_index` **两张死表**（迁移里存在，Rust 侧零读写） | 复现：`grep -rn "FROM wiki_index\|FROM plugins\|INSERT INTO wiki_index" crates/`（**只剩测试夹具的注释**）；表已不在：`grep -n "DROP TABLE" crates/quill-store/migrations/0013_*.sql` | **已删（2026-10-09，queue Q104）**：三条当场核过 —— ① **零写者**（`INSERT INTO wiki_index` 只在测试夹具里）、② **零读者**（`FROM wiki_index` 同样只在测试里）、③ **没有上游对应物**（xu-wiki 是文件式、没有 SQL；octop 也没有这两张表）→ 所以它们不是「照谁抄的」，是 0001_init 里 quill 自己的设计残留。`wiki_index` 还被设计成 `WITHOUT ROWID` 倒排索引，但资料库检索（Q035）**按设计**读 `index.md`（那条「只读索引」契约是有意的），这张表从未被写过 → 删。同批：`MIGRATIONS_TABLES` 去掉两个名字、`quill doctor` 的 `need` 去掉 `wiki_index`、`schema_constraints.rs` 里只覆盖它们的用例删掉（`b5`、`g2`、`g1` 的一条、`a2` 的那半 —— `a2` 的级联判据**换到 `sessions` 上保留**）。判据 `migration_0013_drops_the_two_dead_tables`；**反向验证**：删掉迁移里的 `DROP TABLE plugins` → 该测试按预期报「plugins 应当已被迁移 0013 删掉」 |
 
 ```bash
 # 4~7 的复现命令
@@ -230,7 +230,7 @@ grep -rqE 'wiki_index|skill_count|tool_allowlist' crates/quill-server/src crates
 # 7a/7b/7c 的复现命令（Q044 核过的三条）
 grep -rn 'tool_allowlist' crates/quill-core/src/tools.rs          # 只有数据结构与注释，没有消费点
 grep -rn 'skill_count' crates/quill-server/src/api_experts.rs     # 空：专家接口不上报它
-grep -rn '"plugins"\|wiki_index' crates/quill-server/src/*.rs      # 只剩 501 路由与检索测试
+# 7c 已结案：两张死表由迁移 0013 删除（Q104），复现见 7c 那行的两段命令
 ```
 
 ---
