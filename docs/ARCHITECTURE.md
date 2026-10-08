@@ -54,8 +54,12 @@ grep -rnE '^\s*(goose|octop)' crates/*/Cargo.toml Cargo.toml          # → 空
 Architectures》）＋ **ADR**（Nygard）＋ **DORA 四指标**。
 一句话：**「能不能交付」由门禁回答，不由人说。**
 
-现状缺口（实测，见 §1）：**无 `rust-toolchain.toml`（未固定 Rust 版本）**、
-**无 `deny.toml`（无供应链门禁）**、**`clippy`/`fmt` 刻意没进 CI**、**无 DORA 度量**。
+现状缺口（**2026-10-09 实测复核**）：~~无 `rust-toolchain.toml`~~（**已有**，Q001）、
+~~无 `deny.toml`~~（**已有**，Q002）、~~`clippy`/`fmt` 刻意没进 CI~~（**已进**，Q004/Q005，
+且 Q107 修好「装 Rust 那一步秒挂」之后 CI 才第一次真跑完）、**无 DORA 度量**（仍未做）。
+复现：`ls rust-toolchain.toml deny.toml` 两个都在；
+`grep -c "clippy\|fmt" .github/workflows/gates.yml` → 9。
+**改这段之前先跑这两条命令** —— 它曾把三条早已补齐的缺口挂在墙上很久。
 
 ---
 

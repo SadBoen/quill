@@ -10,6 +10,10 @@
 
 `node .provenance-check.mjs` 是这份文件的对照面：它把下面每一个 `file:line` 都真的打开核一遍。
 
+**反过来那一半在 [`docs/UPSTREAM-DIVERGENCES.md`](docs/UPSTREAM-DIVERGENCES.md)**（queue Q079）：
+哪些地方我们**知道上游怎么做却故意不那样做**，每条写清上游做法、「quill 怎么做」与**代价**。
+两份合起来才是完整的「跟上游对齐」交代 —— 只看这一份会把「我们没跟的部分」当成不存在。
+
 ---
 
 ## 怎么读这张表
