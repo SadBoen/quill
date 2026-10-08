@@ -136,7 +136,7 @@
 
 ## J. 文档与事实
 
-- [ ] Q091 · `docs/CODE-TRUTH.md` 随代码变化更新（每条带复现命令） · `docs/` · 抽查一致
+- [x] Q091 · `docs/CODE-TRUTH.md` 随代码变化更新（每条带复现命令） · `docs/` · **抽查完成 2026-10-08**：把总账里「代码里查出的真实缺陷」那组的复现命令重跑了一遍 —— #4 仍成立（`quill-cli` 声明 `quill-upgrade` 却零调用），按仓库纪律**删掉了那条依赖**（核实范围含 tests），并把状态改准（`quill-upgrade` 本身已不再零调用，Q039 接了它）；#5 的「26616 行」实测为 **28692 行**，改为实测数字 + 构成说明（内核三块已搬进 `quill-core` 7482 行，剩下的巨石是 `api_*` 与 `*_repo`）。#1–#3 是历史已修条目，#6/#7/7a–c 上几轮刚改过。门禁：build/test/clippy/fmt/layer/mojibake 全绿（提交 0ca159b）
 - [ ] Q092 · `docs/OCTOP-MIGRATION-INVENTORY.md` 的完成度随实现更新 · `docs/` · 抽查一致
 - [x] Q093 · `docs/ARCHITECTURE.md` 的 §1 现状随重构更新 · `docs/` · **已完成 2026-10-08**：§1.1 补 `quill-core` 层、把「quill-agent → quill-wiki 倒挂」改成**已修**（用 §1.1 自带命令实测）；§1.3 覆盖度表三行按落点改写（mcp_client 1213 / tools 1402 都已在 `quill-core`，对话循环标明「搬运清单已备 KERNEL-PORTS §4.1 / Q012」、状态机「已有未接线」）；§1.5 巨石清单按 `wc -l` 重排（最大 `api_extensions.rs` 2427）；§2 P-2 同步。**顺带修掉一条复现命令的假阳性**：依赖图命令原来扫整个 Cargo.toml，把 `[[bin]] name = "quill-mcp-stub"` 误读成依赖 `quill-mcp`（该 crate 不存在），改成只扫 `[dependencies]` 段并当场跑通（提交 1d7d961）
 - [ ] Q094 · 每个里程碑达成后，把新判据加进 `project/items.mjs` · `project/` · `status.mjs` 能判
