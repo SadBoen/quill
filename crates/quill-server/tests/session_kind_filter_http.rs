@@ -330,3 +330,33 @@ async fn kind_parameter_is_bound_not_interpolated() {
     let (status, _) = call(&app, "/api/sessions").await;
     assert_eq!(status, StatusCode::OK, "表必须还在");
 }
+
+/// 会话列表的**硬上限**（queue Q055）。
+///
+/// 侧栏读的就是这个接口，而会话是**会自动累积**的东西 —— 每聊一次就多一条。
+/// 没有上限在这里等于「聊得久了侧栏越来越慢、内存越吃越多」，而用户什么都没做错。
+/// `chat_repo::LIST_SQL_TAIL` 里写死 `LIMIT 100`（`LIST_LIMIT`），这条钉住它真的生效：
+/// 塞 101 条，回来必须**恰好** 100 条。
+///
+/// 为什么钉「恰好」而不是「≤100」：≤ 那种写法在「查询整个坏掉、只回 0 条」时也会通过。
+#[tokio::test]
+async fn the_session_list_is_capped_even_when_the_user_has_more() {
+    let (t, app) = fixture("session-list-cap");
+    let cap = quill_server::chat_repo::LIST_LIMIT;
+    assert!(cap > 0, "上限必须是个正数，否则这条测试没有意义");
+
+    // 塞 cap + 1 条。`seed_session` 的 seq 是 u8，cap = 100 时装得下。
+    for i in 0..=cap {
+        seed_session(&t.bridge(), i as u8, "solo", &format!("room-cap-{i}"));
+    }
+
+    let (status, v) = call(&app, "/api/sessions").await;
+    assert_eq!(status, StatusCode::OK, "列表必须能读：{v}");
+    let got = v["sessions"].as_array().expect("必须是数组").len();
+    assert_eq!(
+        got,
+        cap as usize,
+        "塞了 {} 条，列表必须被硬上限截到 {cap} 条（不无限返回）：拿到 {got}",
+        cap + 1
+    );
+}
