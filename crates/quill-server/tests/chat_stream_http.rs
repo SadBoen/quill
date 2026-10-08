@@ -651,3 +651,106 @@ async fn an_empty_content_is_rejected_before_any_stream_starts() {
         "错误必须说清是哪个字段不对：{body}"
     );
 }
+
+/// 第一轮流开始前**卡住**，直到测试放行。
+///
+/// 为什么要它：下面那条用例要证明的是「连接**已经断了之后**，这一轮照样落库」。
+/// 不卡住的话，「断开」与「模型开始干活」谁先谁后是赛跑 —— 用例会绿，但绿的
+/// 理由可能是「断开时答案早写完了」，那就什么都没测到。卡住之后顺序是确定的：
+/// 读到第一帧 → drop 掉连接 → 放行 → 模型才跑。
+#[derive(Debug)]
+struct GatedProvider {
+    inner: TwoRoundProvider,
+    /// 第一轮流开始时在它上面阻塞，直到测试 `send(())`。
+    release: Mutex<std::sync::mpsc::Receiver<()>>,
+    /// 只在第一轮卡；第二轮（最终答案）直接跑。
+    first: std::sync::atomic::AtomicBool,
+}
+
+impl Provider for GatedProvider {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn chat<'a>(&'a self, request: &'a ChatRequest) -> BoxFuture<'a, ChatResponse> {
+        self.inner.chat(request)
+    }
+
+    fn stream<'a>(&'a self, request: &'a ChatRequest) -> BoxFuture<'a, ProviderStream> {
+        if self.first.swap(false, Ordering::SeqCst) {
+            self.release
+                .lock()
+                .expect("锁")
+                .recv()
+                .expect("测试必须先放行，才可能等到结果");
+        }
+        self.inner.stream(request)
+    }
+
+    fn models<'a>(&'a self) -> BoxFuture<'a, Vec<ModelInfo>> {
+        self.inner.models()
+    }
+}
+
+/// 客户端在流中途断开（关掉页面、网络断）时，这一轮**不许丢**（queue Q082）。
+///
+/// 实现上这一轮跑在 `tokio::spawn` 出来的任务里，与连接**无关**：`Emitter::send`
+/// 在接收端已经走掉时返回 false 并**不当错误**，`finish_turn` 照样把助手消息落库。
+/// 所以用户重连或刷新之后，答案还在。
+///
+/// 它和 `the_stream_carries_every_frame_and_drops_the_tool_rounds_text` 是**一对** ——
+/// 那条一直读到流结束，所以「断开时会怎样」只有这一条看得见。
+///
+/// 多线程运行时是为了不让测试自己的阻塞式读库把后台任务饿死。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_client_that_disconnects_mid_stream_still_gets_its_answer_persisted() {
+    let t = TestDb::new("stream-disconnect");
+    seed_user(&t);
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let provider = Arc::new(GatedProvider {
+        inner: TwoRoundProvider::default(),
+        release: Mutex::new(release_rx),
+        first: std::sync::atomic::AtomicBool::new(true),
+    });
+    let app = state(&t, Some(provider.clone()));
+    let sid = create_session(app.clone()).await;
+
+    let resp = build_router(app)
+        .oneshot(req(
+            "POST",
+            &format!("/api/sessions/{sid}/messages/stream"),
+            Some(serde_json::json!({ "content": "帮我看看" })),
+        ))
+        .await
+        .expect("oneshot 失败");
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 第一帧（`user_message`）是**在 spawn 之前**同步发出的，所以模型还卡在闸门后面时
+    // 就能读到它 —— 这正是「用户看到自己那条消息后就把页面关了」。
+    let mut body = resp.into_body();
+    let first = body
+        .frame()
+        .await
+        .expect("至少该有一帧")
+        .expect("第一帧应当可读");
+    assert!(first.data_ref().is_some(), "第一帧应当带数据");
+    drop(body);
+
+    // 连接已经断了，现在才放模型跑。
+    release_tx.send(()).expect("放行失败");
+
+    // 有界轮询等它落库 —— 不用 sleep：dev-dependencies 里的 tokio 没开 `time` 特性。
+    let mut rows = Vec::new();
+    for _ in 0..500 {
+        rows = assistant_rows(&t, &sid);
+        if !rows.is_empty() {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        rows,
+        vec!["最终答案。".to_string()],
+        "断开连接不该让这一轮的结果丢掉；重连后用户必须还能看到答案"
+    );
+}

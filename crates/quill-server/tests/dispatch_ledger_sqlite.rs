@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use quill_adapters::{ExpertId, MemberId, MemberOutcome, MemberStatus, SessionId, UserId};
 use quill_agent::{
-    AgentError, DispatchKey, DispatchLedger, DispatchRecord, DispatchState, DispatchTask,
-    MemberRejectKind, RoundPrefix,
+    AgentError, BeginOutcome, DispatchKey, DispatchLedger, DispatchRecord, DispatchState,
+    DispatchTask, MemberRejectKind, RoundPrefix,
 };
 use quill_server::db::DbBridge;
 use quill_server::dispatch_ledger::{DispatchScope, SqlxDispatchLedger};
@@ -474,4 +474,98 @@ fn a_fresh_bridge_sees_the_dispatches_written_by_the_previous_one() {
         .expect("🔴 重启后派工记录必须还在（否则崩溃恢复无从谈起）");
     assert_eq!(got.state(), DispatchState::Pending);
     assert_eq!(got.member().as_str(), "cost-analyst-1");
+}
+
+/// 同一个派工键**并发** begin：只能有一个 `Created`，其余全是 `Existed`，且一个都不许报错。
+///
+/// 为什么要单独测（queue Q082）：`begin` 走的是
+/// `INSERT … ON CONFLICT DO NOTHING RETURNING …` —— 撞上冲突时**返回零行**，
+/// 实现必须把那零行解释成「别人先建了」，而不是「插入失败」。
+/// 顺序调用已经被 `begin_twice_returns_created_then_existed` 覆盖，但那是**同一个线程
+/// 一前一后**；并发下 N 次调用挤进同一条存储队列、顺序不定，只有真并发才看得见
+/// 「零行分支」被同时走到会不会出问题（以及有没有哪一次读到半截记录）。
+#[test]
+fn concurrent_begins_for_the_same_key_produce_exactly_one_created() {
+    let (_t, ledger, room) = fixture("dispatch-concurrent-begin", 1, 0x22, &["cost-analyst"]);
+    let ledger = Arc::new(ledger);
+    let record = DispatchRecord::pending(
+        key(u(1), &room, 0, "cost-analyst"),
+        member("cost-analyst", 1),
+    );
+
+    const N: usize = 8;
+    let gate = Arc::new(std::sync::Barrier::new(N));
+    let handles: Vec<_> = (0..N)
+        .map(|_| {
+            let ledger = Arc::clone(&ledger);
+            let gate = Arc::clone(&gate);
+            let record = record.clone();
+            std::thread::spawn(move || {
+                // 一起冲：尽量让 N 次 begin 同时落在存储队列里。
+                gate.wait();
+                ledger.begin(&record).expect("并发 begin 不许报错")
+            })
+        })
+        .collect();
+    let outcomes: Vec<BeginOutcome> = handles
+        .into_iter()
+        .map(|h| h.join().expect("线程不许 panic"))
+        .collect();
+
+    let created = outcomes.iter().filter(|o| o.is_created()).count();
+    assert_eq!(
+        created, 1,
+        "同一个键只能被创建一次，实际 Created={created}；全部结果：{outcomes:?}"
+    );
+    // 没有哪一次拿到一条被写坏或写岔的记录：N 个结果必须逐字段相同。
+    let first = outcomes[0].record().clone();
+    assert!(
+        outcomes.iter().all(|o| o.record() == &first),
+        "并发 begin 拿到的记录不一致（有人读到了半截或别的行）：{outcomes:?}"
+    );
+    assert_eq!(first.state(), DispatchState::Pending);
+    assert_eq!(first.key(), &key(u(1), &room, 0, "cost-analyst"));
+}
+
+/// 四个**不同**的键并发 begin：必须各建一次 —— 一个都不许被「冲突」吞掉。
+///
+/// 这是上一条的补集，抓的是相反方向的错：`ON CONFLICT DO NOTHING` 一旦**管得太宽**
+/// （比如派生行 id 少算了一个成员，四个键撞成同一行），表现就是「静默少记账」——
+/// 派工发出去了、台账里却没有，而顺序用例一条都发现不了（顺序下每次只有一个键）。
+#[test]
+fn concurrent_begins_for_distinct_keys_never_lose_a_dispatch() {
+    const MEMBERS: [&str; 4] = ["cost-analyst", "researcher", "writer", "reviewer"];
+    let (_t, ledger, room) = fixture("dispatch-concurrent-distinct", 1, 0x23, &MEMBERS);
+    let ledger = Arc::new(ledger);
+
+    let gate = Arc::new(std::sync::Barrier::new(MEMBERS.len()));
+    let handles: Vec<_> = MEMBERS
+        .iter()
+        .map(|name| {
+            let name: &str = name;
+            let ledger = Arc::clone(&ledger);
+            let gate = Arc::clone(&gate);
+            let record = DispatchRecord::pending(key(u(1), &room, 0, name), member(name, 1));
+            std::thread::spawn(move || {
+                gate.wait();
+                ledger.begin(&record).expect("并发 begin 不许报错")
+            })
+        })
+        .collect();
+    let outcomes: Vec<BeginOutcome> = handles
+        .into_iter()
+        .map(|h| h.join().expect("线程不许 panic"))
+        .collect();
+
+    let created = outcomes.iter().filter(|o| o.is_created()).count();
+    assert_eq!(
+        created,
+        MEMBERS.len(),
+        "四个不同的键必须各建一次；被当成冲突吞掉就等于丢了派工：{outcomes:?}"
+    );
+    assert_eq!(
+        ledger.inflight(&u(1)).expect("列在途").len(),
+        MEMBERS.len(),
+        "在途清单必须四个都在（少一个就是静默丢账）"
+    );
 }
