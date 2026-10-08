@@ -52,8 +52,24 @@ jobs:
       # 最高指示第 5 条把 `cargo fmt --check` 与 `cargo clippy -D warnings` 列为门禁的一部分。
       # 用 `@master` 且**不**给 `toolchain` 输入，是为了让它读仓库里的 rust-toolchain.toml ——
       # 否则会出现「本地钉 1.99.0、CI 跑浮动 stable」两边版本漂，门禁的绿就不是同一个绿的。
-      - name: 装 Rust（按 rust-toolchain.toml，含 rustfmt + clippy）
+      # 先自己把版本从 rust-toolchain.toml 里读出来，再喂给 action（queue Q107）。
+      # 原来只给 components 不给 toolchain，指望 action 自己去读仓库里的文件 ——
+      # 实测那一步在 runner 上 ~30 毫秒内失败、日志里只有 ##[error]Process completed
+      # with exit code 1.，其后的 20 多个步骤全部被跳过：也就是说**所有门禁在 CI 上
+      # 从未真正跑过**。版本仍只有 rust-toolchain.toml 一处来源（不在这里写第二遍）。
+      - name: 读出 rust-toolchain.toml 里固定的版本
+        id: tc
+        run: |
+          channel=$(awk -F'"' '/^channel/{print $2}' rust-toolchain.toml)
+          test -n "$channel" || { echo "rust-toolchain.toml 里读不到 channel"; exit 1; }
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "固定版本：$channel"
+
+      - name: 装 Rust（按 rust-toolchain.toml 读出的版本，含 rustfmt + clippy）
         uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.tc.outputs.channel }}
+          components: rustfmt, clippy
         with:
           components: rustfmt, clippy
 
