@@ -664,4 +664,86 @@ mod tests {
             }
         }
     }
+
+    /// **每一个错误都带「下一步」**（queue Q085）。这是接口契约的一部分：
+    /// 客户端只拿到可读说明与一个结构化字段，没有下一步指引的错误等于把用户丢在
+    /// 「失败了，然后呢？」里。这条测试把**全部**可构造的种类逐个过一遍，
+    /// 任何一类漏了文案（或文案退化成与 detail 相同）都会红。
+    ///
+    /// 五种由**调用方传 advice** 的种类（conflict / unprocessable /
+    /// upstream_unavailable / provider_rejected / tool_loop_exhausted）在这里只验
+    /// 「传了就照原样出去」；那五句**具体内容**是否有用，得在各调用点看
+    /// （本测试的 doc 在此明确：不假装它校验了内容质量）。
+    #[test]
+    fn every_error_kind_carries_a_next_step() {
+        let cases: Vec<(&str, ApiError)> = vec![
+            ("unauthorized", ApiError::unauthorized()),
+            ("forbidden", ApiError::forbidden("仅限 admin")),
+            ("not_found", ApiError::not_found("/api/nope")),
+            ("entity_not_found", ApiError::entity_not_found("会话不存在")),
+            ("bad_request", ApiError::bad_request("字段缺了")),
+            ("conflict", ApiError::conflict("名已存在", "换一个名字再试")),
+            (
+                "unprocessable",
+                ApiError::unprocessable("值不合法", "按示例改小一号"),
+            ),
+            (
+                "upstream_unavailable",
+                ApiError::upstream_unavailable("技能市场连不上", "检查网络后重试"),
+            ),
+            (
+                "provider_rejected",
+                ApiError::provider_rejected("模型回了 400", "按模型原话改请求"),
+            ),
+            (
+                "tool_loop_exhausted",
+                ApiError::tool_loop_exhausted("轮次用尽"),
+            ),
+            (
+                "storage_unavailable",
+                ApiError::storage_unavailable("库打不开"),
+            ),
+            (
+                "storage_unavailable_detail",
+                ApiError::storage_unavailable_detail("缺表"),
+            ),
+            (
+                "method_not_allowed",
+                ApiError::method_not_allowed("PATCH", "/api/sessions"),
+            ),
+            ("internal", ApiError::internal("内部错误")),
+            (
+                "too_many_requests",
+                ApiError::too_many_requests("太快了", 30),
+            ),
+            (
+                "service_unavailable",
+                ApiError::service_unavailable("还没起来"),
+            ),
+        ];
+
+        for (name, e) in &cases {
+            assert!(!e.code().is_empty(), "{name}: code 不能为空");
+            assert!(!e.detail().trim().is_empty(), "{name}: detail 不能为空");
+            let next = e.next_step();
+            assert!(
+                !next.trim().is_empty(),
+                "{name}: next_step 为空 —— 用户会拿到一句『失败了，然后呢？』"
+            );
+            assert_ne!(
+                next.trim(),
+                e.detail().trim(),
+                "{name}: next_step 与 detail 是同一句 —— 那等于没有下一步"
+            );
+            let st = e.status();
+            assert!(
+                st.is_client_error() || st.is_server_error(),
+                "{name}: 错误响应的状态码必须是 4xx/5xx，实际 {st}"
+            );
+        }
+
+        // 五种调用方传 advice 的种类：传什么就出什么（不许被内部再包一层改写）。
+        let handed = ApiError::conflict("名已存在", "换一个名字再试");
+        assert!(handed.next_step().contains("换一个名字再试"), "{handed:?}");
+    }
 }
