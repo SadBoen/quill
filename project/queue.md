@@ -162,6 +162,8 @@
 
 - [~] Q106（前半已完成，后半仍缺）· 给 `.i18n-check.mjs` 补 `--self-test`（其余门禁都有，唯独它没有），并把「每个门禁脚本都必须有**非 0 退出路径**」做成一条机器可跑的自检 · `.i18n-check.mjs` / `.scripts/` · **背景（2026-10-08 审计）**：Q074 修掉的那个缺陷是「脚本一个 `process.exit` 都没有 → 永远退 0 → CI 永远绿」；当场把其余 11 个门禁脚本逐个核了一遍：`.octop-baseline-check` `exit(1)`、`.library-check` `failures===0?0:1`、`.upstream-check`/`.provenance-check` `exitCode=1`、`.mojibake-check` `exit(1)`、`.vendor-freedom-check`/`.vendor-baseline-check` `exit(1)`、`.scripts/*-selftest` `exit(1)`，`.layer-guard` 与 `.api-compat-check` 上几轮用**注入违例**实测过退出 1 —— **除 i18n 外没有第二个漏网**。判据：一条自检脚本扫全部门禁，发现「既没有非 0 退出路径、也没有抛错」就直接红；`.i18n-check.mjs` 的逻辑要抽成函数才能自测（现在是一段内联流程）
 
+- [ ] Q107 · **`gates-core` 在第一步就挂：`装 Rust（按 rust-toolchain.toml，含 rustfmt + clippy）`** —— CI 上的门禁全绿从未成立 · `.github/workflows/gates.yml` / `rust-toolchain.toml` · **证据（2026-10-08 实测）**：`gh run view 37780028544` 显示 `门禁（可公开跑的部分）` 整个 job `in 6s` 失败，且失败点是第一个实质步骤「装 Rust」，其后的 20 多个步骤**全部被跳过**（`-`）；也就是说本仓库所有门禁在 CI 上**从未真正跑过**。**根因未验证**：需要 `gh run view <id> --job 113320501791 --log-failed` 看那一步的真实报错（本地无从复现：WSL 里的 rustc 就是 1.99.0）。候选方向：`dtolnay/rust-toolchain@master` 在我们这种「不给 toolchain 输入、靠仓库 rust-toolchain.toml + components」的用法下取不到工具链，或该版本在 runner 上不存在。**判据**：修好后一次 push 让 `gates-core` 绿（或如实说明为何仍需跳过某一步）
+
 ## 取用规则
 
 1. 从**最上面未完成**的取。**批次由用户指定**（默认 1~3 条；用户说「取 30 条」就按 30 条列批，
