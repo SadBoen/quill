@@ -138,7 +138,7 @@ goose 内核的参考源（`vendor/goose/crates/`，实测各 crate 规模）：
 | 工具执行 | `goose/agents/tool_execution.rs` | **`quill-core/src/tools.rs`**（1402 行，Q013 已搬，走 `ToolSources` 端口） | 部分（只读工具，写入类故意不做） |
 | 子 agent | `goose/agents/subagent_handler.rs` | `quill-adapters::MemberExecutor` + `member_executor.rs` | 第一版（`steer`/`abort` 未做） |
 | **上下文压缩** | `goose-context-management`（1156 行） | **已接线**（Q018）：内核 `quill-core/src/compaction.rs` 是纯逻辑，壳 `quill-server/src/chat_compaction.rs` 注入 provider 与 token 估算；`compaction_threshold_tokens` 真的被读 | 可用（估算口径，无真分词器；删工具响应的重试阶梯因缺可信分类器而不触发） |
-| **记忆** | `goose/session` + memory 相关 | **未做** | **未做** |
+| **记忆** | **`goose-mcp/src/memory/mod.rs`**（goose 的记忆是一个 MCP 扩展，不在 `goose/session`） | **已实现**（Q019）：内核 `quill-core/src/memory.rs` 是存储语义 + 四个工具；stdio 入口 `quill mcp memory`（`quill-cli`） | 可用（**未接线**：还没登记成一台 MCP 服务器，模型暂调不到） |
 | 权限 | `goose/permission` | `quill-control`（用户/角色，面向多租户，口径不同） | 需逐块比对 |
 | skills | `goose/skills` | `skills_repo.rs` / `skillhub.rs` / `api_extensions` | 部分 |
 | slash 命令 | `goose/slash_commands` | 需核 | 需核 |
@@ -154,7 +154,8 @@ grep -rniE 'compaction|context.management|记忆|memory' crates/*/src/ | grep -v
 ```
 
 **一句话结论**：quill 把 goose 的**接口形状**抄了，但把**内核逻辑塞进了 HTTP crate**；
-而 goose 里最重的两块（上下文压缩、记忆）**几乎为零**。
+goose 里最重的两块（上下文压缩、记忆）**原先几乎为零** —— 压缩 2026-10-08 已接线（Q018）、
+记忆 2026-10-09 已实现（Q019，未接线）。
 
 ### 1.4 quill-agent 不是内核
 
@@ -212,7 +213,7 @@ grep -rhoE '^(pub )?(async )?fn [a-z_]+' crates/*/src/**/*.rs | grep -oE 'fn [a-
 
 ## 2. 结构性问题（按危害排序）
 
-- **P-1 内核没有独立层（最重）**：按 `C1`，内核应**移植自 goose** 且独立成层；实际它散在 HTTP crate 里，且最重的两块（压缩/记忆）为零。**这是"地基不牢"的根**。
+- **P-1 内核没有独立层（最重）**：按 `C1`，内核应**移植自 goose** 且独立成层；实际它散在 HTTP crate 里，且最重的两块（压缩/记忆）为零。**这是"地基不牢"的根**。（**2026-10-08/09 起不再成立**：Q012–Q015 把对话循环/工具/MCP/provider 搬进 `quill-core`，Q017/Q018 补上压缩并接线，Q019 补上记忆 —— 剩下的是子 agent 执行模型与快照，见 queue。）
 - **P-2 分层泄漏**：`quill-server` 既 HTTP 又编排又 SQL 又内核（内核部分 2026-10-08 起已按 Q013/Q014/Q015 搬出三块）；`quill-agent → quill-wiki` 的倒挂**已修**（`.layer-guard.mjs` 的基线里现在只剩 `quill-upgrade → quill-backup` 同层依赖）。
 - **P-3 冗余**：id/hex 转换 6+ 处、取值助手 5+ 套、provider 组装 2 套、SQL 未收口。
 - **P-4 名实不符**：`quill-agent` 不装 agent（仍在）；`quill-upgrade` 零调用 —— **2026-10-08 已不再成立**（`/api/upgrade/prepare` 真走它的升级前备份守卫）；**2026-10-09 起 `POST /api/upgrade/apply` 补齐了产物管线（下载 + 校验 + 暂存 + 交出命令）**，只剩「进程内自替换」这一件设计上做不到的事（Q063）。
@@ -272,7 +273,7 @@ L0  quill-adapters  quill-store  quill-provider
 | 工具执行 | `quill-core` | `goose/agents/tool_execution.rs` | L4 内联 |
 | MCP | `quill-core` | `goose/agents/mcp_client.rs`、`goose-mcp` | L4 内联 |
 | 上下文压缩 | `quill-core` | **`goose-context-management`** | 自创算法 |
-| 记忆 | `quill-core` | `goose/session` 相关 | 自创 |
+| 记忆 | `quill-core`（2026-10-09 落地：`src/memory.rs`，stdio 入口 `quill mcp memory`） | **`goose-mcp/src/memory/mod.rs`**（原写「`goose/session` 相关」是**错的** —— goose 的记忆是 `goose-mcp` 里的一个 MCP 扩展） | 自创 |
 
 ---
 
@@ -313,7 +314,7 @@ L0  quill-adapters  quill-store  quill-provider
 |---|---|---|
 | P1-1 | 建 `quill-core` 并搬运内核逻辑（D1-a 第一步） | 纯重构：对话循环 / 工具 / MCP / provider 组装 |
 | P1-2 | 照 `goose-context-management` 实现上下文压缩 | 当前只有配置字段、零实现 |
-| P1-3 | 记忆 | 迁移清单里最重的一块 |
+| P1-3 | 记忆 | 迁移清单里最重的一块（**2026-10-09 已实现，Q019**：`quill-core/src/memory.rs` + `quill mcp memory`；未接线） |
 | P1-4 | 内核状态机 / 快照 / 重试（照 `goose/agents/`） | 长程任务不中断的底子 |
 | P1-5 | 逐块比对 provider 移植覆盖度，合并两套组装 | 消除 §1.6 的 provider 冗余 |
 
@@ -340,7 +341,7 @@ for d in vendor/goose/crates/*/; do n=$(basename "$d"); \
   printf "%-24s %6s\n" "$n" "$(cat "$d"/src/*.rs 2>/dev/null | wc -l)"; done
 ls vendor/goose/crates/goose/src/agents/
 
-# 内核缺位：压缩/记忆
+# 内核能力（压缩 Q018 / 记忆 Q019 都已落地，不再是「缺位」）
 grep -rniE 'compaction|context.management|记忆|memory' crates/*/src/ | grep -v test
 
 # 巨石

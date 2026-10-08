@@ -16,12 +16,22 @@ publish = false
 quill-adapters = { path = "../quill-adapters" }
 quill-provider = { path = "../quill-provider" }
 
-# rmcp 是 MCP 协议客户端，`vendor/goose` 的 `mcp_client.rs` 用的是同一族 API
-# （goose 也用 rmcp），移植时按 goose 的调用序列照抄，见 `src/mcp_client.rs` 头注。
-# `default-features = false`：默认那组带 server / macros / base64，客户端用不上。
+# rmcp 是 MCP 协议层，`vendor/goose` 的 `mcp_client.rs` 与 `goose-mcp` 用的是同一族 API
+# （goose 也用 rmcp），移植时按 goose 的调用序列照抄，见 `src/mcp_client.rs` 与
+# `src/memory.rs` 的头注。
+#
+# `client` + `transport-child-process` 是客户端侧（拉起 stdio 服务器）。
+# `server` + `macros` + `transport-io` 是**记忆**要的（queue Q019）：goose 的记忆是一个
+# **MCP 服务器**（`goose-mcp/src/memory/mod.rs` 用 `#[tool_router]` / `#[tool]`），
+# 照抄它就必须能起服务器；`transport-io` 给 `stdio()`，对上 goose 的 `goose mcp memory`
+# 那条 stdio 入口。这几个 feature 只是把 rmcp 自己的可选模块打开（schemars / rmcp-macros
+# 等），**不是新增第三方依赖**。
 rmcp = { version = "3.5.1", default-features = false, features = [
     "client",
     "transport-child-process",
+    "server",
+    "macros",
+    "transport-io",
 ] }
 
 tokio = { version = "1", features = [
@@ -31,6 +41,12 @@ tokio = { version = "1", features = [
     "io-util",
 ] }
 serde_json = "1"
+# 记忆的工具参数（`src/memory.rs`）要 `#[derive(Serialize, Deserialize, JsonSchema)]`。
+# 上游 `goose-mcp` 也直接依赖 serde 与 schemars（它的 `Cargo.toml` 里两者都在），
+# 所以这不是额外引入 —— 是照抄那份模块必须有的两个类型层依赖。
+# 版本对齐 rmcp 3.5.1 自己的要求（serde 1.0 / schemars 1.0），不另立版本。
+serde = { version = "1", features = ["derive"] }
+schemars = "1"
 
 # `/models` 探测要发 HTTP（Q015 把探测从壳搬进来）：内核与上游模型端点打交道是
 # 它的本职，goose 的 providers 也自带 HTTP 客户端。

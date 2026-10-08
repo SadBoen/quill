@@ -28,6 +28,9 @@ quill-backup = { path = "../quill-backup" }
 # CLI 这边一次都没用过 —— 「声明了没人用」正是 Cargo.toml 里记的那类空壳。
 
 quill-server = { path = "../quill-server" }
+# `quill mcp memory` 直接调内核的记忆服务器（`quill_core::memory::serve_stdio`）。
+# 内核是 L3、CLI 是 L5，依赖向下，层次守卫认可。
+quill-core = { path = "../quill-core" }
 
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 sqlx = { version = "0.8", default-features = false, features = [
@@ -37,6 +40,9 @@ sqlx = { version = "0.8", default-features = false, features = [
 sha2 = "0.10"
 
 [dev-dependencies]
+# `tests/mcp_memory_stdio.rs` 手写 JSON-RPC 跟 `quill mcp memory` 这个子进程对话，
+# 用它拼请求、解响应（与 `quill-server/src/bin/mcp_stub.rs` 一个路数）。
+serde_json = "1"
 
 [lints.rust]
 unsafe_code = "forbid"

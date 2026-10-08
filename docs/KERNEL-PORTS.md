@@ -193,3 +193,47 @@ cargo test --workspace                                                          
 4. 内核侧补假实现测试；真库覆盖搬到壳侧集成测试；
 5. 门禁：`cargo test --workspace` **总数不减**、`clippy -D warnings` 退出 0、`fmt --check` 退出 0；
 6. 提交信息写清「哪些调用点从壳改成了端口」「哪些测试搬到了哪一侧」。
+
+---
+
+## 6. 记忆（Q019，2026-10-09 落地）
+
+**它不是「端口」这一类搬运** —— 记忆是 goose 的**一个内置 MCP 扩展**，不是从
+`quill-server` 搬过来的现有逻辑。所以这一节记的是**从哪里抄、抄成什么样**。
+
+### 6.1 上游长什么样
+
+`vendor/goose/crates/goose-mcp/src/memory/mod.rs`（851 行，goose v1.53.0）：
+`MemoryServer` 是一个 rmcp 服务器，四个工具
+（`remember_memory` / `retrieve_memories` / `remove_memory_category` /
+`remove_specific_memory`），背后是**按分类落盘的 `.txt`**（一分类一文件；
+一次 `remember` 追加「可选 `# 标签` 行 + 正文 + 空行」；一次 `retrieve` 按空行切条）。
+goose 把它登记进 `goose-mcp/src/lib.rs` 的 `BUILTIN_EXTENSIONS`，有两条入口：
+**进程内**（`goose/src/agents/extension_manager/builtin.rs:19-33` 的
+`tokio::io::duplex`）与 **stdio**（`goose mcp memory`，
+`goose-mcp/src/mcp_server_runner.rs:36-49`）。
+
+### 6.2 quill 抄成什么样
+
+- **落点**：`crates/quill-core/src/memory.rs`（存储语义 + 四个工具 + 分类名安全边界 +
+  全局记忆拼进 instructions）。
+- **stdio 入口**：`quill mcp memory`（`crates/quill-cli/src/main.rs` 的 `run_mcp`），
+  对应上游的 `goose mcp memory`。**只走 stdio**：quill 的 `mcp_client` 只铺了 stdio，
+  进程内 duplex 那条没有对应实现（记进 `docs/UPSTREAM-DIVERGENCES.md` A6）。
+- **为什么在 `quill-core`**：`docs/ARCHITECTURE.md §3.3` 的映射表里「MCP」本来就
+  归 `quill-core`（上游列的是 `goose/agents/mcp_client.rs`、`goose-mcp`）。
+- **依赖形状**：为它把 rmcp 的 `server` / `macros` / `transport-io` 三个 feature 打开，
+  并直接依赖 `serde` / `schemars`（上游 `goose-mcp` 的 `Cargo.toml` 里两者都在）。
+  **都不是新增第三方依赖**，是把 rmcp 自己的可选模块打开。
+
+### 6.3 还没做（如实记）
+
+- **记忆还没接进任何一轮对话**：没有任何地方把 `quill mcp memory` 登记成一台 MCP
+  服务器，模型现在还调不到它。与 Q017/Q020/Q022 同一状态（内核逻辑先落地、接线另记）。
+
+### 6.4 判据复现（2026-10-09 实测）
+
+```bash
+cargo test -p quill-core --lib memory          # → 13 passed / 0 failed
+cargo test -p quill-cli --test mcp_memory_stdio # → 1 passed / 0 failed（真子进程 + 手写 JSON-RPC）
+```

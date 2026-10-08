@@ -56,6 +56,8 @@ pub const USAGE: &str = r#"quill —— Quill 个人/团队 Agent 平台
   wiki show <页面名>  打印一个页面的内容
   backup <目标目录>    做一次一致性备份（VACUUM INTO）
   restore <备份目录>   从备份恢复（需要 --yes 确认）
+  mcp memory          在 stdio 上跑一台 MCP 服务器：记忆（照 goose 的 `goose mcp memory`）
+                      —— 给 MCP 客户端（含 quill 自己）当子进程拉起，不给人手动跑
 
 全局参数（放在命令前后都行）：
   --as <用户名>       以哪个用户身份操作（默认 alice）

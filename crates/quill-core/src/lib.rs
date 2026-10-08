@@ -23,6 +23,10 @@ pub use warning::Warning;
 pub mod digest;
 pub mod mcp;
 pub mod mcp_client;
+/// 记忆：照 `vendor/goose/crates/goose-mcp/src/memory/mod.rs` 移植的
+/// **memory MCP 扩展**（四个工具 + 按分类落盘的存储 + 分类名安全边界）。
+/// 这是「记忆」在 quill 里的第一处实现（queue Q019）；stdio 入口是 `quill mcp memory`。
+pub mod memory;
 pub mod retry;
 pub mod state_machine;
 /// 工具执行：内置专家工具、SKILL 即工具、MCP 工具挂载（Q013 搬入）。

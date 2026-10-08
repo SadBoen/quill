@@ -91,6 +91,35 @@ ASCII 4 字符 1 token、非 ASCII 1 字符 1 token；内核侧 `TokenEstimator`
 
 ---
 
+### A6. 记忆（memory）：逻辑照抄，**只走 stdio**，且尚未接进对话
+
+**上游**：goose 把记忆做成一个**内置 MCP 扩展** —— `goose-mcp/src/lib.rs` 的
+`BUILTIN_EXTENSIONS` 里 `memory` 一项，四个工具
+（`remember_memory` / `retrieve_memories` / `remove_memory_category` /
+`remove_specific_memory`），背后是按分类落盘的 `.txt`。它有一条**进程内**路径
+（`vendor/goose/crates/goose/src/agents/extension_manager/builtin.rs:19-33` 用
+`tokio::io::duplex` 起服务器），也有一条 **stdio** 路径
+（`goose mcp memory`，`vendor/goose/crates/goose-mcp/src/mcp_server_runner.rs:36-49`）。
+
+**quill**：`crates/quill-core/src/memory.rs` 照抄了那套存储语义与四个工具
+（含分类名的安全边界、全局记忆拼进 instructions），stdio 入口是
+`quill mcp memory`（`crates/quill-cli/src/main.rs` 的 `run_mcp`）。
+
+**为什么只走 stdio**：quill 的 `mcp_client` **只铺了 stdio 一种传输**
+（`crates/quill-core/src/mcp_client.rs` 头注），进程内 duplex 那条没有对应实现。
+照 goose 的 stdio 支走，功能等价、形状不同，不必为此先改传输层。
+
+**代价 / 还没做的**：
+- **记忆还没接进任何一轮对话** —— 没有任何地方把 `quill mcp memory` 登记成一台
+  MCP 服务器，模型现在还调不到它。与 Q017（压缩）/Q020（状态机）/Q022（重试）
+  同一状态：内核逻辑先落地，接线另记。
+- 本地目录是 `.quill/memory`（上游 `.goose/memory`）；全局目录用
+  `default_global_memory_dir()` 现算，**没引 goose 用的 `etcetera`**。
+- `remove_specific_memory` 的删除口径是「内容**包含**」而不是「相等」（照抄上游，
+  未收紧）—— 给一段更短的子串会连带删掉所有含它的条目。
+
+---
+
 ## B. 外壳侧（对 octop）
 
 ### B1. 团队派工会话（`kind='team_leader'`）：**自创**，octop 没有这一层
@@ -235,6 +264,11 @@ grep -n "fn finish_turn" crates/quill-server/src/api_chat.rs
 
 # A5：零读写的列
 grep -c "checkpoint_key\|error_state\|replan_count" crates/quill-server/src/*.rs
+
+# A6：记忆在内核、stdio 入口在 CLI、传输只有 stdio
+grep -n "pub fn remember\|pub fn retrieve" crates/quill-core/src/memory.rs
+grep -n "run_mcp" crates/quill-cli/src/main.rs
+grep -n "只铺了 stdio" crates/quill-core/src/mcp_client.rs
 
 # B1：派工记账会话（建它的是 teams_repo，不是 api_teams —— 这条命令原来是错的，已改）
 grep -c "team_leader" crates/quill-server/src/api_chat.rs crates/quill-server/src/teams_repo.rs
