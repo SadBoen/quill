@@ -23,20 +23,20 @@
 - [x] Q005 · 把 `cargo clippy --workspace --all-targets -- -D warnings` 接进 CI（现在刻意没跑）· CI · 工作流里有这一步且退出 0
 - [x] Q006 · `api_chat` 内联 SQL 收口到 repo：**会话域已完成**（22 → 13 条，收进新模块 `chat_repo`）· `crates/quill-server/src/chat_repo.rs`
 - [x] Q006b · `api_chat` 的**消息读取** SQL 收口到 `chat_repo`（13 → 10 条）：`list_messages` / `last_assistant_input_tokens` / `dialog_content_chars` · `chat_repo.rs` · 已生效
-- [ ] Q006c · `api_chat` 剩余 **10 条**内联 SQL（`metrics` / `usage` 聚合、`prepare_turn` 发送路径的读与写）继续收口 · `crates/quill-server/src/` · 该文件内 `sqlx::query` 计数降到 0
-- [ ] Q007 · 按 `BACKLOG.md` B0-4 定 `need_str`/`opt_str` 的规范语义并合并 5+3 份 · `crates/quill-server/src/jsonx.rs` · 只剩一份定义，且补了钉住新语义的测试
+- [x] Q006c · `api_chat` 剩余 **10 条**内联 SQL（`metrics` / `usage` 聚合、`prepare_turn` 发送路径的读与写）继续收口 · `crates/quill-server/src/` · **已完成 2026-10-08**：该文件 `sqlx::query` 计数 10 → 0（`grep -c 'sqlx::query' crates/quill-server/src/api_chat.rs`）；metrics/usage 与发送路径读写在 `chat_repo`，专家人格读在 `experts_repo`，`ensure_session` 改用早已存在的 `chat_repo::session_exists`；`chat_repo` 补 8 条钉 SQL 的测试（提交 ed4e60e）
+- [x] Q007 · 按 `BACKLOG.md` B0-4 定 `need_str`/`opt_str` 的规范语义并合并 5+3 份 · `crates/quill-server/src/jsonx.rs` · **已完成 2026-10-08**：规范语义 = trim + 拒空串 + 带类型名 + 带位置（`where_`）；6 个文件里的 5 份 `need_str` + 3 份 `opt_str` + 1 份 `req_str` 全删，jsonx 只剩一份；41 个调用点补 `where_`；补 7 条钉语义测试（提交 3507fec）
 - [ ] Q008 · `quill-server` 拆分：把 `api_*` 之外的通用件（`error.rs`/`db.rs`/`state.rs`）之外的巨石按域拆 crate 或子模块 · `crates/quill-server/src/` · 单文件上限显著下降且测试全绿
-- [ ] Q009 · 给 `quill-adapters` / `quill-domain` / `quill-store` 加「不许依赖上层」的编译期守卫（如文档 + CI 检查）· CI · 违反时 CI 报红
-- [ ] Q010 · 用 `cargo-semver-checks` 或等价手段盯公开 API 兼容 · CI · 至少在 `quill-adapters` 上跑起来
+- [x] Q009 · 给 `quill-adapters` / `quill-domain` / `quill-store` 加「不许依赖上层」的编译期守卫（如文档 + CI 检查）· CI · **已完成 2026-10-08**：`.layer-guard.mjs`（依赖只能向下 + 基线清单：新违例报红、陈旧条目也报红；自测 10 条；反向验证实测报红）+ 进 gates-core（提交 9ebfeae）
+- [x] Q010 · 用 `cargo-semver-checks` 或等价手段盯公开 API 兼容 · CI · **已完成 2026-10-08（选了等价手段）**：cargo-semver-checks v0.51.0 本机装过并试过，默认模式因全仓 `publish = false` 不可用（`quill-adapters not found in registry`，详见 `.api-compat-check.mjs` 头注）；改为提交在案的文本基线 `docs/api-baseline/quill-adapters.txt` + 检查脚本（自测 11 条，反向验证实测报红）（提交 9ebfeae）
 
 ## B. 内核 `quill-core`（依最高指示第 3 条：抄 goose）
 
-- [ ] Q011 · 新建 `crates/quill-core`（空壳 + 一行职责说明）· `crates/quill-core/` · `cargo build -p quill-core` 通过
-- [ ] Q012 · 把对话循环从 `api_chat.rs` 搬进 `quill-core`（**原样搬运**，行为不变）· `quill-core` · 测试数量不减、全绿
-- [ ] Q013 · 把 `tools.rs` 搬进 `quill-core` · 同上 · 同上
-- [ ] Q014 · 把 `mcp_client.rs` 搬进 `quill-core` · 同上 · 同上
-- [ ] Q015 · 把 provider 组装（`llm_providers.rs`）搬进 `quill-core`，与 `quill-provider` 合并成一套 · 同上 · provider 组装只剩一套
-- [ ] Q016 · 每搬一块，在文件头标注「移植自 `vendor/goose/...` 的哪个文件」· `quill-core` · 头部注释有出处
+- [x] Q011 · 新建 `crates/quill-core`（空壳 + 一行职责说明）· `crates/quill-core/` · **已完成 2026-10-08**：`cargo build -p quill-core` 通过（提交 6e84be1）
+- [ ] Q012 · 把对话循环从 `api_chat.rs` 搬进 `quill-core`（**原样搬运**，行为不变）· `quill-core` · 测试数量不减、全绿 **（卡在 2026-10-08：对话循环直接调用 `state::AppState` / `db::DbBridge` 与 `chat_repo`/`experts_repo`/`llm`/`tools`，而 `quill-core` 不能依赖 `quill-server` —— 搬之前必须先给内核定「壳侧端口」trait（候选四类：会话历史读写 / provider 取用 / 工具注册表 / 用量记录）并由 server 实现。这是设计任务，不是机械搬运；本轮只搬了唯一不依赖壳的 mcp_client。下一步：先写端口设计 + 一个端口化的最小搬块）**
+- [ ] Q013 · 把 `tools.rs` 搬进 `quill-core` · 同上 · 同上 **（卡在 2026-10-08：同 Q012 的根因 —— `tools.rs` 直接持有 `Arc<AppState>`，并调用 `api_experts::list_for_tools` / `skills_repo` / `mcp_repo` / `api_extensions`（技能正文与目录）。Q014 已示范「内核自己拥有数据模型 + 壳 re-export」（`McpServerRow`），tools 需要的是同一招的**端口版**）**
+- [x] Q014 · 把 `mcp_client.rs` 搬进 `quill-core` · 同上 · **已完成 2026-10-08**：git mv 原样搬运、行为未改，测试随文件走（`quill-core` 12 条全绿；`quill-server` 相应 −13）；`McpServerRow` 一并搬进内核、`mcp_repo` 改为 re-export（提交 6e84be1）
+- [ ] Q015 · 把 provider 组装（`llm_providers.rs`）搬进 `quill-core`，与 `quill-provider` 合并成一套 · 同上 · provider 组装只剩一套 **（卡在 2026-10-08：`llm_providers.rs` 里混着「存储口径」（6 条内联 SQL + `db`/`state` 依赖）与「provider 组装」；要合并成一套必须先定组装层接口（`quill-provider` 已是叶子 crate），存储部分留成 repo。属设计任务）**
+- [x] Q016 · 每搬一块，在文件头标注「移植自 `vendor/goose/...` 的哪个文件」· `quill-core` · **已生效 2026-10-08（对已搬的两块）**：`mcp_client.rs` 与 `mcp.rs` 头部均写明 `vendor/goose/crates/goose/src/agents/mcp_client.rs`（含行数与版本）；`lib.rs` 把「每块都要标出处」写成纪律。后续每搬一块继续执行
 - [ ] Q017 · 照 `vendor/goose/crates/goose-context-management` 实现**上下文压缩**（现在只有配置字段）· `quill-core` · 超阈值真的发生压缩，用量前后连续
 - [ ] Q018 · 压缩阈值接进对话路径，并在界面上**如实反映是否生效** · `quill-core` + `ui/web` · 不再是「只存不读」
 - [ ] Q019 · 照 goose 实现**记忆**（当前为零）· `quill-core` · 有可验证的读写回路
