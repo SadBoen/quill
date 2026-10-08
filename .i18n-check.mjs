@@ -1,5 +1,11 @@
 // 一次性核查脚本：比对 ui/web 各 t() 调用点传入的占位符 与 语言包字符串里的占位符。
-// 用法：node .i18n-check.mjs
+// 用法：node .i18n-check.mjs [--self-test]
+//
+// 2026-10-09（queue Q106）：逻辑抽成导出的纯函数并补 `--self-test`。
+// 为什么必须能自测：这道门禁在 2026-10-08 之前**一个 `process.exit` 都没有** ——
+// 它把问题打印得很详细，然后照样退 0，CI 里跑的就是它（见文件尾的退出码注释）。
+// 一个「从没红过」的判定与一个「永远绿」的判定长得一模一样，光看 CI 分不出来；
+// 所以它得能证明自己会红：合成语言包 + 合成调用点，把四种问题各造一个出来。
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -12,15 +18,13 @@ const ROOT = dirname(fileURLToPath(import.meta.url))
 const SRC = join(ROOT, 'ui', 'web', 'src')
 const RES = join(SRC, 'i18n', 'resources.ts')
 
-const raw = readFileSync(RES, 'utf8')
-const zhStart = raw.indexOf('export const zhCN')
-const zhSrc = raw.slice(zhStart)
-
 // ---- 解析出 zh 语言包：ns.key(可任意深) -> 字符串 ----
 // 早先这里是逐行正则，只认两层（ns.key），于是 chat.sidebar.label 这类嵌套 key
 // 全被误报成「语言包缺 key」。改成平衡括号抠出对象字面量后真的求值，深度不再受限。
-const zh = {}
-{
+export function parseZhPack(raw) {
+  const zhStart = raw.indexOf('export const zhCN')
+  const zhSrc = raw.slice(zhStart)
+  const zh = {}
   const start = zhSrc.indexOf('translation: {')
   if (start < 0) throw new Error('resources.ts 里找不到 translation: {')
   const open = zhSrc.indexOf('{', start)
@@ -44,24 +48,12 @@ const zh = {}
     }
   }
   flatten(tree, '')
+  return zh
 }
 
-// ---- 收集所有源码文件里的 t('ns.key', { ... }) 调用 ----
-function walk(dir, out = []) {
-  for (const e of readdirSync(dir)) {
-    const p = join(dir, e)
-    if (statSync(p).isDirectory()) walk(p, out)
-    else if (/\.tsx?$/.test(p)) out.push(p)
-  }
-  return out
-}
-
-const problems = []
-const seen = new Set()
-for (const file of walk(SRC)) {
-  if (file.endsWith(join('i18n', 'resources.ts'))) continue
-  const text = readFileSync(file, 'utf8')
-  // 平衡括号地抓 t('key', { ...对象... })
+// ---- 收集源码里的 t('ns.key', { ... }) 调用（平衡括号地抓对象字面量）----
+export function collectCalls(text) {
+  const out = []
   const re = /t\(\s*'([A-Za-z0-9_.]+)'\s*,\s*\{/g
   let m
   while ((m = re.exec(text))) {
@@ -87,7 +79,16 @@ for (const file of walk(SRC)) {
     const shorthand = [...shorthandSrc.matchAll(/(?:^|[{,\s])([A-Za-z0-9_]+)\s*(?=[,}]|$)/g)].map((x) => x[1])
     const passed = new Set([...kv, ...shorthand])
     passed.delete('defaultValue')
+    out.push({ key, line, passed })
+  }
+  return out
+}
 
+// ---- 逐条比对：语言包要的占位符 ↔ 调用点传的参数 ----
+export function compare(zh, calls) {
+  const problems = []
+  const seen = new Set()
+  for (const { key, line, passed, file } of calls) {
     const str = zh[key]
     if (str === undefined) {
       problems.push({ kind: '语言包缺 key', file, line, key, detail: '' })
@@ -112,35 +113,133 @@ for (const file of walk(SRC)) {
     }
     seen.add(key)
   }
+  return { problems, seen }
 }
 
-console.log(`zh 语言包 key 总数: ${Object.keys(zh).length}`)
-console.log(`扫到的 t() 调用点涉及 key 数: ${seen.size}`)
-console.log(`问题数: ${problems.length}\n`)
-const byKind = {}
-for (const p of problems) (byKind[p.kind] ??= []).push(p)
-for (const [k, list] of Object.entries(byKind)) {
-  console.log(`### ${k} (${list.length})`)
-  for (const p of list) {
-    console.log(`  ${p.file.replace(SRC, 'src')}:${p.line}  ${p.key}  ${p.detail}`)
+function walk(dir, out = []) {
+  for (const e of readdirSync(dir)) {
+    const p = join(dir, e)
+    if (statSync(p).isDirectory()) walk(p, out)
+    else if (/\.tsx?$/.test(p)) out.push(p)
   }
-  console.log('')
+  return out
 }
-if (problems.length === 0) console.log('OK: 所有 t() 调用的占位符与 zh 语言包完全一致')
 
-// ---- 退出码：**有问题就必须非 0**（2026-10-08 修，queue Q074）------------------
-// 此前这个脚本里一个 `process.exit` 都没有：它把问题逐条打印得很清楚，然后**照样
-// 退出 0**。CI 里跑的是 `node .i18n-check.mjs`，于是「漏翻译会报红」是句空头承诺 ——
-// 打印得再详细，流水线也永远是绿的（最高指示第 5 条要的是「判据机器可跑」，
-// 一个永远退 0 的判据不是判据）。
-//
-// 实测（本次修的当天）：把一条 zh 文案的 `{{count}}` 改成 `{count}`，
-// 脚本如实报出「死参数 (1)」而退出码是 0；加上这两行之后同一次注入返回 1。
-if (problems.length > 0) {
-  console.error(
-    `\nFAIL: i18n 有 ${problems.length} 个问题（见上）。\n` +
-      '下一步：按每一行的 `文件:行 key 说明` 逐个改；' +
-      '若问题在语言包侧，改 `ui/web/src/i18n/resources.ts`。',
-  )
-  process.exit(1)
+/** 走真实文件系统，跑一遍完整检查。 */
+export function runCheck(srcDir = SRC, resPath = RES) {
+  const zh = parseZhPack(readFileSync(resPath, 'utf8'))
+  const calls = []
+  for (const file of walk(srcDir)) {
+    if (file.endsWith(join('i18n', 'resources.ts'))) continue
+    for (const c of collectCalls(readFileSync(file, 'utf8'))) calls.push({ ...c, file })
+  }
+  const { problems, seen } = compare(zh, calls)
+  return { zhCount: Object.keys(zh).length, seenCount: seen.size, problems }
 }
+
+// ---- 自测：合成语言包 + 合成调用点，四种问题各造一个 ----
+function selfTest() {
+  const zhOf = (body) => parseZhPack(`export const zhCN = { translation: ${body} }`)
+  const cases = [
+    {
+      label: '嵌套 key 能解析（chat.sidebar.label 不该被报成缺 key）',
+      run: () => zhOf(`{ chat: { sidebar: { label: '会话' } } }`)['chat.sidebar.label'] === '会话',
+    },
+    {
+      label: '占位符全传 —— 不报问题',
+      run: () => compare(zhOf(`{ a: '共 {{count}} 条' }`), collectCalls(`t('a', { count: n })`)).problems.length === 0,
+    },
+    {
+      label: '少传占位符 —— 必须报「没传」',
+      run: () => {
+        const p = compare(zhOf(`{ a: '共 {{count}} 条' }`), collectCalls(`t('a', {})`)).problems
+        return p.length === 1 && p[0].kind === '语言包要占位符但调用点没传'
+      },
+    },
+    {
+      label: '多传参数 —— 必须报「死参数」',
+      run: () => {
+        const p = compare(zhOf(`{ a: '没有占位符' }`), collectCalls(`t('a', { foo: 1 })`)).problems
+        return p.length === 1 && p[0].kind === '调用点传了但语言包用不到（死参数）'
+      },
+    },
+    {
+      label: '语言包缺 key —— 必须报出来',
+      run: () => {
+        const p = compare(zhOf(`{ a: 'x' }`), collectCalls(`t('b', {})`)).problems
+        return p.length === 1 && p[0].kind === '语言包缺 key'
+      },
+    },
+    {
+      label: 'defaultValue 里的 {id} 不算传参（不报假阳性）',
+      run: () =>
+        compare(
+          zhOf(`{ a: '照着做' }`),
+          collectCalls(`t('a', { defaultValue: 'PATCH /api/sessions/{id}。' })`),
+        ).problems.length === 0,
+    },
+    {
+      label: 'ES6 简写 { name } 算传参',
+      run: () =>
+        compare(zhOf(`{ a: '你好 {{name}}' }`), collectCalls(`t('a', { name })`)).problems.length === 0,
+    },
+    {
+      label: '扫真实仓库 —— 调用点不是 0（防「路径写错→扫空→永远绿」）',
+      run: () => runCheck().seenCount > 0,
+    },
+  ]
+  let pass = 0
+  for (const c of cases) {
+    let got
+    try {
+      got = c.run()
+    } catch (e) {
+      got = `抛错：${e.message}`
+    }
+    if (got === true) {
+      pass++
+      console.log(`  ok   ${c.label}`)
+    } else {
+      console.error(`  FAIL ${c.label}：${got}`)
+    }
+  }
+  console.log(`\n自测结果：${pass} 通过 / ${cases.length - pass} 失败`)
+  return pass === cases.length ? 0 : 1
+}
+
+function main() {
+  const { zhCount, seenCount, problems } = runCheck()
+  console.log(`zh 语言包 key 总数: ${zhCount}`)
+  console.log(`扫到的 t() 调用点涉及 key 数: ${seenCount}`)
+  console.log(`问题数: ${problems.length}\n`)
+  const byKind = {}
+  for (const p of problems) (byKind[p.kind] ??= []).push(p)
+  for (const [k, list] of Object.entries(byKind)) {
+    console.log(`### ${k} (${list.length})`)
+    for (const p of list) {
+      console.log(`  ${p.file.replace(SRC, 'src')}:${p.line}  ${p.key}  ${p.detail}`)
+    }
+    console.log('')
+  }
+  if (problems.length === 0) console.log('OK: 所有 t() 调用的占位符与 zh 语言包完全一致')
+
+  // ---- 退出码：**有问题就必须非 0**（2026-10-08 修，queue Q074）------------------
+  // 此前这个脚本里一个 `process.exit` 都没有：它把问题逐条打印得很清楚，然后**照样
+  // 退出 0**。CI 里跑的是 `node .i18n-check.mjs`，于是「漏翻译会报红」是句空头承诺 ——
+  // 打印得再详细，流水线也永远是绿的（最高指示第 5 条要的是「判据机器可跑」，
+  // 一个永远退 0 的判据不是判据）。
+  //
+  // 实测（本次修的当天）：把一条 zh 文案的 `{{count}}` 改成 `{count}`，
+  // 脚本如实报出「死参数 (1)」而退出码是 0；加上这两行之后同一次注入返回 1。
+  if (problems.length > 0) {
+    console.error(
+      `\nFAIL: i18n 有 ${problems.length} 个问题（见上）。\n` +
+        '下一步：按每一行的 `文件:行 key 说明` 逐个改；' +
+        '若问题在语言包侧，改 `ui/web/src/i18n/resources.ts`。',
+    )
+    return 1
+  }
+  return 0
+}
+
+process.exit(process.argv.slice(2).includes('--self-test') ? selfTest() : main())

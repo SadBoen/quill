@@ -148,6 +148,28 @@ run_upstream_gate() {
 if [ "$need_text_gate" = "1" ]; then
   run_text_gate .mojibake-check.mjs
   run_text_gate .i18n-check.mjs
+  # i18n 判定的自测（queue Q106）。这道门禁 2026-10-08 之前一个 process.exit
+  # 都没有 —— 问题打印得很详细，退出码却恒为 0。逻辑现在抽成了可导出的函数，
+  # 合成四种问题各造一个：判定哪天被改坏（比如把 `{{x}}` 的匹配写错），
+  # 自测当场红，而不是等下一次真漏翻译时才发现它已经不再报警。
+  step "文本门禁 · .i18n-check.mjs（自测）"
+  if node .i18n-check.mjs --self-test >/tmp/quill-gate-i18n-self.log 2>&1; then
+    tail -1 /tmp/quill-gate-i18n-self.log | sed 's/^/  ✓ /'
+  else
+    fail "i18n 判定不可信 —— 它得能证明自己会红"
+    grep -E 'FAIL' /tmp/quill-gate-i18n-self.log | head -6 | sed 's/^/    /'
+  fi
+  # 门禁自身的退出码（queue Q106）：扫全部门禁脚本，谁「发现了问题却照样退 0」就红。
+  # 真抓到过一例（.i18n-check.mjs）。CI 里早就在跑，但这条「一条命令验证项目是活的」
+  # 的本地入口一直没跑它 —— 本地入口少一道门禁，本地绿与 CI 绿就不是同一个绿。
+  run_text_gate .scripts/gate-exit-selftest.mjs
+  step "文本门禁 · .scripts/gate-exit-selftest.mjs（自测）"
+  if node .scripts/gate-exit-selftest.mjs --self-test >/tmp/quill-gate-exitcode-self.log 2>&1; then
+    tail -1 /tmp/quill-gate-exitcode-self.log | sed 's/^/  ✓ /'
+  else
+    fail "「门禁必须有非 0 退出路径」这道判定不可信 —— 它得能证明自己会红"
+    grep -E 'FAIL' /tmp/quill-gate-exitcode-self.log | head -6 | sed 's/^/    /'
+  fi
   # 移植基准：index.css 必须与 vendor/openoctopus-frontend 逐字节一致。
   # 用文本门禁而不是 upstream 门禁，因为它**不需要 vendor 在手边** ——
   # 钉的是移植那一刻的哈希，所以 fresh clone 与 CI 都核得了。

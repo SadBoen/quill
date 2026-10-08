@@ -160,6 +160,9 @@ jobs:
       - name: 文本门禁 · i18n
         run: node .i18n-check.mjs
 
+      - name: 该判定的自测
+        run: node .i18n-check.mjs --self-test
+
       # 门禁自身的退出码（queue Q106）。2026-10-08 真抓到一个：`.i18n-check.mjs`
       # 里一个 `process.exit` 都没有，问题逐条打印得很清楚却照样退 0 ——
       # 于是「漏翻译会报红」是空头承诺，流水线永远是绿的。
