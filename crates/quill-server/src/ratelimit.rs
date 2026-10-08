@@ -557,4 +557,110 @@ mod tests {
         let seg = peer_segment(&headers(&[]), None, false);
         assert_eq!(seg, UNKNOWN_PEER);
     }
+
+    // ---------------------------------------------------------------- 窗口边界（Q083）
+    //
+    // 这一组钉的是**窗口的边界语义**，不是「能不能拦」。边界差一毫秒的行为
+    // 直接决定客户端照 `Retry-After` 等完之后是被放行还是再撞一次 429。
+
+    /// 一个**像生产时钟**的基准：生产路径传 `now_ms()`（epoch 毫秒）。
+    /// 用小刻度时钟（例如从 0 开始）会走 `saturating_sub` 的下界分支，
+    /// 那不是生产路径要的行为，别用那种值测窗口。
+    const T0: u64 = 1_700_000_000_000;
+
+    #[test]
+    fn a_failure_exactly_one_window_old_no_longer_counts() {
+        // `prune` 的谓词是 `t <= now - window`（**闭**区间）：恰好满一窗的那条
+        // 记录必须被丢掉。若改成 `<`，客户端照 Retry-After 等满一窗后仍会被拒，
+        // 而且每等一次都差 1 毫秒 —— 表现为「永远登不上」。
+        let l = quick(2, 1_000);
+        let k = RateLimiter::key("u", "1.2.3.4");
+        l.record_failure(&k, T0);
+        l.record_failure(&k, T0 + 10);
+
+        assert!(l.acquire(&k, T0 + 10).is_err(), "两条失败就该拦");
+        assert_eq!(l.failure_count(&k, T0 + 999), 2, "窗口内仍是 2 条");
+        assert_eq!(
+            l.failure_count(&k, T0 + 1_000),
+            1,
+            "恰好满一窗的最老那条要被丢掉"
+        );
+        assert!(l.acquire(&k, T0 + 1_000).is_ok(), "只剩 1 条 → 放行");
+    }
+
+    #[test]
+    fn the_retry_hint_never_grows_while_the_client_keeps_failing() {
+        // 被拦期间继续失败**不延长**封锁：`record_failure` 在满额后直接 return。
+        // 否则攻击者只要一直撞，窗口就永远往后推 —— 等于永久封锁，而真人输错
+        // 几次密码也会被越锁越久（这正是账号锁定最常被骂的地方）。
+        let l = quick(1, 60_000);
+        let k = RateLimiter::key("u", "p");
+        l.record_failure(&k, T0);
+        let first = l.acquire(&k, T0 + 1).expect_err("1 次就该拦");
+
+        for t in [T0 + 10_000, T0 + 20_000, T0 + 30_000] {
+            l.record_failure(&k, t);
+        }
+        let later = l.acquire(&k, T0 + 30_000).expect_err("仍在窗口内");
+        assert!(later <= first, "等待秒数不许变大：{first} → {later}");
+        assert!(
+            l.acquire(&k, T0 + 60_001).is_ok(),
+            "最老那条满一窗后必须放行（封锁有上限）"
+        );
+    }
+
+    #[test]
+    fn the_wait_hint_shrinks_monotonically_as_the_window_slides() {
+        let l = quick(3, 600_000);
+        let k = RateLimiter::key("u", "p");
+        for i in 0..3 {
+            l.record_failure(&k, T0 + i * 1_000);
+        }
+
+        let mut prev = u64::MAX;
+        for t in [T0 + 3_000, T0 + 60_000, T0 + 300_000, T0 + 599_000] {
+            let w = l.acquire(&k, t).expect_err("窗口内必须拦");
+            assert!(w <= prev, "等待秒数必须单调不增（{prev} → {w} @ {t}）");
+            prev = w;
+        }
+        assert!(
+            l.acquire(&k, T0 + 601_000).is_ok(),
+            "三条都滑出窗口后必须放行"
+        );
+    }
+
+    #[test]
+    fn an_evicted_key_does_not_inherit_its_old_failure_count() {
+        // 键数到上界会淘汰「窗口最老」的那一条（`make_room`）。被淘汰的键**不能**
+        // 带着旧计数复活：那等于「换个拼法就把账甩掉又捡回来」，而计数是安全边界。
+        let l = quick(3, 600_000);
+        for i in 0..MAX_TRACKED_KEYS {
+            l.record_failure(&format!("victim-{i}"), T0 + i as u64);
+        }
+        assert!(
+            l.tracked_keys() <= MAX_TRACKED_KEYS,
+            "键数不许越过上界（上界是防内存被垃圾用户名撑爆的那道闸）"
+        );
+
+        // `victim-0` 是最老的一条 → 已被淘汰。它重新出现时计数从 0 开始。
+        let victim = "victim-0";
+        l.record_failure(victim, T0 + 1_000_000);
+        assert_eq!(
+            l.failure_count(victim, T0 + 1_000_000),
+            1,
+            "淘汰后重新计数，不继承旧账"
+        );
+    }
+
+    #[test]
+    fn reset_returns_every_budget_and_forgets_every_key() {
+        let l = quick(1, 60_000);
+        let k = RateLimiter::key("u", "p");
+        l.record_failure(&k, T0);
+        assert!(l.acquire(&k, T0).is_err(), "1 次失败就该拦");
+
+        l.reset();
+        assert_eq!(l.tracked_keys(), 0, "reset 必须把键一起忘掉");
+        assert!(l.acquire(&k, T0).is_ok(), "reset 后必须立刻放行");
+    }
 }

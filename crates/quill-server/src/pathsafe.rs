@@ -571,4 +571,85 @@ mod tests {
             "合法 UTF-8 的分量必须照常折叠大小写"
         );
     }
+
+    // ---------------------------------------------------------------- `\\?\` 逐字前缀（Q084）
+
+    /// **本环境（WSL/Linux）真跑到**的那一半：非 Windows 上 `\\?\D:\x` 不是
+    /// `Prefix` 分量，而是**一个普通分量**（整个字符串就是名字的一部分）。
+    /// 这条钉住的是「判定只看分量、且不会因为这种输入 panic 或凭空放行」。
+    #[cfg(not(windows))]
+    #[test]
+    fn on_non_windows_a_verbatim_looking_path_is_an_ordinary_component() {
+        let tmp = TempDir::new("verbatim-nonwin");
+        let root = tmp.sub("root");
+        let weird = PathBuf::from(r"\\?\D:\root\escaped.md");
+
+        // 它当然不在 root 里 —— 它在 Linux 上是一个名叫 `\\?\D:\root\escaped.md`
+        // 的相对路径。关键是：不 panic、不因为「看起来像绝对路径」被放行。
+        assert!(!is_within(&root, &weird), "非 Windows 上这串不是绝对路径");
+        assert!(
+            !has_verbatim_prefix(&weird),
+            "非 Windows 上不存在 Prefix::Verbatim*"
+        );
+        // `strip_verbatim` 在这种输入上必须原样返回（不能嗅探字符串前缀就动手，
+        // 否则 Linux 上会把一个合法的文件名悄悄改掉）。
+        assert_eq!(strip_verbatim(&weird), weird, "没前缀分量就不许改字符串");
+        // 正常路径的判定不受影响。
+        assert!(is_within(&root, &root.join("ok.md")));
+    }
+
+    /// **只跑 Windows**（本仓库的测试跑在 WSL/Linux，所以这几条在本机
+    /// **未验证** —— 写它们的目的是把 Windows 上的正确拼法钉住，
+    /// 免得下一版又回到「判定取决于谁存在」那个 bug）。
+    ///
+    /// 逐字前缀是 canonicalize 在 Windows 上的**默认返回形状**
+    /// （`\\?\D:\...`）。同一侧带前缀、另一侧不带时，`Path::starts_with`
+    /// 按分量比会判成两个地方 —— 这正是模块文档里那个「每个技能都保存失败」
+    /// 的 bug。`compare_form` 第 3 步就是为它存在的。
+    #[cfg(windows)]
+    #[test]
+    fn a_verbatim_spelled_root_admits_plain_spelled_children() {
+        let tmp = TempDir::new("verbatim");
+        let root = tmp.sub("root");
+        let verbatim_root = PathBuf::from(format!(r"\\?\{}", root.display()));
+        assert!(has_verbatim_prefix(&verbatim_root), "这条测试才有意义");
+
+        assert!(
+            is_within(&verbatim_root, &root.join("ok.md")),
+            "带逐字前缀的 root 必须认不带前缀的子路径（两侧统一去前缀）"
+        );
+        assert!(
+            is_within(&root, &verbatim_root.join("ok.md")),
+            "反过来也一样"
+        );
+        assert!(
+            !is_within(&verbatim_root, &root.join("..").join("sibling.md")),
+            "去前缀之后 `..` 仍然必须判成逃逸"
+        );
+    }
+
+    /// **只跑 Windows（本机未验证）**：`\\?\UNC\server\share` 去前缀后要还原成
+    /// `\\server\share` —— 直接砍掉 `\\?\` 会留下 `UNC\server\share`，
+    /// 那里的盘符会被当成普通分量名，判定随即失真。
+    #[cfg(windows)]
+    #[test]
+    fn verbatim_unc_is_normalized_back_to_a_real_unc_spelling() {
+        let unc = PathBuf::from(r"\\?\UNC\server\share\dir");
+        assert!(has_verbatim_prefix(&unc));
+        assert_eq!(
+            strip_verbatim(&unc),
+            PathBuf::from(r"\\server\share\dir"),
+            "UNC 逐字前缀要去成真正的 UNC 拼法，不是 UNC\\server\\share"
+        );
+        // 普通盘符前缀：只去前缀。
+        assert_eq!(
+            strip_verbatim(&PathBuf::from(r"\\?\D:\x\y")),
+            PathBuf::from(r"D:\x\y")
+        );
+        // 没有前缀的一律原样返回。
+        assert_eq!(
+            strip_verbatim(&PathBuf::from(r"D:\x\y")),
+            PathBuf::from(r"D:\x\y")
+        );
+    }
 }
