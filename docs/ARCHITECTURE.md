@@ -67,8 +67,9 @@ Architectures》）＋ **ADR**（Nygard）＋ **DORA 四指标**。
 quill-cli ─────────────────────────────────────────────► (顶层，编排一切)
     │
     ▼
-quill-server ──► adapters domain store control agent wiki provider backup
-    │                 (注意：**不含 quill-upgrade**)
+quill-server ──► adapters domain store control agent wiki provider backup upgrade
+    │                 (2026-10-08 起含 quill-upgrade：`/api/upgrade/prepare`
+    │                  真调用它的升级前备份守卫，见 queue Q039)
     │
     ├─ quill-upgrade ──► adapters backup domain store
     ├─ quill-backup  ──► adapters domain store
@@ -99,7 +100,7 @@ for d in crates/*/; do n=$(basename "$d"); \
 | L2 应用 | `quill-wiki` | 知识库 ingest/query/index |
 | L2 应用 | `quill-backup` | 备份导出/校验 |
 | L2 应用 | `quill-agent` | **专家团编排 / 派工 / 幂等 / 崩溃恢复**（名字骗人，见 §1.4） |
-| L3 交付 | `quill-upgrade` | 自升级（**没被 server 或 cli 真正调用**，见 §2.5） |
+| L3 交付 | `quill-upgrade` | 自升级（2026-10-08 起 `/api/upgrade/prepare` **真调用**它的升级前备份守卫；**「真能升级」本体仍未做**，见 queue Q063） |
 | L4 HTTP | `quill-server` | 路由 + 鉴权 + 序列化 **＋ 内联 SQL ＋ agent 循环**（过载，见 §1.5） |
 | L5 CLI | `quill-cli` | 命令行 |
 
@@ -204,7 +205,7 @@ grep -rhoE '^(pub )?(async )?fn [a-z_]+' crates/*/src/**/*.rs | grep -oE 'fn [a-
 - **P-1 内核没有独立层（最重）**：按 `C1`，内核应**移植自 goose** 且独立成层；实际它散在 HTTP crate 里，且最重的两块（压缩/记忆）为零。**这是"地基不牢"的根**。
 - **P-2 分层泄漏**：`quill-server` 既 HTTP 又编排又 SQL 又内核；`quill-agent` 依赖 `quill-wiki`（领域编排依赖应用层，倒挂）。
 - **P-3 冗余**：id/hex 转换 6+ 处、取值助手 5+ 套、provider 组装 2 套、SQL 未收口。
-- **P-4 名实不符**：`quill-agent` 不装 agent；`quill-upgrade` 零调用。
+- **P-4 名实不符**：`quill-agent` 不装 agent（仍在）；`quill-upgrade` 零调用 —— **2026-10-08 已不再成立**（`/api/upgrade/prepare` 真走它的升级前备份守卫），但「真能升级」本体仍未做（queue Q063）。
 - **P-5 空壳问题（正面案例）**：`quill-bridge`/`quill-ext-hub`/`quill-xtask` 已被移出（`Cargo.toml:21`）—— 说明"建了没人用"要被清掉。
 
 ---

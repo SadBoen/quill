@@ -639,6 +639,37 @@ pub fn touch_session(
     })
 }
 
+/// 改会话标题（queue Q051）。`deleted_at IS NULL` 让已软删的会话改不动
+/// （与读口径一致：用户看不见的会话不该还能被改）。
+///
+/// **刻意不动 `last_active_at`**：改名不是「用过这个会话」，刷新活跃时间会让
+/// 侧栏排序凭空变化 —— 用户只是想换个名字，结果会话跳到列表最上面。
+pub const RENAME_SQL: &str = "UPDATE sessions SET title = ?, updated_at = ? \
+     WHERE user_id = ? AND id = ? AND deleted_at IS NULL";
+
+/// 改标题，返回受影响行数（0 = 不存在 / 别人的 / 已软删，由调用方决定怎么报）。
+pub fn rename_session(
+    db: &DbBridge,
+    uid: UserId,
+    sid: [u8; 16],
+    title: String,
+    now: i64,
+) -> Result<u64, AgentError> {
+    db.call(move |pool, _rt| {
+        Box::pin(async move {
+            let n = sqlx::query(RENAME_SQL)
+                .bind(title)
+                .bind(now)
+                .bind(uid.as_bytes().to_vec())
+                .bind(sid.to_vec())
+                .execute(&pool)
+                .await
+                .map_err(|e| storage_error("改会话名", e))?;
+            Ok(n.rows_affected())
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -763,5 +794,18 @@ mod tests {
         // 绑定的专家只对「还看得见的会话」生效；软删的会话不该被它救活。
         assert!(SESSION_EXPERT_ID_SQL.contains("deleted_at IS NULL"));
         assert!(SESSION_EXPERT_ID_SQL.contains("user_id = ?"));
+    }
+
+    #[test]
+    fn rename_is_scoped_and_leaves_last_active_at_alone() {
+        // 三条一起构成改名的口径：按用户+会话定位、软删的改不动、
+        // **不碰 last_active_at**（碰了侧栏排序会凭空变化）。
+        assert!(RENAME_SQL.contains("user_id = ?") && RENAME_SQL.contains("id = ?"));
+        assert!(RENAME_SQL.contains("deleted_at IS NULL"));
+        assert!(
+            !RENAME_SQL.contains("last_active_at"),
+            "改名不是「用过它」：刷新活跃时间会让会话跳到侧栏最上面"
+        );
+        assert!(RENAME_SQL.contains("updated_at = ?"), "改名要留痕");
     }
 }

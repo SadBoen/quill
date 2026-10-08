@@ -1247,6 +1247,7 @@ dependencies = [
  "quill-domain",
  "quill-provider",
  "quill-store",
+ "quill-upgrade",
  "quill-wiki",
  "reqwest",
  "rmcp",

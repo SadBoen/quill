@@ -49,15 +49,18 @@ git -C .octop-ref/octop rev-parse HEAD              # → eb280112...
 | `quill-upgrade` | **120** | 233 | adapters, store | 只有「升级前先备份」守卫 |
 | `quill-testkit` | 1584 | 547 | — | 仅测试用：mock executor、各类计数器 |
 | `quill-cli` | 879 | 234 | store,control,wiki,agent,backup,**upgrade** | CLI：doctor/experts/wiki/backup/restore |
-| `quill-server` | **26616** | 12845 | adapters,domain,store,control,agent,wiki,provider,backup | HTTP 服务（巨石化） |
+| `quill-server` | **26616** | 12845 | adapters,domain,store,control,agent,wiki,provider,backup,**upgrade** | HTTP 服务（巨石化） |
 
 ```bash
 for d in crates/quill-*/; do echo "$(basename $d): $(cat $(find "$d/src" -name '*.rs') | wc -l)"; done
 ```
 
-**两处依赖真相**（容易被文档说错）：
+**依赖真相**（容易被文档说错）：
 
-- **`quill-server` 不依赖 `quill-upgrade`**（`crates/quill-server/Cargo.toml` 无该行）→ `/api/upgrade/*` 三条路由是 501 桩。
+- **`quill-server` 依赖 `quill-upgrade`**（2026-10-08 接通升级三条路由时加的那一行；
+  `grep -n "quill-upgrade" crates/quill-server/Cargo.toml`）→ `/api/upgrade/{check,prepare,history}`
+  是真实现（`crates/quill-server/src/api_upgrade.rs`），不再是 501 桩。
+  `prepare` 真调用 `quill_upgrade::take_pre_upgrade_backup`（Q064 记的「零调用方」就此结束）。
 - **`quill-cli` 声明了 `quill-upgrade` 却零调用**：`grep -rn quill_upgrade crates/quill-cli/src` 为空。
 
 ---
@@ -66,18 +69,15 @@ for d in crates/quill-*/; do echo "$(basename $d): $(cat $(find "$d/src" -name '
 
 ```bash
 grep -cE '\.route\(' crates/quill-server/src/routes.rs          # → 69
-grep -cE 'not_implemented\(' crates/quill-server/src/routes.rs  # → 14
+grep -cE 'not_implemented\(' crates/quill-server/src/routes.rs  # → 4（含函数定义 1 行，真桩 3 处）
 ```
 
 - 全仓**唯一**的路由注册处就是 `routes.rs`（`ui.rs` 只做 SPA 静态兜底）。
 - 非 `/api*` 未知路径 → SPA；`/api` 下未知路径 → 404 JSON；方法不匹配 → 405。
-- `not_implemented(method, path)` → 统一 501 + 中文建议。**14 处桩**：
-  `POST /api/experts/import`、`GET /api/experts/export`、
-  `POST /api/wiki/{ingest,query,search}`、`PATCH /api/extensions/mcp/{name}`、
-  `GET /api/extensions/plugins`、`POST /api/extensions/bundle/import`、
-  `GET /api/extensions/bundle/export`、`GET /api/upgrade/{check,history}`、
-  `POST /api/upgrade/prepare`、`GET /api/ws`。
-- 另有两条**有意** 501（走专用函数，不是 14 处之一）：
+- `not_implemented(method, path)` → 统一 501 + 中文建议。**真桩 3 处**
+  （2026-10-08 随 Q038–Q040 把升级三条接成真接口后从 13 处降下来）：
+  `POST /api/wiki/{ingest,query}`、`GET /api/extensions/plugins`。
+- 另有两条**有意** 501（走专用函数，不是上面三处之一）：
   `POST /api/users`（`api_users::create_not_allowed`）、`DELETE /api/users/{id}`（`delete_not_allowed`）。
 
 ### 服务端模块（`crates/quill-server/src/`，行数为真值）

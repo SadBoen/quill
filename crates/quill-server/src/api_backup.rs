@@ -57,11 +57,14 @@ const MAX_REPORTED: usize = 5;
 
 /// 库文件与备份根都从 `db_path` 推出来，不新增配置项：
 /// 新配置项就意味着「界面能改的旋钮」，而这里没有第二处需要它。
-fn data_root(state: &AppState) -> PathBuf {
+///
+/// `pub(crate)` 给 `api_upgrade` 用：升级前备份必须落在**同一个**备份根下，
+/// 才能被这三条备份路由（verify / restore）原样复用。口径只能有一处。
+pub(crate) fn data_root(state: &AppState) -> PathBuf {
     parent_or_dot(&state.config.db_path)
 }
 
-fn backup_root(state: &AppState) -> PathBuf {
+pub(crate) fn backup_root(state: &AppState) -> PathBuf {
     instance_root(&data_root(state)).join(BACKUP_SUBDIR)
 }
 

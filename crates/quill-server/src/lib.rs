@@ -16,6 +16,8 @@ pub mod api_extensions;
 pub mod api_mbti;
 pub mod api_providers;
 pub mod api_teams;
+/// 升级：查版本 / 升级前备份 / 升级历史。
+pub mod api_upgrade;
 /// 用户管理：列用户、启停账号。建号与删号**有意不做**，理由见该文件头。
 pub mod api_users;
 pub mod api_wiki;

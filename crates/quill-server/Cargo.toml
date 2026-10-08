@@ -36,6 +36,9 @@ quill-wiki = { path = "../quill-wiki" }
 quill-provider = { path = "../quill-provider" }
 # 备份：导出与还原的实现在这里，HTTP 接线见 `src/api_backup.rs`。
 quill-backup = { path = "../quill-backup" }
+# 升级前备份守卫（`PreUpgradeGuard`）的实现在这里：升级三条路由真调用它，
+# 不再让它零调用方（queue Q064）。HTTP 接线见 `src/api_upgrade.rs`。
+quill-upgrade = { path = "../quill-upgrade" }
 
 axum = { version = "0.8", features = ["http1", "json", "query", "tokio"] }
 

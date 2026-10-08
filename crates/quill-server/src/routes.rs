@@ -16,6 +16,7 @@ use crate::api_extensions;
 use crate::api_mbti;
 use crate::api_providers;
 use crate::api_teams;
+use crate::api_upgrade;
 use crate::api_users;
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -99,7 +100,11 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/sessions", get(api_chat::list).post(api_chat::create))
         .route(
             "/api/sessions/{id}",
-            get(api_chat::get_one).delete(api_chat::delete),
+            // PATCH = 改名（Q051）。此前只挂 GET/DELETE，PATCH 落进 405 ——
+            // 界面上「重命名」没有后端出口。
+            get(api_chat::get_one)
+                .patch(api_chat::rename)
+                .delete(api_chat::delete),
         )
         .route(
             "/api/sessions/{id}/messages",
@@ -206,24 +211,17 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/backup/restore", post(api_backup::restore))
         .route("/api/backup/verify", post(api_backup::verify));
 
+    // 升级。三条都只允许 admin（口径与上面的备份一致）：`prepare` 会写出
+    // 整份数据根的备份、`history` 会回显服务端绝对路径、`check` 会替服务端
+    // 访问外部更新源。实现见 `api_upgrade.rs`。
+    //
+    // `prepare` **只落升级前备份，不执行升级**：换二进制与跑迁移是停服后
+    // 的事，进程内没有可执行的升级步骤 —— 响应里 `upgraded: false` 说清这点。
     let upgrade = Router::new()
         .route("/api/version", get(version))
-        .route(
-            "/api/upgrade/check",
-            get(|_u: crate::auth::AuthUser| async { not_implemented("GET", "/api/upgrade/check") }),
-        )
-        .route(
-            "/api/upgrade/prepare",
-            post(|_u: crate::auth::AuthUser| async {
-                not_implemented("POST", "/api/upgrade/prepare")
-            }),
-        )
-        .route(
-            "/api/upgrade/history",
-            get(|_u: crate::auth::AuthUser| async {
-                not_implemented("GET", "/api/upgrade/history")
-            }),
-        );
+        .route("/api/upgrade/check", get(api_upgrade::check))
+        .route("/api/upgrade/prepare", post(api_upgrade::prepare))
+        .route("/api/upgrade/history", get(api_upgrade::history));
 
     let admin = Router::new()
         .route("/api/admin/config", get(api_admin::get).put(api_admin::put))

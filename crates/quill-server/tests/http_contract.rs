@@ -277,12 +277,12 @@ async fn extra_routes_list_does_not_leak_into_404_claim() {
 
 #[tokio::test]
 async fn registered_but_unimplemented_route_returns_501_with_route_name() {
-    // 拿 `/api/upgrade/check` 当样本：它登记了、能力确实还没实现。
-    // 原来这里用的是 `GET /api/users` —— 那条 2026-10-06 接通之后，
-    // 这个测试会**因为自己过期而失败**。样本路由必须挑一条**仍然**是 501 的，
-    // 否则它测的其实是「我以为的那件事」，不是「501 这个行为」。
+    // 拿 `POST /api/wiki/ingest` 当样本：它登记了、能力确实还没实现。
+    // 原来这里用的是 `GET /api/upgrade/check` —— 那条 2026-10-08 接通之后
+    // （Q038–Q040），这个测试会**因为自己过期而失败**。样本路由必须挑一条
+    // **仍然**是 501 的，否则它测的其实是「我以为的那件事」，不是「501 这个行为」。
     let resp = app!()
-        .oneshot(authed("GET", "/api/upgrade/check", TOKEN_ADMIN))
+        .oneshot(authed("POST", "/api/wiki/ingest", TOKEN_ADMIN))
         .await
         .expect("失败");
     assert_eq!(
@@ -296,7 +296,7 @@ async fn registered_but_unimplemented_route_returns_501_with_route_name() {
         "错误码应可被前端分支：{text}"
     );
     assert!(
-        text.contains("/api/upgrade/check"),
+        text.contains("/api/wiki/ingest"),
         "501 文案必须点名具体路由（否则不可诊断）：{text}"
     );
     // next_step 现在按路由给（NotImplemented 带 advice），所以还必须真的有内容。
@@ -319,6 +319,12 @@ async fn a_route_that_became_real_is_no_longer_reported_as_501() {
         ("PATCH", "/api/teams/{id}"),
         ("DELETE", "/api/teams/{id}"),
         ("DELETE", "/api/sessions/{id}"),
+        // 升级的读两条（Q038/Q040，2026-10-08 接通）。`POST /api/upgrade/prepare`
+        // 也有真实现，但不进这个循环：它会**真写盘**（升级前备份 + 历史记录），
+        // 放进通用契约循环里等于让每个脆弱的契约用例都去动磁盘；
+        // 它的往返证据在 `upgrade_http.rs` 里逐条钉死。
+        ("GET", "/api/upgrade/check"),
+        ("GET", "/api/upgrade/history"),
     ] {
         let concrete = path
             .replace("{id}", "0192b7c8-0000-7000-8000-000000000003")
@@ -407,7 +413,7 @@ async fn created_session_id_is_byte_identical_to_the_listed_one() {
 async fn every_contract_route_responds_and_is_never_a_false_success() {
     // 「已实现」清单必须跟着实现一起长，否则新接通的路由会因为不再返回 501
     // 而被判成「假成功」——这正是本测试要抓的东西，所以清单不能手懒。
-    const IMPLEMENTED: [(&str, &str); 60] = [
+    const IMPLEMENTED: [(&str, &str); 63] = [
         ("GET", "/api/version"),
         ("GET", "/api/auth/me"),
         ("GET", "/api/healthz"),
@@ -492,6 +498,14 @@ async fn every_contract_route_responds_and_is_never_a_false_success() {
         ("POST", "/api/backup/export"),
         ("POST", "/api/backup/verify"),
         ("POST", "/api/backup/restore"),
+        // 升级三条（Q038–Q040，2026-10-08 接通；接线见 `api_upgrade.rs`）。
+        // `check` 没配来源时如实回 `has_update: null`（不是 false）；
+        // `prepare` **真落一份升级前备份**（本循环会真的写一次盘 —— 目标目录
+        // 由服务端取名，落在临时库的备份根下）；`history` 真读落盘的 JSONL。
+        // 四条边界的往返证据在 `upgrade_http.rs` 里逐条钉死。
+        ("GET", "/api/upgrade/check"),
+        ("POST", "/api/upgrade/prepare"),
+        ("GET", "/api/upgrade/history"),
         // 用户管理：只列名册与启停两条是真实现（2026-10-06）。
         // `POST`/`DELETE` **继续 501，而且是有意的** —— 账号只来自部署配置，
         // 软删除也只做了一半（`users.deleted_at` 全仓库没有写入点）。

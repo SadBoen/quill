@@ -20,6 +20,11 @@ use quill_adapters::ids::{to_hex_lower, to_hex_upper};
 pub const MAX_CONTENT_LEN: usize = 32_000;
 pub const HISTORY_LIMIT: i64 = 40;
 
+/// 会话标题的字符上限。`create` 与 `rename`（Q051）**共用这一个数** ——
+/// 两处各写一个 64 的话，改了一处另一处就漂了，而漂的方式是「建会话时截到 64、
+/// 改名时截到 80」这种没人会发现的不一致。
+pub const TITLE_MAX_CHARS: usize = 64;
+
 fn new_id() -> Result<[u8; 16], ApiError> {
     let mut b = [0u8; 16];
     getrandom::fill(&mut b)
@@ -190,7 +195,7 @@ pub async fn create(
         .and_then(Value::as_str)
         .unwrap_or("")
         .chars()
-        .take(64)
+        .take(TITLE_MAX_CHARS)
         .collect::<String>();
 
     let id = new_id()?;
@@ -330,6 +335,54 @@ pub async fn delete(
         } else {
             "该会话此前已被删除，本次为幂等重试（未重复删除）。"
         }
+    }))
+    .into_response())
+}
+
+/// `PATCH /api/sessions/{id}` —— 改会话名（queue Q051）。
+///
+/// **为什么要有它**：这条路由此前只挂了 GET/DELETE，PATCH 落进 405 —— 界面上
+/// 「重命名」没有任何后端出口，会话建完名字就再也改不了（前端按实情提示
+/// 「未接通」，但那是缺口的说明，不是功能）。
+///
+/// 口径：
+/// - 只改 `title`，长度与 `create` 同一上限（[`TITLE_MAX_CHARS`]，按**字符**截断
+///   而不是字节：按字节截会把中文截成半个字）；
+/// - `trim` 后为空一律拒（与 Q007 的取值助手规范语义一致）——侧栏里一行没有
+///   名字的会话等于让人认不出来；
+/// - 不存在 / 别人的 / 已软删 → 404，与 `get_one` / `delete` 同一个口径；
+/// - `last_active_at` 不动（见 `chat_repo::RENAME_SQL` 的注释）。
+pub async fn rename(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+    JsonBody(body): JsonBody,
+) -> Result<axum::response::Response, ApiError> {
+    crate::api_experts::only_keys(&body, &["title"], "PATCH /api/sessions/{id}")?;
+    let title: String = crate::jsonx::need_str(&body, "title", "改会话名请求")?
+        .chars()
+        .take(TITLE_MAX_CHARS)
+        .collect();
+
+    let db = state.db()?;
+    let uid = user.0.user_id;
+    let sid = parse_id(&id)?;
+    ensure_session(db, uid, sid).await?;
+
+    let affected =
+        crate::chat_repo::rename_session(db, uid, sid, title.clone(), now_ms()).map_err(storage)?;
+    if affected == 0 {
+        // 存在性检查与 UPDATE 之间被并发软删：如实报 404，不假装改成功。
+        return Err(ApiError::entity_not_found(format!(
+            "会话 {id} 在改名的瞬间被删除了，本次未改。\
+             下一步：刷新会话列表，确认它是否还在；不在就说明已删除。"
+        )));
+    }
+
+    Ok(Json(json!({
+        "id": id,
+        "title": title,
+        "renamed": true,
     }))
     .into_response())
 }
