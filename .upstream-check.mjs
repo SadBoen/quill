@@ -273,14 +273,48 @@ function readInventory() {
   return parseInventory(read('UPSTREAM-USAGE.md'));
 }
 
+/**
+ * 从 UPSTREAM.md 里读出「我们跟的版本 / commit」两行值。
+ *
+ * **为什么单独抽出来并导出**（queue Q076）：这两行原来是两段内联正则，而 octop
+ * 那行的值在表格里**没有加粗**（写作 `| **我们跟的 commit** | \`sha\` |`），原正则
+ * 却要求值两边都有 `**`，于是它**永远读不到** —— 脚本照样打印 `记录=?` 与
+ * `OK: UPSTREAM.md 的记录和实际一致`。这正是本仓库最忌讳的那类检查：
+ * **读不到输入却报通过**（「多一份记录、多一处漂移的可能」，2026-10-08 的原话）。
+ * 抽出来是为了让自测能拿真文档与坏文档各喂一次（见 upstream-check-selftest 场景 9）。
+ *
+ * 值的写法允许带或不带 `**`：Markdown 里加粗与否不是契约，读到值才是。
+ */
+export function parseUpstreamDoc(doc) {
+  const gooseRaw = doc.match(/\*\*我们跟的版本\*\*\s*\|\s*\*{0,2}\s*([^*|\n]+?)\s*\*{0,2}\s*\|/)?.[1];
+  const octopCommit = doc.match(/\*\*我们跟的 commit\*\*\s*\|\s*\*{0,2}\s*`?([0-9a-f]{40})`?/)?.[1];
+  // 读不到就是 `undefined`（**不是空串**）：调用方靠 `!value` 判「没核过」，
+  // 而空串会让日志里出现 `记录=` 这种看不出是缺值的写法。
+  return {
+    gooseVersion: gooseRaw === undefined ? undefined : stripV(gooseRaw),
+    octopCommit,
+  };
+}
+
 async function main() {
   const doc = read('UPSTREAM.md');
   const problems = [];
   const lines = [];
 
   // ---------- 记录里的值 ----------
-  const gooseDocVersion = stripV(doc.match(/\*\*我们跟的版本\*\* \| \*\*([^*|]+)\*\*/)?.[1]);
-  const octopDocCommit = doc.match(/\*\*我们跟的 commit\*\* \| \*\*`([0-9a-f]{40})`\*\*/)?.[1];
+  const { gooseVersion: gooseDocVersion, octopCommit: octopDocCommit } = parseUpstreamDoc(doc);
+  // **读不到就等于没核**（2026-10-08 的教训：这个脚本曾经读不到 octop 那行、
+  // 却照样打印一致）。所以缺任一值都算问题，不当成「跳过这一项」。
+  if (!gooseDocVersion) {
+    problems.push(
+      'UPSTREAM.md 读不到 goose 的「我们跟的版本」—— 表格那行格式变了？读不到就没核过，不算通过',
+    );
+  }
+  if (!octopDocCommit) {
+    problems.push(
+      'UPSTREAM.md 读不到 octop 的「我们跟的 commit」（40 位 hex）—— 读不到就没核过，不算通过',
+    );
+  }
 
   // ---------- goose：真实来源是 Cargo.toml ----------
   const gooseToml = read('vendor/goose/Cargo.toml');

@@ -9,7 +9,7 @@
 // **不联网**：全部输入都是这里写死的。跑得起来与否只看判定本身对不对。
 //
 // 跑法：node .scripts/upstream-check-selftest.mjs
-import { compareSemver, decideUpstream, samePath, parseInventory } from '../.upstream-check.mjs';
+import { compareSemver, decideUpstream, parseUpstreamDoc, samePath, parseInventory } from '../.upstream-check.mjs';
 
 let fail = 0;
 
@@ -159,9 +159,32 @@ console.log('场景8：清单解析与路径匹配 —— 前缀不同也要认�
   expect('不同文件不算', !samePath('crates/goose/src/agents/subagent_handler.rs', 'crates/goose/src/main.rs'));
 }
 
+console.log('场景9：读 UPSTREAM.md 的那两行 —— 读不到就不算通过（Q076 的真缺陷）');
+{
+  // 真实表格形态：goose 那行的值加粗，octop 那行的值**不加粗**。
+  // 原正则要求 octop 的值两边都有 `**`，于是永远读到 undefined、脚本却照样报 OK。
+  const realShaped = [
+    '| **我们跟的版本** | **v1.53.0** |',
+    '| **我们跟的 commit** | `eb28011249c02cafd389b2d424294c6c1b9cf422` |',
+  ].join('\n');
+  const parsed = parseUpstreamDoc(realShaped);
+  expect('goose 版本读得到（带 v 也归一）', parsed.gooseVersion === '1.53.0', JSON.stringify(parsed));
+  expect('octop commit 读得到（不加粗也要读到）', parsed.octopCommit === OCTOP_PIN, JSON.stringify(parsed));
+
+  // 加粗的写法同样要认（Markdown 加粗与否不是契约）。
+  const bolded = '| **我们跟的 commit** | **`eb28011249c02cafd389b2d424294c6c1b9cf422`** |';
+  expect('加粗写法的 commit 也读得到', parseUpstreamDoc(bolded).octopCommit === OCTOP_PIN);
+
+  // 读不到时必须能看出来 —— 这是本场景要守的东西：不是「解析出来了」，
+  // 而是「解析不出来的时候不会被当成核对通过」。
+  const broken = parseUpstreamDoc('| 我们跟的 commit | 忘了写 |');
+  expect('格式坏掉时 octop commit 为 undefined（调用方据此判失败）', broken.octopCommit === undefined, JSON.stringify(broken));
+  expect('格式坏掉时 goose 版本也为 undefined', broken.gooseVersion === undefined, JSON.stringify(broken));
+}
+
 console.log('');
 if (fail === 0) {
-  console.log('上游判定自测：八个场景全对');
+  console.log('上游判定自测：九个场景全对');
   process.exit(0);
 }
 console.log('上游判定自测：有场景判错了 —— 判定逻辑不可信，先修它再谈上游对齐');

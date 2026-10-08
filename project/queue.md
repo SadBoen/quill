@@ -56,8 +56,8 @@
 
 - [x] Q031 · `POST /api/experts/import` 真实现 · `api_experts.rs` · **已完成 2026-10-08**：导出/导入各 7 字段（`id/display_name/description/instructions/model/source_template/default_enabled`）+ `bundle_version:1`；逐条结果（created/updated/skipped/failed + 原因 + summary + `ok`），**不是全量替换**；写入复用 `experts_repo::sql_put` 的 upsert（未另写 SQL）；内部列（`owner_user_id`/`asset_hash`/`persona_hash`/`visibility`/`is_builtin`/时间戳）在 `redacted` 里逐条点名不带出；内置系统专家不进清单也碰不到。往返测试：跨账号与同账号两条路都**逐字段等价**（无需排除任何字段）；反向验证（export 少写 `source_template` / import 少读 `source_template`）实测变红
 - [x] Q032 · `GET /api/experts/export` 真实现 · `api_experts.rs` · **已完成 2026-10-08**：与 import 对称（导出的输出可**原样喂回**导入；`redacted`/`note` 被接受而不是当未知字段拒掉）。501 桩已换成真 handler（`routes.rs` 前后对比见提交）
-- [ ] Q033 · `POST /api/wiki/ingest` 真实现（依赖 Q0xx 知识库） · `api_wiki.rs` · 真写入索引
-- [ ] Q034 · `POST /api/wiki/query` 真实现 · `api_wiki.rs` · 真返回答案
+- [ ] Q033 · `POST /api/wiki/ingest` 真实现（依赖 Q0xx 知识库） · `api_wiki.rs` · 真写入索引 **（卡在 2026-10-09：**参考源只到「拼上下文」这一步** —— `quill-wiki/src/backend.rs:62` 的 `ingest_context()` 返回的是一个 `IngestContext`（源文 + 索引 + schema + 日志 + 相关页），**真正的写页动作是模型干的**，不是这个函数。所以真实现 = 接一个 LLM 走「读源文 → 产出 wiki 页 → 落盘 + 更新 index.md/日志」，即 Q057（wiki 的 `ingest_context`/`query_context` 接真 LLM 后端）。依赖没到，本轮不做）**
+- [ ] Q034 · `POST /api/wiki/query` 真实现 · `api_wiki.rs` · 真返回答案 **（卡在 2026-10-09：同 Q033 —— `backend.rs:82` 的 `query_context()` 也只是挑候选页 + 拼上下文，「真返回答案」要模型读候选页作答，属 Q057。可先做的只读那半（按问题检索候选页）Q035 已完成）**
 - [x] Q035 · `POST /api/wiki/search` 真实现（只读索引，可不依赖 LLM） · `api_wiki.rs` · **已完成 2026-10-08**：真读 `index.md`（`WikiStore::read_index`），复用现成的 `WikiIndex::lookup` 计分（标题 +2 / 摘要 +1，同分按标题升序，有测试钉住不漂）；返回带**命中依据**（`matched_fields` + 每词命中处前后 24 字符摘录）、`total_hits` 与 `truncated`（真数、不隐藏）；**不返回 `path` 与 `page_type`** —— 索引里没有路径列、解析出的类型恒为 `Summary`，给出来就是假数据（注释与测试都写明）；索引不存在时 `index_present:false` 且说明「零命中 ≠ 资料库没有」。8 条单测（含「删光页面文件仍命中」证明只读索引）+ 反向验证（去掉摘要命中 → 2 条红）。路由已接：`post(crate::api_wiki::search)`
 - [x] Q036 · `PATCH /api/extensions/mcp/{name}` 真实现 · `api_extensions.rs` · **已完成 2026-10-08**：改名走 `UPDATE`（保留 `created_at` 与行身份，有测试钉住），不是 delete+insert；**缺省字段 = 不变、显式 `null` = 清空**（`enabled_capabilities: null` = 全禁，是取值不是「不变」）；与 POST 共用同一份传输交叉校验；用户隔离（别人的行 404，同名按用户各一份）；撞名（含软删行占名）409 且不静默合并；`updated_at` 只在名字或指纹真变时才写。`mcp_repo` 加 `get`/`apply_patch`（`PatchOutcome` 四态）+ 8 条测试，`tests/extensions_http.rs` 9 条真库往返；反向验证（改名当没改 / `truncated` 恒 false / 去掉 `user_id` 谓词）实测变红。路由已接：`patch(api_extensions::patch_mcp)`
 - [x] Q037 · `GET /api/extensions/plugins` —— **刻意保持 501**：前端 `capabilityGaps.ts` 已把它登记为「已登记路由、处理函数未实现」并如实显示给用户；删掉会让那句「已登记」变假话（退化成 404）。已在路由处加注释说明 · `routes.rs`
@@ -68,7 +68,7 @@
 
 ## D. octop 外壳迁移（依最高指示第 2 条）
 
-- [ ] Q042 · `/api/cron` 有真路由（自动化页现在配的是假后端） · `crates/quill-server/src/` · 页面上的开关真有用
+- [ ] Q042 · `/api/cron` 有真路由（自动化页现在配的是假后端） · `crates/quill-server/src/` · 页面上的开关真有用 **（本轮未做，2026-10-09 实测现状：后端 `grep -rn cron crates/quill-server/src` **零命中** —— 路由根本没登记，前端 `Automations.tsx` 靠 `routeMissing()` 如实报「未接通」并禁用表单（这是诚实的那一半，Q041 同类）。真做实 = 建表 + 迁移 + `GET/POST /api/cron` 增删改查 + **一个真会触发投递的调度器**（判据「页面上的开关真有用」要求它真跑）。那是一个带迁移与后台任务的独立特性，本轮预算被 Q012/Q018 占满，未做）**
 - [x] Q043 · 团队限制列 `max_dispatch`/`max_replan`/`max_ask_depth`/`guidelines` 不再只存不读 · `quill-agent`/`api_teams.rs` · **已完成 3/4（2026-10-08）**：新增 `quill-agent/src/team_limits.rs` 定语义（无上游可抄，逐条写清「超限会怎样」；取值范围与 `0001_init.sql:297-310` 的 CHECK 同口径）。`max_dispatch`/`max_replan` 在 `Dispatcher::dispatch_round` **最前面**过闸（被拒的一轮不写台账、不起成员、不花钱），`POST /api/teams/{id}/dispatch` 在**记账前**过同一道闸；`guidelines` 逐字进成员提示（上限 2000 字符、超限报错不截断）。**`max_ask_depth` 仍未接线且如实记录**：成员执行器是「一次调用、没有追问通道」，`DispatchRecord::mark_asking` 生产侧零调用 —— 新开 Q105 跟踪（提交 3c5a1e7）
 - [x] Q044 · 不再上报没有真来源的字段（`plugins`/`wiki_index`/`skill_count`/`tool_allowlist`） · `api_admin.rs` 等 · **已完成（核实并更正，2026-10-08）**：四个名字逐个核过 —— **没有一个在「上报」里是无来源的**（`plugins` 与 `wiki_index` 压根没有响应上报；`skill_count` 唯一响应字段来自上游 SkillHub 载荷；`tool_allowlist` 来自 `skills` 表真实列），所以「先摘掉上报」这一步**不需要做**。原说法（BACKLOG B5-3 / CODE-TRUTH #7）已按事实更正；真正的洞改记为三处死结构并新开 Q102/Q103/Q104
 - [ ] Q045 · 通道（channels）按 TencentCloud/Octop 重做 · `api_channels.rs` · 有 `file:line` 对齐
@@ -114,7 +114,7 @@
 
 ## H. 上游对齐与出处（依最高指示第 3/4 条）
 
-- [ ] Q076 · `.upstream-pin` 与 `UPSTREAM.md` 不再自相矛盾 · 仓库根 · 两者一致
+- [x] Q076 · `.upstream-pin` 与 `UPSTREAM.md` 不再自相矛盾 · 仓库根 · **已完成 2026-10-09（修的是真缺陷，不是「补一句一致」）**：实测发现两个文件**已经一致**（`.upstream-pin` = `v1.53.0 76da81cb…`，UPSTREAM.md 同值同 sha），但**检查器根本读不到 octop 那一行** —— `.upstream-check.mjs` 的原正则要求值两边都有 `**`，而 UPSTREAM.md 表格里写的是 `| **我们跟的 commit** | \`sha\` |`（值不加粗），于是 `octop 记录=?` 与 `OK: 记录和实际一致` **一起**打印出来：一个读不到输入却报通过的检查（本仓库最忌讳的那类）。修法：把两行解析抽成导出的 `parseUpstreamDoc()`（值的加粗与否不再是契约），并在 `main()` 里加「**读不到任一值 = 判失败**」。自测补场景 9（真表格形态 / 加粗写法 / 坏文档必须回 undefined）。**判据实测**：`node .scripts/upstream-check-selftest.mjs` 九场景全对、退出 0；`node .upstream-check.mjs` 现在真打印 `octop 记录=eb2801… 实际=eb2801…`；**反向验证真做**（把 UPSTREAM.md 的 octop commit 改成 `ff2801…` → 报「octop commit 对不上」并退出 1，改回后退出 0）
 - [ ] Q077 · 自创机制在代码/文档里标注「自创」，不包装成抄来的 · 全仓 · 有清单
 - [ ] Q078 · 每条上游引用逐行核过（`node .provenance-check.mjs` 常绿） · `UPSTREAM-USAGE.md` · 无坏引用
 - [ ] Q079 · 「刻意没抄上游」的地方写清是哪几处、为什么 · `docs/` · 有清单
