@@ -11,3 +11,4 @@ publish = false
 quill-adapters = { path = "../quill-adapters" }
 
 [dev-dependencies]
+proptest = "1.11.0"

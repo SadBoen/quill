@@ -11,3 +11,4 @@ quill-adapters = { path = "../quill-adapters" }
 quill-domain = { path = "../quill-domain" }
 
 [dev-dependencies]
+proptest = "1.11.0"

@@ -84,7 +84,18 @@ impl Date {
             return Err(DateError::BadShape(s.to_string()));
         }
         let num = |from: usize, to: usize, field: &'static str| -> Result<u32, DateError> {
+            // 切片安全：上面的 `-` 检查保证了 4 与 7 是单字节字符，于是 0/4/5/7/8/10
+            // 都落在字符边界上，这几个区间不会切在字符中间。
             let raw = &s[from..to];
+            // **必须逐字节是 ASCII 数字**。`u32::from_str` 接受前导 `+`（`"+001"` → 1），
+            // 于是 `"0009-+9-+9"` 会被静默归一化成 `0009-09-09` —— 收下的输入与写回的
+            // 输入不是一个串。属性测试抓到并自动缩小到这条输入（queue Q089）。
+            if !raw.bytes().all(|b| b.is_ascii_digit()) {
+                return Err(DateError::NotNumeric {
+                    field,
+                    value: raw.to_string(),
+                });
+            }
             raw.parse::<u32>().map_err(|_| DateError::NotNumeric {
                 field,
                 value: raw.to_string(),
