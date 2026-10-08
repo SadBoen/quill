@@ -37,10 +37,10 @@
 - [x] Q014 · 把 `mcp_client.rs` 搬进 `quill-core` · 同上 · **已完成 2026-10-08**：git mv 原样搬运、行为未改，测试随文件走（`quill-core` 12 条全绿；`quill-server` 相应 −13）；`McpServerRow` 一并搬进内核、`mcp_repo` 改为 re-export（提交 6e84be1）
 - [ ] Q015 · 把 provider 组装（`llm_providers.rs`）搬进 `quill-core`，与 `quill-provider` 合并成一套 · 同上 · provider 组装只剩一套 **（卡在 2026-10-08：`llm_providers.rs` 里混着「存储口径」（6 条内联 SQL + `db`/`state` 依赖）与「provider 组装」；要合并成一套必须先定组装层接口（`quill-provider` 已是叶子 crate），存储部分留成 repo。属设计任务）**
 - [x] Q016 · 每搬一块，在文件头标注「移植自 `vendor/goose/...` 的哪个文件」· `quill-core` · **已生效 2026-10-08（对已搬的两块）**：`mcp_client.rs` 与 `mcp.rs` 头部均写明 `vendor/goose/crates/goose/src/agents/mcp_client.rs`（含行数与版本）；`lib.rs` 把「每块都要标出处」写成纪律。后续每搬一块继续执行
-- [ ] Q017 · 照 `vendor/goose/crates/goose-context-management` 实现**上下文压缩**（现在只有配置字段）· `quill-core` · 超阈值真的发生压缩，用量前后连续
+- [x] Q017 · 照 `vendor/goose/crates/goose-context-management` 实现**上下文压缩**（现在只有配置字段）· `quill-core` · **已完成 2026-10-08**：`crates/quill-core/src/compaction.rs`（移植对照表逐条带 `file:line`；18 条测试含「未超阈值不许压 / 超阈值真压 / 用量分账连续 / 阈值恰好相等」；改回坏样子实测 11 条变红）。**未接线**：阈值全由参数传入，`compaction_threshold_tokens` 本模块一次没读 —— 属 Q018（提交 629529c）
 - [ ] Q018 · 压缩阈值接进对话路径，并在界面上**如实反映是否生效** · `quill-core` + `ui/web` · 不再是「只存不读」
-- [ ] Q019 · 照 goose 实现**记忆**（当前为零）· `quill-core` · 有可验证的读写回路
-- [ ] Q020 · 照 `vendor/goose/crates/goose/src/agents/` 补**状态机** · `quill-core` · 对话状态可枚举、可测
+- [ ] Q019 · 照 goose 实现**记忆**（当前为零）· `quill-core` · 有可验证的读写回路 **（卡在 2026-10-08：**参考源本身不确定** —— goose v1.53.0 里没有独立的 memory crate 或模块（`ls vendor/goose/crates/` 无 memory；`grep -rl memory vendor/goose/crates/goose/src/` 命中的是 `acp/`、`platform_extensions/chatrecall.rs` 等，都不是「记忆」原语）。要先定「quill 的『记忆』对齐 goose 的哪一块」（候选：`session/` 的会话记忆、`chatrecall` 平台扩展、`context_mgmt` 的长期摘要），再动手 —— 否则就是自创，违反第 3 条。另外读写回路需要存储端口，同 Q012）**
+- [x] Q020 · 照 `vendor/goose/crates/goose/src/agents/` 补**状态机** · `quill-core` · **已完成 2026-10-08**：`crates/quill-core/src/state_machine.rs`（9 状态 × 10 事件，转移带 goose `file:line`；非法转移返回 `TransitionError` 不静默通过；文档列出未搬的 17 个 ops 及原因；8 条测试，改坏预算判定实测 2 条变红）。**未接线**：还没接进 `api_chat` 的真实路径（属 Q012/Q018）（提交 52e17ea）
 - [ ] Q021 · 照 goose 补**快照**（snapshots） · `quill-core` · 能回滚到某一轮
 - [ ] Q022 · 照 goose 补**重试**（retry.rs） · `quill-core` · 上游 5xx/超时有退避重试且可测
 - [ ] Q023 · 子 agent：`member_executor` 的 `steer`（运行中追加指令） · `quill-core` · 不再返回「尚未实现」
@@ -48,8 +48,8 @@
 - [ ] Q025 · 子 agent：给成员各开**独立会话**（对齐 goose 的「每子 agent 独立 config + session」） · `quill-core` · 成员产出进各自的会话
 - [ ] Q026 · 成员执行也记 **token 用量**（现在 `MemberOutcome` 不带 usage） · `quill-core` · 用量页能看到派工消耗
 - [ ] Q027 · 照 goose 的 `permission` 对齐权限模型（现在 quill-control 是多租户口径，需比对） · `quill-core` · 差异写清
-- [ ] Q028 · 照 goose 的 `slash_commands` 实现斜杠命令（先核 quill 有没有） · `quill-core` · 至少有 `file:line` 出处对齐
-- [ ] Q029 · provider 移植覆盖度逐块比对（`quill-provider` vs `goose-providers`） · `docs/` · 出一张覆盖表
+- [x] Q028 · 照 goose 的 `slash_commands` 实现斜杠命令（先核 quill 有没有） · `quill-core` · **已完成比对 2026-10-08（结论：quill 没有实现，0 行）**：`crates/` + `ui/web/src/` 的 15 处命中全是注释 / 测试数据 / 路径校验，服务端链路（`chatApi.ts:40 → routes.rs:116 → api_chat.rs post_message → run_turn`）无任何命令分支；goose 侧是跨 12 文件 / 19 处引用的接线链。逐条对照表与「缺口 → 落点」见 `docs/KERNEL-ALIGNMENT.md §Q028`。**实现尚未做**（若要做，按取用规则第 4 条新开条目）
+- [x] Q029 · provider 移植覆盖度逐块比对（`quill-provider` vs `goose-providers`） · `docs/` · **已完成 2026-10-08**：`docs/KERNEL-ALIGNMENT.md §Q029` 出覆盖表（30 行：已覆盖 2 / 已覆盖但两套 1 / 部分 15 / 未覆盖 12）+ 差集表；并核实 §1.6 的「两套」成立（`quill-provider` 3241 行传输层 vs `llm_providers.rs`+`llm.rs` 1345 行 DB 配置 / 组装，真正重复只有 3 处：`/models` 探测、base_url 归一、传输错误分类）
 - [ ] Q030 · 会话模型对齐 goose 的 `session`（当前 `api_chat` 自研） · `quill-core` · 差异写清
 
 ## C. 把 501 桩接成真接口（`routes.rs` 现有 11 处）
