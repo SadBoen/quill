@@ -33,7 +33,7 @@
 
 - [x] Q011 · 新建 `crates/quill-core`（空壳 + 一行职责说明）· `crates/quill-core/` · **已完成 2026-10-08**：`cargo build -p quill-core` 通过（提交 6e84be1）
 - [ ] Q012 · 把对话循环从 `api_chat.rs` 搬进 `quill-core`（**原样搬运**，行为不变）· `quill-core` · 测试数量不减、全绿 **（卡在 2026-10-08：对话循环直接调用 `state::AppState` / `db::DbBridge` 与 `chat_repo`/`experts_repo`/`llm`/`tools`，而 `quill-core` 不能依赖 `quill-server` —— 搬之前必须先给内核定「壳侧端口」trait（候选四类：会话历史读写 / provider 取用 / 工具注册表 / 用量记录）并由 server 实现。这是设计任务，不是机械搬运；本轮只搬了唯一不依赖壳的 mcp_client。下一步：先写端口设计 + 一个端口化的最小搬块）**
-- [ ] Q013 · 把 `tools.rs` 搬进 `quill-core` · 同上 · 同上 **（卡在 2026-10-08：同 Q012 的根因 —— `tools.rs` 直接持有 `Arc<AppState>`，并调用 `api_experts::list_for_tools` / `skills_repo` / `mcp_repo` / `api_extensions`（技能正文与目录）。Q014 已示范「内核自己拥有数据模型 + 壳 re-export」（`McpServerRow`），tools 需要的是同一招的**端口版**）**
+- [x] Q013 · 把 `tools.rs` 搬进 `quill-core` · 同上 · **已完成 2026-10-08**：先立端口（新增 `docs/KERNEL-PORTS.md`，Q012/Q015 共用同一份设计）—— 内核声明 `ToolSources`（专家/技能/MCP 三份**已查好的清单**，行类型住内核），壳实现 `DbToolSources` 转发到既有函数；`digest32/digest16` 跟着 `mcp_tool_name` 搬进 `quill_core::digest`（`quill-server::db` 改 re-export，4 个调用点零改动）；`quill_server::tools` 改 re-export，既有调用点全部照旧。测试：纯逻辑留内核用内存假 `ToolSources`（26 条），真库覆盖搬到壳侧（真 `DbToolSources` + 真库 + 真技能目录）。workspace 1413 → 1439（总数不减），`grep -c AppState crates/quill-core/src/tools.rs` = 0。文件头补 goose 出处（`agents/tool_execution.rs`）（提交 77982f2）
 - [x] Q014 · 把 `mcp_client.rs` 搬进 `quill-core` · 同上 · **已完成 2026-10-08**：git mv 原样搬运、行为未改，测试随文件走（`quill-core` 12 条全绿；`quill-server` 相应 −13）；`McpServerRow` 一并搬进内核、`mcp_repo` 改为 re-export（提交 6e84be1）
 - [ ] Q015 · 把 provider 组装（`llm_providers.rs`）搬进 `quill-core`，与 `quill-provider` 合并成一套 · 同上 · provider 组装只剩一套 **（卡在 2026-10-08：`llm_providers.rs` 里混着「存储口径」（6 条内联 SQL + `db`/`state` 依赖）与「provider 组装」；要合并成一套必须先定组装层接口（`quill-provider` 已是叶子 crate），存储部分留成 repo。属设计任务）**
 - [x] Q016 · 每搬一块，在文件头标注「移植自 `vendor/goose/...` 的哪个文件」· `quill-core` · **已生效 2026-10-08（对已搬的两块）**：`mcp_client.rs` 与 `mcp.rs` 头部均写明 `vendor/goose/crates/goose/src/agents/mcp_client.rs`（含行数与版本）；`lib.rs` 把「每块都要标出处」写成纪律。后续每搬一块继续执行
@@ -69,8 +69,8 @@
 ## D. octop 外壳迁移（依最高指示第 2 条）
 
 - [ ] Q042 · `/api/cron` 有真路由（自动化页现在配的是假后端） · `crates/quill-server/src/` · 页面上的开关真有用
-- [ ] Q043 · 团队限制列 `max_dispatch`/`max_replan`/`max_ask_depth`/`guidelines` 不再只存不读 · `quill-agent`/`api_teams.rs` · 生产侧真有引用
-- [ ] Q044 · 不再上报没有真来源的字段（`plugins`/`wiki_index`/`skill_count`/`tool_allowlist`） · `api_admin.rs` 等 · 字段有真来源或删掉
+- [x] Q043 · 团队限制列 `max_dispatch`/`max_replan`/`max_ask_depth`/`guidelines` 不再只存不读 · `quill-agent`/`api_teams.rs` · **已完成 3/4（2026-10-08）**：新增 `quill-agent/src/team_limits.rs` 定语义（无上游可抄，逐条写清「超限会怎样」；取值范围与 `0001_init.sql:297-310` 的 CHECK 同口径）。`max_dispatch`/`max_replan` 在 `Dispatcher::dispatch_round` **最前面**过闸（被拒的一轮不写台账、不起成员、不花钱），`POST /api/teams/{id}/dispatch` 在**记账前**过同一道闸；`guidelines` 逐字进成员提示（上限 2000 字符、超限报错不截断）。**`max_ask_depth` 仍未接线且如实记录**：成员执行器是「一次调用、没有追问通道」，`DispatchRecord::mark_asking` 生产侧零调用 —— 新开 Q105 跟踪（提交 3c5a1e7）
+- [x] Q044 · 不再上报没有真来源的字段（`plugins`/`wiki_index`/`skill_count`/`tool_allowlist`） · `api_admin.rs` 等 · **已完成（核实并更正，2026-10-08）**：四个名字逐个核过 —— **没有一个在「上报」里是无来源的**（`plugins` 与 `wiki_index` 压根没有响应上报；`skill_count` 唯一响应字段来自上游 SkillHub 载荷；`tool_allowlist` 来自 `skills` 表真实列），所以「先摘掉上报」这一步**不需要做**。原说法（BACKLOG B5-3 / CODE-TRUTH #7）已按事实更正；真正的洞改记为三处死结构并新开 Q102/Q103/Q104
 - [ ] Q045 · 通道（channels）按 TencentCloud/Octop 重做 · `api_channels.rs` · 有 `file:line` 对齐
 - [ ] Q046 · 个性化页面按 octop 重做 · `ui/web/src/personalization` · 同上
 - [ ] Q047 · 专家市场（列表 + 安装）接通 · `api_expert_market.rs` · 真能装
@@ -151,6 +151,14 @@
 - [ ] Q100 · 本地 provider（llama.cpp / 其他）的可选接入，便于无网开发与测试 · `docs/` + 脚本 · 能起一个本地模型供测试
 
 ---
+
+## L. 死结构清理（Q044 核实后新开，按取用规则第 4 条续号）
+
+- [ ] Q102 · `skills.tool_allowlist` 存而不用（ISSUE-008）：写得进、读得出、导得出，但**没有任何消费点** · `quill-core`/`api_extensions.rs` · 要么定清「技能的允许工具表在对话里怎么生效」并真消费，要么删列（需迁移）
+- [ ] Q103 · `experts.skill_count` **恒写 0 且无人读**（`experts_repo.rs` 的 `PUT_SQL` 里是字面量 0，专家接口也不上报它） · `experts_repo.rs` · 算出真值或删列（需迁移）
+- [ ] Q104 · `plugins` / `wiki_index` 两张**死表**（迁移里存在，Rust 侧零读写；wiki 检索读的是 `index.md`） · `quill-store`/`quill-server` · 接真读者或删表（需迁移）
+- [ ] Q105 · `max_ask_depth` 接进提问链路（前置：成员执行器要有「追问通道」；`DispatchRecord::mark_asking` 生产侧目前零调用） · `quill-agent`/`quill-server` · 成员提问时按深度过闸
+
 
 ## 取用规则
 

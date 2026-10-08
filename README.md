@@ -53,9 +53,20 @@ wsl.exe -e bash -lc 'export PATH="$HOME/.cargo/bin:$PATH"; cd /mnt/d/96_CoderWor
 记录的 pin 用 `bash .scripts/fetch-vendor.sh` 拉回来。
 
 > 实测工具链（2026-10-08）：cargo/rustc `1.99.0`、node `v24.21.0`。
-> 仓库**没有固定工具链文件**，`gates.sh` 也**不含** `cargo fmt` / `cargo clippy`。
+> 工具链**已固定**在 `rust-toolchain.toml`（Q001）；`cargo fmt --check` 与
+> `cargo clippy -D warnings` 已在 `.github/workflows/gates.yml` 与 CI 里（Q004/Q005）。
+> **改这两句之前先跑一遍命令** —— README 曾在这里写了「没有固定工具链文件、
+> gates.sh 不含 fmt/clippy」，两条都过期了很久。
 
 ## 已知的环境性失败
 
-`mcp_client::tests::a_process_that_never_answers_the_handshake_times_out_with_a_runnable_hint`
-在 Windows 上失败，因为它要拉起 `cat`，而 Windows 没有这个命令。这不是回归。
+集中登记**因为环境而不是因为代码**的失败。看到这些不等于回归；**在 WSL 里跑一遍**
+才是判据。每条都附复现命令与 2026-10-08 的实测结果。
+
+| 现象 | 为什么 | 复现 / 实测 |
+|---|---|---|
+| `mcp_client::tests::a_process_that_never_answers_the_handshake_times_out_with_a_runnable_hint` 在 Windows 上失败 | 该用例要拉起 `cat`，Windows 没有这个命令（另有几条用 `true`） | Windows 侧 `cargo test -p quill-core`；**未验证**：本机没有 Windows 侧 Rust 工具链（cargo 只在 WSL 里跑），无法实跑；此条沿用旧 README 的说法并标注未验证 |
+| `node scripts/status.mjs` 在 Windows 上报 B0-1 / B0-2 / B0-3 / B0-6 失败 | 这几条判据用 POSIX 口径（`bash`、`test $(...) -eq 0`、`npx` 的输出路径 `/tmp`）；Windows 侧 `bash`/`test`/`/tmp` 语义不同 | `node scripts/status.mjs` → 报「命令失败（退出码 1）」；同一批命令在 WSL 里 `bash .scripts/gate-selftest.sh` 退出 **0**（实测） |
+| status.mjs 报「读不到 vitest 的 json 输出（ENOENT: … D:\tmp\quill-status-vitest.json）」→ 前端侧判据不可信 | 它把 `/tmp/...` 当路径，Windows 侧被解析成 `D:\tmp\...` | 同上；**这是环境问题，不是前端挂了** —— 前端门禁请在 WSL 或 CI 里跑 |
+| 前端 `node_modules` 在 WSL 与 Windows 之间共用 | 原生 binding 按平台编译，跑完一侧另一侧会报缺失 | CI 每个 job 全新 `npm ci` 没有这个问题；本地换侧跑之前重装 |
+

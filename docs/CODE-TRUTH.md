@@ -216,14 +216,21 @@ cd ui/web && npx vitest run
 | 3 | `items.mjs` B2-2「成员执行器存在」绑 `absent` —— 方向写反 | 已修 | 已修 |
 | 4 | `quill-cli` 声明 `quill-upgrade` 依赖但零调用 | `grep quill_upgrade crates/quill-cli/src` 空 | 待修 |
 | 5 | `quill-server` 是 26616 行巨石 | `wc -l` | 待拆（长期） |
-| 6 | `teams` 的 `max_dispatch`/`max_replan`/`max_ask_depth`/`guidelines` 生产侧零引用 | `grep ... crates/*/src` | 待做（M2 派工限额） |
-| 7 | `wiki_index`/`skill_count`/`tool_allowlist` 仍在上报，无真实来源 | `grep ... crates/*/src` | 待摘 |
+| 6 | `teams` 的 `max_dispatch`/`max_replan`/`max_ask_depth`/`guidelines` 生产侧零引用 | `grep ... crates/*/src` | **已做 3/4（2026-10-08，queue Q043）**：`max_dispatch` / `max_replan` 在派工记账前过闸、`guidelines` 逐字进成员提示；`max_ask_depth` **仍未接线**（成员执行器没有追问通道，`DispatchRecord::mark_asking` 生产侧零调用），已在该模块文档里如实记录 |
+| 7 | `wiki_index`/`skill_count`/`tool_allowlist` 仍在上报，无真实来源 | `grep ... crates/*/src` | **已核实并更正（2026-10-08，queue Q044）**：四个名字逐个核过，**没有一个在「上报」里是无来源的** —— ① `plugins`：没有任何响应上报它，只有 `GET /api/extensions/plugins` 的诚实 501（Q037）+ 前端 `capabilityGaps.ts` 如实登记；② `wiki_index`：没有任何响应上报它（wiki 检索读的是 `index.md`，见 Q035）；③ `skill_count`：唯一的响应字段在专家市场（`api_expert_market.rs:87` 的 `s.skill_count`），来源是上游 SkillHub 载荷（`skillhub/models.rs:87`）；④ `tool_allowlist`：出现在 bundle 导出里，来源是 `skills` 表的真实列（`skills_repo.rs:44-64`）。真正的洞改记为下面 7a–7c |
+| 7a | `skills.tool_allowlist` **存而不用**（ISSUE-008）：写得进、读得出、导得出，但没有任何消费点 | `grep -rn tool_allowlist crates/quill-core/src/tools.rs`（只有数据结构与注释） | 待做（新开 queue Q102：真消费或删列 —— 需要先定「技能的允许工具表在对话里怎么生效」） |
+| 7b | `experts.skill_count` **恒写 0 且无人读** | `experts_repo.rs:73` 的 `PUT_SQL` 里字面量 0；`grep -rn skill_count crates/quill-server/src/api_experts.rs` 空 | 待做（新开 queue Q103：算出真值或删列，删列要迁移） |
+| 7c | `plugins` / `wiki_index` **两张死表**（迁移里存在，Rust 侧零读写） | `grep -rn '"plugins"\|wiki_index' crates/quill-server/src` 只剩 501 路由与检索测试 | 待做（新开 queue Q104：接真读者或删表） |
 
 ```bash
 # 4~7 的复现命令
 grep -rn 'quill_upgrade' crates/quill-cli/src
 grep -rqE 'max_dispatch|max_replan|max_ask_depth|guidelines' crates/quill-server/src crates/quill-store/src; echo $?
 grep -rqE 'wiki_index|skill_count|tool_allowlist' crates/quill-server/src crates/quill-store/src; echo $?
+# 7a/7b/7c 的复现命令（Q044 核过的三条）
+grep -rn 'tool_allowlist' crates/quill-core/src/tools.rs          # 只有数据结构与注释，没有消费点
+grep -rn 'skill_count' crates/quill-server/src/api_experts.rs     # 空：专家接口不上报它
+grep -rn '"plugins"\|wiki_index' crates/quill-server/src/*.rs      # 只剩 501 路由与检索测试
 ```
 
 ---
