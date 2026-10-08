@@ -1181,7 +1181,6 @@ dependencies = [
  "quill-domain",
  "quill-server",
  "quill-store",
- "quill-upgrade",
  "quill-wiki",
  "sha2",
  "sqlx",

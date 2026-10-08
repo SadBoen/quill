@@ -23,7 +23,9 @@ quill-control = { path = "../quill-control" }
 quill-wiki = { path = "../quill-wiki" }
 quill-agent = { path = "../quill-agent" }
 quill-backup = { path = "../quill-backup" }
-quill-upgrade = { path = "../quill-upgrade" }
+# 说明：`quill-upgrade` 的依赖已删（queue Q091 抽查发现它零调用）。
+# 升级前备份守卫现在由 `quill-server` 的 `/api/upgrade/prepare` 真调用（Q039），
+# CLI 这边一次都没用过 —— 「声明了没人用」正是 Cargo.toml 里记的那类空壳。
 
 quill-server = { path = "../quill-server" }
 
