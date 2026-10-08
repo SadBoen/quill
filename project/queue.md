@@ -129,7 +129,7 @@
 - [x] Q084 · `pathsafe` 的跨平台（Windows `\\?` 前缀）测试补齐 · `pathsafe.rs` · **已完成 2026-10-08（一半可验、一半未验证，如实分开写）**：`#[cfg(not(windows))]` 一条在**本环境真跑**（非 Windows 上带逐字前缀的串是普通分量：不 panic、不误放行、`strip_verbatim` 不嗅探字符串就动手）；`#[cfg(windows)]` 两条**本机跑不到、未验证**（带前缀的 root 认不带前缀的子路径；`UNC` 前缀还原成真正的 UNC 拼法），与文件里既有三条 Windows 测试同一纪律（提交 825a90b）
 - [ ] Q085 · 错误响应统一带上「下一步」指引（抽查缺的补上） · `error.rs` + `api_*` · 清单
 - [ ] Q086 · 应用日志里不泄漏凭据（MCP env/headers、token） · 全仓 · 有测试
-- [ ] Q087 · 健康检查 `/healthz` 覆盖新增依赖 · `routes.rs` · 字段有真来源
+- [x] Q087 · 健康检查 `/healthz` 覆盖新增依赖 · `routes.rs` · **已完成 2026-10-08**：`REQUIRED_TABLES` 从 2 张（`experts`/`task_dispatches`）扩到 **14 张**，按「哪张表缺了会让一条已接线路由坏掉」列（每条带注释点名归谁用：登录/对话/专家团/扩展/实例配置/通道/MBTI）；**刻意不列**两张死表 `wiki_index`/`plugins`（Rust 侧零读写，见 CODE-TRUTH 7c / Q104）与迁移器自管的 `schema_version`。**顺带修掉会静默漏查的写法**：`missing_tables()` 原来把表数写死成 `IN (?, ?)`，加表时编译能过、探测不报错，但那张表永远不被检查 —— 现在按清单长度现拼占位符。测试新增 `tests/healthz_tables.rs` 3 条（新库不缺表 / 抽掉 `sessions` 必须点名且只报它 / 清单里每个名字都能在迁移里找到）；**反向验证**：把占位符改回写死的两个 → 三条全红（提交 a4d70d6）
 - [x] Q088 · 给 `scripts/status.mjs` 增加「队列进度」输出（读 `project/queue.md`，报「已完成 X / 总数 Y，下一个未完成 Qxxx」）· `scripts/status.mjs` · 已生效，并加 5 条自测（含反向：非队列行不算、带后缀编号 Q006b 不被截断）
 - [ ] Q089 · 用属性测试（proptest）覆盖解析类代码（id/slug/wire） · `crates/*/tests` · 引入并跑通
 - [ ] Q090 · 用 `cargo-nextest` 或等价提速全量测试 · CI · 有数据
