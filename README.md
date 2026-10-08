@@ -61,12 +61,14 @@ wsl.exe -e bash -lc 'export PATH="$HOME/.cargo/bin:$PATH"; cd /mnt/d/96_CoderWor
 ## 已知的环境性失败
 
 集中登记**因为环境而不是因为代码**的失败。看到这些不等于回归；**在 WSL 里跑一遍**
-才是判据。每条都附复现命令与 2026-10-08 的实测结果。
+才是判据。每条都附复现命令与实测结果（下表 2026-10-09 复核过一遍）。
 
 | 现象 | 为什么 | 复现 / 实测 |
 |---|---|---|
-| `mcp_client::tests::a_process_that_never_answers_the_handshake_times_out_with_a_runnable_hint` 在 Windows 上失败 | 该用例要拉起 `cat`，Windows 没有这个命令（另有几条用 `true`） | Windows 侧 `cargo test -p quill-core`；**未验证**：本机没有 Windows 侧 Rust 工具链（cargo 只在 WSL 里跑），无法实跑；此条沿用旧 README 的说法并标注未验证 |
+| `mcp_client::tests::a_process_that_never_answers_the_handshake_times_out_with_a_runnable_hint` 在 Windows 上失败 | 该用例要拉起 `cat`（另有几条用 `true`）。**注意这条的措辞曾不准确**：本机 `cat` 是有的，但在 Git 自带的 `usr/bin` 里，只有 Git Bash/PATH 含它时才找得到；纯 `cmd`/PowerShell 里没有 | Windows 侧 `cargo test -p quill-core`；**仍未验证**：没在 Windows 侧实跑。2026-10-09 实测的两个前提：`where.exe cat` → `C:\Program Files\Git\usr\bin\cat.exe`（Git Bash 里能命中）；`where.exe cargo` → `C:\Users\Boen\.cargo\bin\cargo.exe`、`rustup.exe toolchain list` → `1.99.0-x86_64-pc-windows-msvc (active)`（工具链**是**有的，旧 README 写「本机没有」已过期） |
+| 在这套 Git Bash 里直接跑 Windows 侧 `cargo build/test` 会因链接器不对而失败 | PATH 上先命中的 `link.exe` 是 **Git 自带的 coreutils 硬链接工具**，不是 MSVC 链接器 —— MSVC 目标会拿到一个语义完全不同的 `link` | `where.exe link.exe` → `C:\Program Files\Git\usr\bin\link.exe`（实测）；**未验证**：没在 Windows 侧真构建过，「会失败」是按上面这条 PATH 事实推的。要跑 Windows 侧请用 VS 开发者命令行（或 `rustup` 的 GNU 工具链） |
 | `node scripts/status.mjs` 在 Windows 上报 B0-1 / B0-2 / B0-3 / B0-6 失败 | 这几条判据用 POSIX 口径（`bash`、`test $(...) -eq 0`、`npx` 的输出路径 `/tmp`）；Windows 侧 `bash`/`test`/`/tmp` 语义不同 | `node scripts/status.mjs` → 报「命令失败（退出码 1）」；同一批命令在 WSL 里 `bash .scripts/gate-selftest.sh` 退出 **0**（实测） |
 | status.mjs 报「读不到 vitest 的 json 输出（ENOENT: … D:\tmp\quill-status-vitest.json）」→ 前端侧判据不可信 | 它把 `/tmp/...` 当路径，Windows 侧被解析成 `D:\tmp\...` | 同上；**这是环境问题，不是前端挂了** —— 前端门禁请在 WSL 或 CI 里跑 |
 | 前端 `node_modules` 在 WSL 与 Windows 之间共用 | 原生 binding 按平台编译，跑完一侧另一侧会报缺失 | CI 每个 job 全新 `npm ci` 没有这个问题；本地换侧跑之前重装 |
+| `cargo test --workspace` 里两条真实模型用例显示 `1 ignored`（`quill-provider` 的 `real_local_model.rs` / `live_local_profile.rs`） | 它们标了 `#[ignore = "需要本机 llama-server 在跑"]` —— 本机端点没起时不该让全量测试变红，但也不能假装跑过 | 2026-10-09 实测：两条各 `0 passed / 1 ignored`（**不是通过**）。要跑就按 `TESTSETS/STATUS.md` 起本机 llama-server 后加 `--ignored` |
 
