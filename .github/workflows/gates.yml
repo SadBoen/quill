@@ -108,6 +108,13 @@ jobs:
       - name: Rust lint（clippy，warning 即失败）
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # 最高指示第 4 条：最终产物只打包 quill。goose / octop 只能抄、不能依赖。
+      - name: 文本门禁 · 不许把 goose / octop 当依赖
+        run: node .vendor-freedom-check.mjs
+
+      - name: 该判定的自测
+        run: node .vendor-freedom-check.mjs --self-test
+
       - name: 文本门禁 · 乱码
         run: node .mojibake-check.mjs
 

@@ -117,7 +117,8 @@
 - [ ] Q077 · 自创机制在代码/文档里标注「自创」，不包装成抄来的 · 全仓 · 有清单
 - [ ] Q078 · 每条上游引用逐行核过（`node .provenance-check.mjs` 常绿） · `UPSTREAM-USAGE.md` · 无坏引用
 - [ ] Q079 · 「刻意没抄上游」的地方写清是哪几处、为什么 · `docs/` · 有清单
-- [ ] Q080 · `vendor/` 与 `.octop-ref/` 删掉后 `cargo build` 必须成功（把这条做成门禁）· CI · 违反报红
+- [x] Q080 · `vendor/` 与 `.octop-ref/` 删掉后 `cargo build` 必须成功 —— 已做成门禁 `.vendor-freedom-check.mjs`（扫全部 Cargo.toml，禁 goose/octop 依赖键、禁指向参考源的 path/git；带 `--self-test`）· CI 已加
+- [ ] Q101 · 处理 `crates/quill-testkit/fixtures/boundary/`（13 个夹具 + manifest.json）：**没有任何代码读它**（改成孤儿数据），且其中 `bnd00-all-clean`/`bnd03-floating-dep` 把 `goose = { git = … }` 当成合法/待修的样子，**与最高指示第 4 条冲突**。要么删掉，要么接回真读者 · `crates/quill-testkit/` · 二选一并说明
 
 ## I. 测试 / 健壮性 / 可诊断性
 
