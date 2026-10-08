@@ -17,7 +17,7 @@
  * 跑法：node scripts/status-selftest.mjs
  */
 
-import { decide, selfCheck, feFullName, VERDICT } from './status.mjs';
+import { decide, selfCheck, feFullName, parseQueue, VERDICT } from './status.mjs';
 
 let failed = 0;
 let checks = 0;
@@ -251,6 +251,28 @@ console.log('\n场景 13：selfCheck 必须抓到**未知的判据种类**（这
   // 反向：把 kind 改回合法的一种，就不该再报 kind 的问题。
   const ok = selfCheck([{ id: 'Z3', verify: { kind: 'cmd', cmd: 'ls' } }], baseEvidence.knownTests);
   check('合法 kind 不误报', ok, []);
+}
+
+console.log('\n场景 14：执行队列进度必须由**真实格式**解析出来（含反向）');
+{
+  // 真实格式来自 project/queue.md：`- [x] Q001 · 做什么 · 落在哪 · 怎么算做完`。
+  check(
+    '数出总数 / 完成数 / 下一个未完成',
+    parseQueue('- [x] Q001 · a\n- [ ] Q002 · b\n- [x] Q003 · c\n'),
+    { total: 3, done: 2, next: 'Q002' },
+  );
+  // 反向：不是队列行的内容不能被算进去 —— 算进去会让进度虚高，比没有进度更糟。
+  check(
+    '忽略标题与普通列表行',
+    parseQueue('# 标题\n- 普通列表\n- [ ] Q006b · d\n'),
+    { total: 1, done: 0, next: 'Q006b' },
+  );
+  // 全完成时 next 必须是 null，而不是编一个 id 出来。
+  check('全完成 → next 为 null', parseQueue('- [x] Q001 · a\n').next, null);
+  // 空文件不能崩，也不能被当成「全完成」。
+  check('空文件 → total 0', parseQueue('').total, 0);
+  // 子编号（Q006b）不能被截成 Q006，否则进度会两条并成一条。
+  check('带后缀的编号保持完整', parseQueue('- [ ] Q006b · x\n').next, 'Q006b');
 }
 
 console.log('\n' + '='.repeat(60));

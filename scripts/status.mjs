@@ -455,6 +455,46 @@ function countBy(list) {
   return c;
 }
 
+/**
+ * 解析 `project/queue.md`，数出执行队列的进度。
+ *
+ * 导出成纯函数是为了让 `status-selftest.mjs` 用合成文本直接验它 —— 队列文件本身的
+ * 格式（`- [x] Qxxx · …`）是这里唯一的输入，格式理解错了就会报出假的进度，
+ * 而假的进度比没有进度更糟。
+ */
+export function parseQueue(text) {
+  const items = [];
+  for (const line of text.split(/\r?\n/)) {
+    const m = /^- \[( |x)\] (Q\d+[a-z]?)\b/.exec(line.trim());
+    if (m) items.push({ done: m[1] === 'x', id: m[2] });
+  }
+  const done = items.filter((i) => i.done).length;
+  return {
+    total: items.length,
+    done,
+    next: items.find((i) => !i.done)?.id ?? null,
+  };
+}
+
+/// 执行队列的进度。读不到文件就静默跳过（队列是可选产物，不该让 status 崩）。
+function renderQueue() {
+  let text;
+  try {
+    text = fs.readFileSync(path.join(ROOT, 'project', 'queue.md'), 'utf8');
+  } catch {
+    return;
+  }
+  const { total, done, next } = parseQueue(text);
+  if (total === 0) return;
+  log('');
+  log('—'.repeat(72));
+  log(
+    `执行队列（project/queue.md）：已完成 ${done} / ${total}` +
+      (next ? `，下一个未完成 ${next}` : '，全部完成'),
+  );
+  log('  队列是「下一件做什么」；里程碑判据仍在 project/items.mjs。');
+}
+
 function render(results) {
   const counts = countBy(results.map((r) => r.verdict));
   log('');
@@ -493,6 +533,7 @@ function render(results) {
     log('  这比未通过更严重：它意味着那条待办的真实状态是未知的。');
   }
   log('—'.repeat(72));
+  renderQueue();
 }
 
 // 被别的脚本 import 时（status-selftest.mjs 要拿 decide/selfCheck 喂合成数据）

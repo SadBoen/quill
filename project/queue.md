@@ -129,7 +129,7 @@
 - [ ] Q085 · 错误响应统一带上「下一步」指引（抽查缺的补上） · `error.rs` + `api_*` · 清单
 - [ ] Q086 · 应用日志里不泄漏凭据（MCP env/headers、token） · 全仓 · 有测试
 - [ ] Q087 · 健康检查 `/healthz` 覆盖新增依赖 · `routes.rs` · 字段有真来源
-- [ ] Q088 · 给 `scripts/status.mjs` 增加「队列进度」输出（读本文件） · `scripts/status.mjs` · 能报表
+- [x] Q088 · 给 `scripts/status.mjs` 增加「队列进度」输出（读 `project/queue.md`，报「已完成 X / 总数 Y，下一个未完成 Qxxx」）· `scripts/status.mjs` · 已生效，并加 5 条自测（含反向：非队列行不算、带后缀编号 Q006b 不被截断）
 - [ ] Q089 · 用属性测试（proptest）覆盖解析类代码（id/slug/wire） · `crates/*/tests` · 引入并跑通
 - [ ] Q090 · 用 `cargo-nextest` 或等价提速全量测试 · CI · 有数据
 
@@ -141,7 +141,7 @@
 - [ ] Q094 · 每个里程碑达成后，把新判据加进 `project/items.mjs` · `project/` · `status.mjs` 能判
 - [ ] Q095 · `TESTSETS/` 与真机验收记录对齐 · `TESTSETS/` · 抽查一致
 - [ ] Q096 · 把「已知的环境性失败」集中登记（如 Windows 无 `cat`） · `README.md`/`docs/` · 有清单
-- [ ] Q097 · 给本队列加「取用规则」并让自动化真按它取（见本文件头） · 本文件 · 自动化 prompt 引用它
+- [x] Q097 · 给本队列加「取用规则」并让自动化真按它取 —— 规则已改为「批次由用户指定（默认 1~3）」，自动化 prompt 已引用 `project/queue.md` · 本文件
 
 ## K. 长期项（不急，但别忘）
 
