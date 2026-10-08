@@ -331,6 +331,314 @@ pub fn dialog_content_chars(
     })
 }
 
+// ---------------------------------------------------------------- 用量（metrics / usage）
+
+/// 会话级指标要的消息列（`GET /api/sessions/{id}/metrics`）。
+pub const USAGE_ROWS_SQL: &str = "SELECT role, input_tokens, output_tokens, turn_ms, \
+     cache_read_tokens FROM messages WHERE user_id = ? AND session_id = ? ORDER BY seq";
+
+/// `GET /api/usage` 的会话清单（多取一条由调用方判断截断）。
+pub const USAGE_SESSIONS_SQL: &str = "SELECT id, title, expert_id, last_active_at FROM sessions \
+     WHERE user_id = ? AND deleted_at IS NULL ORDER BY last_active_at DESC LIMIT ?";
+
+/// 一条消息的用量**原始列**。怎么解释（谁算 user、缺一列算不算）在
+/// `session_metrics` —— 这里只搬数据，不带口径。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageUsageRow {
+    pub role: String,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    /// `None` = 没量到，**不是 0**。
+    pub turn_ms: Option<i64>,
+    /// `None` = 模型端没上报缓存读，**不是 0**。
+    pub cache_read_tokens: Option<i64>,
+}
+
+fn row_to_usage(r: &SqliteRow) -> MessageUsageRow {
+    MessageUsageRow {
+        role: col_str(r, "role"),
+        input_tokens: col_i64(r, "input_tokens"),
+        output_tokens: col_i64(r, "output_tokens"),
+        // 可空列：取不到与 NULL 是同一件事（没上报），不是 0。
+        turn_ms: sqlx::Row::try_get::<Option<i64>, _>(r, "turn_ms")
+            .ok()
+            .flatten(),
+        cache_read_tokens: sqlx::Row::try_get::<Option<i64>, _>(r, "cache_read_tokens")
+            .ok()
+            .flatten(),
+    }
+}
+
+/// `GET /api/usage` 的会话行。`id` 是**裸 blob**（不是 hex）：这一列要拿去
+/// 喂给下面的 `IN (?, ?, …)`，转成 hex 反而要多转回来一次。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsageSessionRow {
+    pub id: Vec<u8>,
+    pub title: String,
+    pub expert_id: Option<String>,
+    pub last_active_at: i64,
+}
+
+/// 单会话的用量行，按 `seq` 升序。
+pub fn usage_rows(
+    db: &DbBridge,
+    uid: UserId,
+    sid: [u8; 16],
+) -> Result<Vec<MessageUsageRow>, AgentError> {
+    db.call(move |pool, _rt| {
+        Box::pin(async move {
+            let out = sqlx::query(USAGE_ROWS_SQL)
+                .bind(uid.as_bytes().to_vec())
+                .bind(sid.to_vec())
+                .fetch_all(&pool)
+                .await
+                .map_err(|e| storage_error("读会话统计", e))?;
+            Ok(out.iter().map(row_to_usage).collect())
+        })
+    })
+}
+
+/// 用量页的会话清单（`limit` 由调用方给：多取一条用来判断有没有被截断）。
+pub fn usage_sessions(
+    db: &DbBridge,
+    uid: UserId,
+    limit: i64,
+) -> Result<Vec<UsageSessionRow>, AgentError> {
+    db.call(move |pool, _rt| {
+        Box::pin(async move {
+            let rows = sqlx::query(USAGE_SESSIONS_SQL)
+                .bind(uid.as_bytes().to_vec())
+                .bind(limit)
+                .fetch_all(&pool)
+                .await
+                .map_err(|e| storage_error("列会话", e))?;
+            Ok(rows
+                .iter()
+                .map(|r| {
+                    let expert_id = col_str(r, "expert_id");
+                    UsageSessionRow {
+                        id: sqlx::Row::try_get::<Vec<u8>, _>(r, "id").unwrap_or_default(),
+                        title: col_str(r, "title"),
+                        // 空串与 NULL 在这里是同一件事：没挂专家。
+                        expert_id: if expert_id.is_empty() {
+                            None
+                        } else {
+                            Some(expert_id)
+                        },
+                        last_active_at: col_i64(r, "last_active_at"),
+                    }
+                })
+                .collect())
+        })
+    })
+}
+
+/// 一批会话的用量行（`(会话 id, 行)`）。`ids` 为空时返回空 ——
+/// `IN ()` 是语法错，不能把空集拼进 SQL。
+pub fn usage_rows_for_sessions(
+    db: &DbBridge,
+    uid: UserId,
+    ids: Vec<Vec<u8>>,
+) -> Result<Vec<(Vec<u8>, MessageUsageRow)>, AgentError> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    db.call(move |pool, _rt| {
+        Box::pin(async move {
+            let placeholders = vec!["?"; ids.len()].join(",");
+            let sql = format!(
+                "SELECT session_id, role, input_tokens, output_tokens, turn_ms, \
+                 cache_read_tokens FROM messages WHERE user_id = ? \
+                 AND session_id IN ({placeholders}) ORDER BY seq"
+            );
+            let mut q = sqlx::query(&sql).bind(uid.as_bytes().to_vec());
+            for id in &ids {
+                q = q.bind(id.clone());
+            }
+            let rows = q
+                .fetch_all(&pool)
+                .await
+                .map_err(|e| storage_error("读用量", e))?;
+            Ok(rows
+                .iter()
+                .map(|r| {
+                    (
+                        sqlx::Row::try_get::<Vec<u8>, _>(r, "session_id").unwrap_or_default(),
+                        row_to_usage(r),
+                    )
+                })
+                .collect())
+        })
+    })
+}
+
+// ---------------------------------------------------------------- 发送路径（prepare_turn）
+
+/// 会话绑定的专家标识（未软删才看得到；`expert_id` 本身允许为 NULL）。
+pub const SESSION_EXPERT_ID_SQL: &str = "SELECT expert_id FROM sessions \
+     WHERE user_id = ? AND id = ? AND deleted_at IS NULL";
+
+/// 读会话绑定的专家标识。行不存在 / 列是 NULL → `Ok(None)`。
+pub fn session_expert_id(
+    db: &DbBridge,
+    uid: UserId,
+    sid: [u8; 16],
+) -> Result<Option<String>, AgentError> {
+    db.call(move |pool, _rt| {
+        Box::pin(async move {
+            let v: Option<Option<String>> = sqlx::query_scalar(SESSION_EXPERT_ID_SQL)
+                .bind(uid.as_bytes().to_vec())
+                .bind(sid.to_vec())
+                .fetch_optional(&pool)
+                .await
+                .map_err(|e| storage_error("读会话绑定的专家", e))?;
+            Ok(v.flatten())
+        })
+    })
+}
+
+/// 对话历史（只取 `complete` 的 user/assistant）。
+///
+/// SQL 用 `seq DESC LIMIT ?` 取**最近**若干条，返回前反转成升序 ——
+/// 调用方拿到的是「按时间从旧到新」，与喂给模型的顺序一致。
+pub const HISTORY_SQL: &str = "SELECT role, content FROM messages \
+     WHERE user_id = ? AND session_id = ? AND status = 'complete' \
+     AND role IN ('user','assistant') ORDER BY seq DESC LIMIT ?";
+
+/// 最近 `limit` 条对话历史，**升序**返回。
+pub fn history_rows(
+    db: &DbBridge,
+    uid: UserId,
+    sid: [u8; 16],
+    limit: i64,
+) -> Result<Vec<(String, String)>, AgentError> {
+    db.call(move |pool, _rt| {
+        Box::pin(async move {
+            let out = sqlx::query(HISTORY_SQL)
+                .bind(uid.as_bytes().to_vec())
+                .bind(sid.to_vec())
+                .bind(limit)
+                .fetch_all(&pool)
+                .await
+                .map_err(|e| storage_error("读历史", e))?;
+            let mut rows: Vec<(String, String)> = out
+                .iter()
+                .map(|r| (col_str(r, "role"), col_str(r, "content")))
+                .collect();
+            rows.reverse();
+            Ok(rows)
+        })
+    })
+}
+
+/// 下一个可用 `seq`（`MAX(seq) + 1`；空会话从 1 开始）。
+pub const NEXT_SEQ_SQL: &str =
+    "SELECT COALESCE(MAX(seq),0) FROM messages WHERE user_id = ? AND session_id = ?";
+
+pub fn next_seq(db: &DbBridge, uid: UserId, sid: [u8; 16]) -> Result<i64, AgentError> {
+    db.call(move |pool, _rt| {
+        Box::pin(async move {
+            let m: i64 = sqlx::query_scalar(NEXT_SEQ_SQL)
+                .bind(uid.as_bytes().to_vec())
+                .bind(sid.to_vec())
+                .fetch_one(&pool)
+                .await
+                .map_err(|e| storage_error("取序号", e))?;
+            Ok(m + 1)
+        })
+    })
+}
+
+/// 要写进 `messages` 的一行。列顺序与 [`INSERT_MESSAGE_SQL`] 一一对应。
+#[derive(Debug, Clone)]
+pub struct NewMessage {
+    pub id: [u8; 16],
+    pub seq: i64,
+    pub role: String,
+    pub status: String,
+    pub content: String,
+    pub reasoning: Option<String>,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    /// `None` = 模型端没上报，不是 0（见 migration 0008）。
+    pub cache_read_tokens: Option<i64>,
+    pub cache_write_tokens: Option<i64>,
+    pub turn_ms: Option<i64>,
+    pub created_at: i64,
+}
+
+pub const INSERT_MESSAGE_SQL: &str =
+    "INSERT INTO messages(user_id,id,session_id,seq,role,status,content,reasoning,\
+     input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,turn_ms,created_at) \
+     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+
+/// 写一条消息，返回 `created_at`（调用方要用它拼响应）。
+pub fn insert_message(
+    db: &DbBridge,
+    uid: UserId,
+    sid: [u8; 16],
+    m: NewMessage,
+) -> Result<i64, AgentError> {
+    let created_at = m.created_at;
+    db.call(move |pool, _rt| {
+        Box::pin(async move {
+            sqlx::query(INSERT_MESSAGE_SQL)
+                .bind(uid.as_bytes().to_vec())
+                .bind(m.id.to_vec())
+                .bind(sid.to_vec())
+                .bind(m.seq)
+                .bind(&m.role)
+                .bind(&m.status)
+                .bind(&m.content)
+                .bind(&m.reasoning)
+                .bind(m.input_tokens)
+                .bind(m.output_tokens)
+                .bind(m.cache_read_tokens)
+                .bind(m.cache_write_tokens)
+                .bind(m.turn_ms)
+                .bind(m.created_at)
+                .execute(&pool)
+                .await
+                .map_err(|e| storage_error("存消息", e))?;
+            Ok(created_at)
+        })
+    })
+}
+
+/// 一轮结束后推进会话：`next_seq`、`message_count += 2`（一问一答）、
+/// 累计 token、刷新活跃时间。
+pub const TOUCH_SESSION_SQL: &str =
+    "UPDATE sessions SET next_seq = ?, message_count = message_count + 2, \
+     input_tokens = input_tokens + ?, output_tokens = output_tokens + ?, \
+     last_active_at = ?, updated_at = ? WHERE user_id = ? AND id = ?";
+
+pub fn touch_session(
+    db: &DbBridge,
+    uid: UserId,
+    sid: [u8; 16],
+    next_seq: i64,
+    input: Option<u32>,
+    output: Option<u32>,
+    now: i64,
+) -> Result<(), AgentError> {
+    db.call(move |pool, _rt| {
+        Box::pin(async move {
+            sqlx::query(TOUCH_SESSION_SQL)
+                .bind(next_seq)
+                .bind(i64::from(input.unwrap_or(0)))
+                .bind(i64::from(output.unwrap_or(0)))
+                .bind(now)
+                .bind(now)
+                .bind(uid.as_bytes().to_vec())
+                .bind(sid.to_vec())
+                .execute(&pool)
+                .await
+                .map_err(|e| storage_error("更新会话", e))?;
+            Ok(())
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -385,5 +693,75 @@ mod tests {
             DIALOG_CONTENTS_SQL.contains("role IN ('user','assistant')"),
             "工具/系统消息不算「对话段」，算进去会让上下文分段虚高"
         );
+    }
+
+    #[test]
+    fn usage_rows_are_scoped_and_ordered_like_metrics_expects() {
+        // 少任何一条都会让「指标」变成别人的或乱序的：
+        // 隔离谓词两条、顺序一条。
+        assert!(USAGE_ROWS_SQL.contains("user_id = ?"));
+        assert!(USAGE_ROWS_SQL.contains("session_id = ?"));
+        assert!(USAGE_ROWS_SQL.contains("ORDER BY seq"));
+    }
+
+    #[test]
+    fn usage_sessions_hide_soft_deleted_and_bound_the_window() {
+        assert!(USAGE_SESSIONS_SQL.contains("user_id = ?"));
+        assert!(USAGE_SESSIONS_SQL.contains("deleted_at IS NULL"));
+        assert!(
+            USAGE_SESSIONS_SQL.contains("LIMIT ?"),
+            "用量页的会话窗口必须由调用方给；写死或没有上限都会让接口随数据增长"
+        );
+    }
+
+    #[test]
+    fn history_takes_only_complete_dialog_turns() {
+        // 三条一起构成「喂给模型的历史」的定义：
+        // 只取 complete（半截消息会把模型带进坏状态）、只取 user/assistant
+        // （工具往返是内部细节）、DESC LIMIT 取最近的（不是最旧的）。
+        assert!(HISTORY_SQL.contains("status = 'complete'"));
+        assert!(HISTORY_SQL.contains("role IN ('user','assistant')"));
+        assert!(HISTORY_SQL.contains("ORDER BY seq DESC LIMIT ?"));
+        assert!(HISTORY_SQL.contains("user_id = ?") && HISTORY_SQL.contains("session_id = ?"));
+    }
+
+    #[test]
+    fn next_seq_is_scoped_to_the_session() {
+        assert!(NEXT_SEQ_SQL.contains("user_id = ?"));
+        assert!(NEXT_SEQ_SQL.contains("session_id = ?"));
+        assert!(
+            NEXT_SEQ_SQL.contains("COALESCE(MAX(seq),0)"),
+            "空会话必须从 1 开始（COALESCE 缺了会算出 NULL）"
+        );
+    }
+
+    #[test]
+    fn insert_message_binds_exactly_the_columns_it_declares() {
+        // 占位符个数与列数必须一致：少一个会在运行时报
+        // 「column index out of range」，而那是写入路径，测试里最不容易撞上。
+        let cols = INSERT_MESSAGE_SQL
+            .split_once('(')
+            .and_then(|(_, rest)| rest.split_once(')'))
+            .map(|(c, _)| c.split(',').count())
+            .unwrap_or(0);
+        let qs = INSERT_MESSAGE_SQL.matches('?').count();
+        assert_eq!(cols, 14, "列清单与 NewMessage 字段一一对应");
+        assert_eq!(qs, cols, "占位符数必须等于列数：{INSERT_MESSAGE_SQL}");
+    }
+
+    #[test]
+    fn touch_session_advances_count_by_a_question_and_an_answer() {
+        // `+ 2` 是一问一答：改成 +1 会让侧栏条数少于真实消息数，
+        // 而界面上没有人能看出来「少算了」。
+        assert!(TOUCH_SESSION_SQL.contains("message_count + 2"));
+        assert!(TOUCH_SESSION_SQL.contains("next_seq = ?"));
+        assert!(TOUCH_SESSION_SQL.contains("user_id = ?") && TOUCH_SESSION_SQL.contains("id = ?"));
+    }
+
+    #[test]
+    fn the_bound_expert_read_hides_soft_deleted_sessions() {
+        // 绑定的专家只对「还看得见的会话」生效；软删的会话不该被它救活。
+        assert!(SESSION_EXPERT_ID_SQL.contains("deleted_at IS NULL"));
+        assert!(SESSION_EXPERT_ID_SQL.contains("user_id = ?"));
     }
 }

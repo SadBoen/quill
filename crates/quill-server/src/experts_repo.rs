@@ -51,6 +51,41 @@ async fn sql_get(
     }
 }
 
+/// 会话要的人格：按专家 id 读 `(instructions, model)`，**用户自建的那份优先**
+/// 于同名内置专家（与 `ExpertRegistry::list_visible` 的去重口径一致）。
+///
+/// 原先这段 SQL 内联在 `api_chat::resolve_persona` 里（queue Q006c）——
+/// 它读的是 `experts` 表，口径就该跟本模块的其它读法待在一起，
+/// 否则「专家可见性怎么算」会被拆成两处，改一处漏一处。
+pub const PERSONA_SQL: &str = "SELECT instructions, model FROM experts \
+     WHERE id = ? AND deleted_at IS NULL \
+       AND owner_user_id IN (?, x'00000000000000000000000000000000') \
+     ORDER BY CASE WHEN owner_user_id = ? THEN 0 ELSE 1 END LIMIT 1";
+
+/// 读专家人格正文与偏好模型。查不到 / 已软删 → `Ok(None)`。
+pub fn persona_instructions_model(
+    db: &DbBridge,
+    uid: UserId,
+    expert_id: String,
+) -> Result<Option<(String, Option<String>)>, AgentError> {
+    db.call(move |pool, _rt| {
+        Box::pin(async move {
+            let row = sqlx::query(PERSONA_SQL)
+                .bind(expert_id)
+                .bind(crate::db::blob_of(&uid))
+                .bind(crate::db::blob_of(&uid))
+                .fetch_optional(&pool)
+                .await
+                .map_err(|e| storage_error(OP_GET, e))?;
+            Ok(row.map(|r| {
+                let instructions: String = sqlx::Row::get(&r, "instructions");
+                let model: Option<String> = sqlx::Row::get(&r, "model");
+                (instructions, model)
+            }))
+        })
+    })
+}
+
 async fn sql_list_owned(pool: &sqlx::SqlitePool, owner: UserId) -> Result<Vec<Expert>, AgentError> {
     let sql = format!("SELECT {COLUMNS} FROM experts WHERE owner_user_id = ? ORDER BY id ASC");
     let rows = sqlx::query(&sql)

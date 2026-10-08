@@ -9,7 +9,6 @@ use serde_json::{json, Value};
 use quill_provider::{
     ChatRequest, ChatResponse, Message, SharedProvider, StreamDelta, TokenUsage, ToolCall, ToolSpec,
 };
-use sqlx::Row;
 
 use crate::auth::AuthUser;
 use crate::body::JsonBody;
@@ -165,15 +164,9 @@ fn advice_for_unusable_reply(e: &quill_provider::ProviderError) -> &'static str 
      打印完整诊断后再用同一条消息重试。"
 }
 
-// 取列助手已收口到 `crate::db::{col_str, col_i64}`（原先本文件与别处各写一份）。
-// 保留 `s` / `n` 两个短名只是让本文件里二十来处调用点不用动。
-fn s(row: &sqlx::sqlite::SqliteRow, name: &str) -> String {
-    crate::db::col_str(row, name)
-}
-
-fn n(row: &sqlx::sqlite::SqliteRow, name: &str) -> i64 {
-    crate::db::col_i64(row, name)
-}
+// 取列助手 `s` / `n` 与可空列助手 `nullable_n` 已随 Q006c 删除：
+// 本文件里最后几个用它们的读路径（metrics / usage / load_history）都搬进了
+// `chat_repo`，取列在那边的 `db::{col_str, col_i64}` 里做。
 
 pub async fn create(
     State(state): State<AppState>,
@@ -495,42 +488,8 @@ pub async fn metrics(
     let sid = parse_id(&id)?;
     ensure_session(db, uid, sid).await?;
 
-    let rows = db
-        .call(move |pool, _rt| {
-            Box::pin(async move {
-                let r: Result<Vec<crate::session_metrics::MessageUsage>, quill_agent::AgentError> =
-                    async {
-                        let out = sqlx::query(
-                            "SELECT role, input_tokens, output_tokens, turn_ms, cache_read_tokens \
-                             FROM messages WHERE user_id = ? AND session_id = ? ORDER BY seq",
-                        )
-                        .bind(uid.as_bytes().to_vec())
-                        .bind(sid.to_vec())
-                        .fetch_all(&pool)
-                        .await
-                        .map_err(|e| crate::db::storage_error("读会话统计", e))?;
-
-                        Ok(out
-                            .into_iter()
-                            .map(|row| {
-                                let role = s(&row, "role");
-                                crate::session_metrics::MessageUsage {
-                                    is_user: role == "user",
-                                    is_assistant: role == "assistant",
-                                    input_tokens: n(&row, "input_tokens"),
-                                    output_tokens: n(&row, "output_tokens"),
-                                    turn_ms: nullable_n(&row, "turn_ms"),
-                                    // 可空列必须区分「没上报」和「上报了 0」。
-                                    cache_read_tokens: nullable_n(&row, "cache_read_tokens"),
-                                }
-                            })
-                            .collect())
-                    }
-                    .await;
-                r
-            })
-        })
-        .map_err(storage)?;
+    let rows = crate::chat_repo::usage_rows(db, uid, sid).map_err(storage)?;
+    let rows: Vec<crate::session_metrics::MessageUsage> = rows.iter().map(usage_of).collect();
 
     Ok(Json(crate::session_metrics::aggregate(&rows).to_json()).into_response())
 }
@@ -548,11 +507,7 @@ pub const USAGE_SESSIONS_LIMIT: i64 = 200;
 /// 这里只把行取出来、按会话分组喂给它。合并总计也是同一个函数跑一遍全量行，
 /// 所以「总计」和「每行加起来」必然一致。
 /// `GET /api/usage` 的行集合：会话行 + 每会话的 `(消息 id, 用量)`。
-type UsageRows = (
-    Vec<SessionRow>,
-    Vec<(Vec<u8>, crate::session_metrics::MessageUsage)>,
-);
-
+/// 两块都来自 `chat_repo`（queue Q006c）：HTTP 层不再内联 SQL。
 pub async fn usage(
     State(state): State<AppState>,
     user: AuthUser,
@@ -560,80 +515,10 @@ pub async fn usage(
     let db = state.db()?;
     let uid = user.0.user_id;
 
-    let (sessions, rows) = db
-        .call(move |pool, _rt| {
-            Box::pin(async move {
-                let r: Result<UsageRows, quill_agent::AgentError> = async {
-                    let listed = sqlx::query(
-                        "SELECT id, title, expert_id, last_active_at FROM sessions \
-                             WHERE user_id = ? AND deleted_at IS NULL \
-                             ORDER BY last_active_at DESC LIMIT ?",
-                    )
-                    .bind(uid.as_bytes().to_vec())
-                    .bind(USAGE_SESSIONS_LIMIT + 1)
-                    .fetch_all(&pool)
-                    .await
-                    .map_err(|e| crate::db::storage_error("列会话", e))?;
-
-                    let sessions: Vec<SessionRow> = listed
-                        .iter()
-                        .map(|row| SessionRow {
-                            id: row.try_get::<Vec<u8>, _>("id").unwrap_or_default(),
-                            title: s(row, "title"),
-                            expert_id: {
-                                let v = s(row, "expert_id");
-                                if v.is_empty() {
-                                    None
-                                } else {
-                                    Some(v)
-                                }
-                            },
-                            last_active_at: n(row, "last_active_at"),
-                        })
-                        .collect();
-
-                    let rows = if sessions.is_empty() {
-                        Vec::new()
-                    } else {
-                        let sql = format!(
-                            "SELECT session_id, role, input_tokens, output_tokens, \
-                                 turn_ms, cache_read_tokens FROM messages \
-                                 WHERE user_id = ? AND session_id IN ({}) ORDER BY seq",
-                            vec!["?"; sessions.len()].join(",")
-                        );
-                        let mut q = sqlx::query(&sql).bind(uid.as_bytes().to_vec());
-                        for row in &sessions {
-                            q = q.bind(row.id.clone());
-                        }
-                        q.fetch_all(&pool)
-                            .await
-                            .map_err(|e| crate::db::storage_error("读用量", e))?
-                            .into_iter()
-                            .map(|row| {
-                                let role = s(&row, "role");
-                                let sid =
-                                    row.try_get::<Vec<u8>, _>("session_id").unwrap_or_default();
-                                (
-                                    sid,
-                                    crate::session_metrics::MessageUsage {
-                                        is_user: role == "user",
-                                        is_assistant: role == "assistant",
-                                        input_tokens: n(&row, "input_tokens"),
-                                        output_tokens: n(&row, "output_tokens"),
-                                        turn_ms: nullable_n(&row, "turn_ms"),
-                                        cache_read_tokens: nullable_n(&row, "cache_read_tokens"),
-                                    },
-                                )
-                            })
-                            .collect()
-                    };
-                    Ok((sessions, rows))
-                }
-                .await;
-                r
-            })
-        })
-        .map_err(storage)?;
+    let sessions =
+        crate::chat_repo::usage_sessions(db, uid, USAGE_SESSIONS_LIMIT + 1).map_err(storage)?;
+    let ids: Vec<Vec<u8>> = sessions.iter().map(|s| s.id.clone()).collect();
+    let rows = crate::chat_repo::usage_rows_for_sessions(db, uid, ids).map_err(storage)?;
 
     // 多取的那一条在这里被丢掉 —— 丢掉之前先记住「确实被截断了」。
     let truncated = sessions.len() > USAGE_SESSIONS_LIMIT as usize;
@@ -649,8 +534,11 @@ pub async fn usage(
     > = std::collections::HashMap::new();
     let mut all_rows: Vec<crate::session_metrics::MessageUsage> = Vec::new();
     for (sid, usage) in &rows {
-        per_session.entry(sid.clone()).or_default().push(*usage);
-        all_rows.push(*usage);
+        per_session
+            .entry(sid.clone())
+            .or_default()
+            .push(usage_of(usage));
+        all_rows.push(usage_of(usage));
     }
 
     let totals = crate::session_metrics::aggregate(&all_rows);
@@ -681,22 +569,18 @@ pub async fn usage(
     .into_response())
 }
 
-/// `usage` 接口用的会话行。
-struct SessionRow {
-    id: Vec<u8>,
-    title: String,
-    expert_id: Option<String>,
-    last_active_at: i64,
-}
-
-/// 读一个可空的整数列：`NULL` 保持 `None`，绝不塌成 `0`。
-///
-/// 塌成 0 是这套统计里最容易犯、后果也最直接的错误：`cache_read_tokens`
-/// 从 NULL 变成 0，界面就会理直气壮地显示「缓存命中 0.0%」—— 而真实情况
-/// 只是模型端没报这个数。
-fn nullable_n(row: &sqlx::sqlite::SqliteRow, key: &str) -> Option<i64> {
-    use sqlx::Row;
-    row.try_get::<Option<i64>, _>(key).unwrap_or(None)
+/// 库里的用量原始列 → 指标模块的口径。只做这一件事，所以留在 HTTP 层：
+/// 聚合规则（缺一列怎么办、哪些角色算数）在 `session_metrics`，那边是纯函数、测得到。
+fn usage_of(r: &crate::chat_repo::MessageUsageRow) -> crate::session_metrics::MessageUsage {
+    crate::session_metrics::MessageUsage {
+        is_user: r.role == "user",
+        is_assistant: r.role == "assistant",
+        input_tokens: r.input_tokens,
+        output_tokens: r.output_tokens,
+        turn_ms: r.turn_ms,
+        // 可空列必须区分「没上报」和「上报了 0」。
+        cache_read_tokens: r.cache_read_tokens,
+    }
 }
 
 fn parse_id(raw: &str) -> Result<[u8; 16], ApiError> {
@@ -1402,26 +1286,9 @@ async fn resolve_persona(
     uid: quill_domain::UserId,
     sid: [u8; 16],
 ) -> Result<SessionPersona, ApiError> {
-    let expert_id: Option<String> = db
-        .call(move |pool, _rt| {
-            Box::pin(async move {
-                let r: Result<Option<String>, quill_agent::AgentError> = async {
-                    Ok(sqlx::query_scalar(
-                        "SELECT expert_id FROM sessions \
-                             WHERE user_id = ? AND id = ? AND deleted_at IS NULL",
-                    )
-                    .bind(uid.as_bytes().to_vec())
-                    .bind(sid.to_vec())
-                    .fetch_optional(&pool)
-                    .await
-                    .map_err(|e| crate::db::storage_error("读会话绑定的专家", e))?
-                    .flatten())
-                }
-                .await;
-                r
-            })
-        })
-        .map_err(storage)?;
+    // 两段读都在 repo 层（queue Q006c）：会话绑的谁在 `chat_repo`，
+    // 那个人格是什么在 `experts_repo`（口径与 ExpertRegistry 的去重一致）。
+    let expert_id = crate::chat_repo::session_expert_id(db, uid, sid).map_err(storage)?;
 
     let Some(expert_id) = expert_id
         .as_deref()
@@ -1435,39 +1302,7 @@ async fn resolve_persona(
         return Ok(SessionPersona::default());
     };
 
-    let row: Option<(String, Option<String>)> = db
-        .call({
-            let expert_id = expert_id.clone();
-            move |pool, _rt| {
-                Box::pin(async move {
-                    let r: Result<Option<(String, Option<String>)>, quill_agent::AgentError> =
-                        async {
-                            // 用户自建的那份优先于同名内置专家，与 ExpertRegistry
-                            // 的去重口径一致（见 list_visible 的 dedup_by）。
-                            let row = sqlx::query(
-                                "SELECT instructions, model FROM experts \
-                                 WHERE id = ? AND deleted_at IS NULL \
-                                   AND owner_user_id IN (?, x'00000000000000000000000000000000') \
-                                 ORDER BY CASE WHEN owner_user_id = ? THEN 0 ELSE 1 END \
-                                 LIMIT 1",
-                            )
-                            .bind(expert_id.clone())
-                            .bind(uid.as_bytes().to_vec())
-                            .bind(uid.as_bytes().to_vec())
-                            .fetch_optional(&pool)
-                            .await
-                            .map_err(|e| crate::db::storage_error("读专家人格", e))?;
-                            Ok(row.map(|r| {
-                                let instructions: String = sqlx::Row::get(&r, "instructions");
-                                let model: Option<String> = sqlx::Row::get(&r, "model");
-                                (instructions, model)
-                            }))
-                        }
-                        .await;
-                    r
-                })
-            }
-        })
+    let row = crate::experts_repo::persona_instructions_model(db, uid, expert_id.clone())
         .map_err(storage)?;
 
     let Some((instructions, model)) = row else {
@@ -1507,35 +1342,7 @@ async fn load_history(
     uid: quill_domain::UserId,
     sid: [u8; 16],
 ) -> Result<Vec<HistoryRow>, ApiError> {
-    let rows = db
-        .call(move |pool, _rt| {
-            Box::pin(async move {
-                let r: Result<Vec<HistoryRow>, quill_agent::AgentError> = async {
-                    let out = sqlx::query(
-                        "SELECT role, content FROM messages \
-                         WHERE user_id = ? AND session_id = ? AND status = 'complete' \
-                         AND role IN ('user','assistant') \
-                         ORDER BY seq DESC LIMIT ?",
-                    )
-                    .bind(uid.as_bytes().to_vec())
-                    .bind(sid.to_vec())
-                    .bind(HISTORY_LIMIT)
-                    .fetch_all(&pool)
-                    .await
-                    .map_err(|e| crate::db::storage_error("读历史", e))?;
-                    Ok(out
-                        .into_iter()
-                        .map(|row| (s(&row, "role"), s(&row, "content")))
-                        .collect())
-                }
-                .await;
-                r
-            })
-        })
-        .map_err(storage)?;
-    let mut rows = rows;
-    rows.reverse();
-    Ok(rows)
+    crate::chat_repo::history_rows(db, uid, sid, HISTORY_LIMIT).map_err(storage)
 }
 
 async fn next_seq(
@@ -1543,24 +1350,7 @@ async fn next_seq(
     uid: quill_domain::UserId,
     sid: [u8; 16],
 ) -> Result<i64, ApiError> {
-    db.call(move |pool, _rt| {
-        Box::pin(async move {
-            let r: Result<i64, quill_agent::AgentError> = async {
-                let m: i64 = sqlx::query_scalar(
-                    "SELECT COALESCE(MAX(seq),0) FROM messages WHERE user_id = ? AND session_id = ?",
-                )
-                .bind(uid.as_bytes().to_vec())
-                .bind(sid.to_vec())
-                .fetch_one(&pool)
-                .await
-                .map_err(|e| crate::db::storage_error("取序号", e))?;
-                Ok(m + 1)
-            }
-            .await;
-            r
-        })
-    })
-    .map_err(storage)
+    crate::chat_repo::next_seq(db, uid, sid).map_err(storage)
 }
 
 /// 一条要写进 `messages` 的消息体。
@@ -1595,48 +1385,27 @@ async fn append_message(
         usage,
         turn_ms,
     } = body;
-    let content = content.to_string();
-    let reasoning = reasoning.map(String::from);
-    let role = role.to_string();
-    let status = status.to_string();
-    let mid = mid.to_vec();
-    let input = i64::from(usage.input.unwrap_or(0));
-    let output = i64::from(usage.output.unwrap_or(0));
-    // None = 模型端没上报，不是 0。见 migration 0008 的说明。
-    let cache_read = usage.cache_read.map(i64::from);
-    let cache_write = usage.cache_write.map(i64::from);
     let created_at = now_ms();
-    db.call(move |pool, _rt| {
-        Box::pin(async move {
-            let r: Result<i64, quill_agent::AgentError> = async {
-                sqlx::query(
-                    "INSERT INTO messages(user_id,id,session_id,seq,role,status,content,reasoning,\
-                     input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,turn_ms,created_at) \
-                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                )
-                .bind(uid.as_bytes().to_vec())
-                .bind(mid.clone())
-                .bind(sid.to_vec())
-                .bind(seq)
-                .bind(&role)
-                .bind(&status)
-                .bind(&content)
-                .bind(&reasoning)
-                .bind(input)
-                .bind(output)
-                .bind(cache_read)
-                .bind(cache_write)
-                .bind(turn_ms)
-                .bind(created_at)
-                .execute(&pool)
-                .await
-                .map_err(|e| crate::db::storage_error("存消息", e))?;
-                Ok(created_at)
-            }
-            .await;
-            r
-        })
-    })
+    crate::chat_repo::insert_message(
+        db,
+        uid,
+        sid,
+        crate::chat_repo::NewMessage {
+            id: *mid,
+            seq,
+            role: role.to_string(),
+            status: status.to_string(),
+            content: content.to_string(),
+            reasoning: reasoning.map(String::from),
+            input_tokens: i64::from(usage.input.unwrap_or(0)),
+            output_tokens: i64::from(usage.output.unwrap_or(0)),
+            // None = 模型端没上报，不是 0。见 migration 0008 的说明。
+            cache_read_tokens: usage.cache_read.map(i64::from),
+            cache_write_tokens: usage.cache_write.map(i64::from),
+            turn_ms,
+            created_at,
+        },
+    )
     .map_err(storage)
 }
 
@@ -1648,32 +1417,8 @@ async fn touch_session(
     input: Option<u32>,
     output: Option<u32>,
 ) -> Result<(), ApiError> {
-    let now = now_ms();
-    db.call(move |pool, _rt| {
-        Box::pin(async move {
-            let r: Result<(), quill_agent::AgentError> = async {
-                sqlx::query(
-                    "UPDATE sessions SET next_seq = ?, message_count = message_count + 2, \
-                     input_tokens = input_tokens + ?, output_tokens = output_tokens + ?, \
-                     last_active_at = ?, updated_at = ? WHERE user_id = ? AND id = ?",
-                )
-                .bind(next_seq)
-                .bind(i64::from(input.unwrap_or(0)))
-                .bind(i64::from(output.unwrap_or(0)))
-                .bind(now)
-                .bind(now)
-                .bind(uid.as_bytes().to_vec())
-                .bind(sid.to_vec())
-                .execute(&pool)
-                .await
-                .map_err(|e| crate::db::storage_error("更新会话", e))?;
-                Ok(())
-            }
-            .await;
-            r
-        })
-    })
-    .map_err(storage)
+    crate::chat_repo::touch_session(db, uid, sid, next_seq, input, output, now_ms())
+        .map_err(storage)
 }
 
 async fn ensure_session(
@@ -1681,26 +1426,9 @@ async fn ensure_session(
     uid: quill_domain::UserId,
     sid: [u8; 16],
 ) -> Result<(), ApiError> {
-    let found = db
-        .call(move |pool, _rt| {
-            Box::pin(async move {
-                let r: Result<bool, quill_agent::AgentError> = async {
-                    let n: i64 = sqlx::query_scalar(
-                        "SELECT count(*) FROM sessions WHERE user_id = ? AND id = ? AND deleted_at IS NULL",
-                    )
-                    .bind(uid.as_bytes().to_vec())
-                    .bind(sid.to_vec())
-                    .fetch_one(&pool)
-                    .await
-                    .map_err(|e| crate::db::storage_error("查会话", e))?;
-                    Ok(n > 0)
-                }
-                .await;
-                r
-            })
-        })
-        .map_err(storage)?;
-    if found {
+    // 存在性判定的 SQL 早就在 `chat_repo::session_exists` 里（Q006 那批收的口径），
+    // 这里原先又内联了一份 `count(*)` —— 同一件事两种写法，改一处必漂。
+    if crate::chat_repo::session_exists(db, uid, sid).map_err(storage)? {
         return Ok(());
     }
     Err(ApiError::entity_not_found(
