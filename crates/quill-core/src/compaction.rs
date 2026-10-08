@@ -7,11 +7,14 @@
 //! （`check_if_compaction_needed`）—— `goose-context-management` 只写「怎么压」，
 //! 阈值判定在它的调用方里，这里照它抄。
 //!
-//! **现状**：quill 只有配置字段 `compaction_threshold_tokens`，零实现。
-//! 本模块是它的唯一归属（最高指示第 3 条：照 goose 抄，不自创算法）。
+//! **现状（2026-10-09）**：已接线（Q018）。本模块是纯逻辑的唯一归属
+//! （最高指示第 3 条：照 goose 抄，不自创算法）。
 //!
 //! 分工：纯逻辑（何时该压、压成什么形状、压缩前后用量账怎么连续）在这里、可单测；
-//! 真正调模型生成摘要由壳侧注入（Q018 接线，本轮不做）。
+//! 真正调模型生成摘要与数 token 由壳侧注入 —— 见
+//! `crates/quill-server/src/chat_compaction.rs`（provider 与估算器的实现），
+//! 接线点是 `api_chat::prepare_turn`。壳读的就是配置字段
+//! `compaction_threshold_tokens`，本模块**不读配置**，只收传进来的阈值。
 //!
 //! # 移植对照表（每一项都能回 `vendor/goose` 核对）
 //!
@@ -212,7 +215,10 @@ pub fn format_message_for_compacting(message: &CompactionMessage) -> String {
 /// **差异与原因**：goose 的方法返回 `usize` 但是 async（要异步加载 tiktoken 实现，
 /// `goose/src/context_mgmt/mod.rs:305-313`）；quill 在这里把分词当成**注入的纯函数**，
 /// 同步、无 IO —— 本模块不做分词实现，壳侧（Q018）注入真实现，单测注入确定性的假实现。
-pub trait TokenEstimator {
+/// `Send + Sync` 是**接线要求**（Q018）：壳在 async 路径上调用 [`compact`]，
+/// 这些 trait 对象的引用要跨 await 点，没有它整条 future 就不是 `Send`，
+/// tokio::spawn 编译不过。goose 的实现天然满足（它用 async-trait，默认要求 Send）。
+pub trait TokenEstimator: Send + Sync {
     /// 一段文本的 token 数。goose: `count_text_tokens`（`model.rs:25`）。
     fn count_text_tokens(&self, text: &str) -> usize;
 
@@ -346,7 +352,7 @@ impl std::error::Error for CompactionError {}
 ///     Box::pin(async move { self.provider.complete(system, request).await })
 /// }
 /// ```
-pub trait CompactionModel {
+pub trait CompactionModel: Send + Sync {
     fn complete<'a>(
         &'a self,
         system: &'a str,

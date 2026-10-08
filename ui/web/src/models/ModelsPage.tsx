@@ -1036,13 +1036,13 @@ function ProviderForm({
           disabled={isPending}
           onChange={(event) => patch({ compaction_threshold_tokens: Number(event.target.value) })}
         />
-        {/* 这个数**存下来了，但没有任何代码读它**（全仓库只出现在迁移、
-            增删改查与测试里）。不给标注的话，用户会在这里改一个不生效的
-            数字，然后发现对话该超还是超。压缩本体是 M3 的活。 */}
-        <small className="field-help" data-testid="models-compaction-not-enforced">
-          {t('models.compactionNotEnforced', {
+        {/* 这个数**真的被读了**（Q018）：历史估算超过它时，会在下一轮开始前
+            自动摘要压缩。所以要如实说清口径 —— quill 不带分词器，报出来的是
+            估算值，不是模型端数出来的真值。 */}
+        <small className="field-help" data-testid="models-compaction-note">
+          {t('models.compactionEnforced', {
             defaultValue:
-              '暂未生效：这个值会被保存并显示在对话页，但目前没有任何压缩逻辑会读它 —— 超过上限不会自动摘要，需要自己新建会话。',
+              '已生效：历史估算超过这个 token 数时，会在下一轮开始前自动摘要压缩（原消息仍存在库里）。这个数是估算值 —— quill 不带分词器。',
           })}
         </small>
       </label>

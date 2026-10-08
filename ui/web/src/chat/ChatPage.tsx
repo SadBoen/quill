@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate, useParams } from 'react-router-dom'
 
 import { ApiError, apiJson, setToken, getToken } from '../api/client'
+import type { SendMessageResponse } from '../api/types'
 import { EXPERTS_KEY, listExperts } from '../experts/api'
 import { Popconfirm } from '../experts/ExpertsUi'
 import { loadSessions, createSession, loadHealth, loadMessageHistory, loadSessionMetrics, chatErrorMessage } from './chatApi'
@@ -96,6 +97,11 @@ export function ChatPage(): ReactNode {
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const deleting = deletingId !== null
   const [lastUsage, setLastUsage] = useState<{ input: number; output: number } | null>(null)
+  /**
+   * 这一轮开始前历史的压缩状态（Q018），取自响应里的 `context`。
+   * `null` = 服务端没报（老服务端），界面按「未知」说，不假装成「未压缩」。
+   */
+  const [turnContext, setTurnContext] = useState<SendMessageResponse['context'] | null>(null)
   /**
    * 正在流式生成的那条回复。
    *
@@ -330,6 +336,7 @@ export function ChatPage(): ReactNode {
       })
       setLive(null)
       setLastUsage({ input: result.usage.input, output: result.usage.output })
+      setTurnContext(result.context ?? null)
       setForcedAnswer(Boolean(result.final_answer_forced))
       // 刚这一轮的 token 已落库，会话级统计要跟着更新。
       void queryClient.invalidateQueries({ queryKey: ['session-metrics', targetId] })
@@ -418,18 +425,54 @@ export function ChatPage(): ReactNode {
     }
   }
 
-  const usageLabel = !lastUsage
-    ? t('chat.tokenMeter.idle', { defaultValue: '本次尚未产生用量' })
-    : contextLimit > 0
-      ? t('chat.tokenMeter.label', {
-          used: formatTokens(usedTokens),
-          limit: formatTokens(contextLimit),
-          defaultValue: '本次 {{used}} / 配置上限 {{limit}}',
-        })
-      : t('chat.tokenMeter.unknownLimit', {
-          used: formatTokens(usedTokens),
-          defaultValue: '本次 {{used}}（上限未知）',
-        })
+  // 压缩这件事按**实测**说（Q018）：服务端在这一轮开始前估算了历史、并按阈值
+  // 决定压不压，`context` 就是它报回来的结果。服务端没报（老服务端）时
+  // 整个后缀不出现 —— 不能默认成「未压缩」，那是替服务端说话。
+  const compactionSuffix = !turnContext
+    ? ''
+    : turnContext.compacted
+      ? t('chat.tokenMeter.compactedSuffix', { defaultValue: ' · 已压缩历史' })
+      : turnContext.note
+        ? t('chat.tokenMeter.compactionFailedSuffix', { defaultValue: ' · 压缩未生效' })
+        : ''
+
+  const usageLabel =
+    (!lastUsage
+      ? t('chat.tokenMeter.idle', { defaultValue: '本次尚未产生用量' })
+      : contextLimit > 0
+        ? t('chat.tokenMeter.label', {
+            used: formatTokens(usedTokens),
+            limit: formatTokens(contextLimit),
+            defaultValue: '本次 {{used}} / 配置上限 {{limit}}',
+          })
+        : t('chat.tokenMeter.unknownLimit', {
+            used: formatTokens(usedTokens),
+            defaultValue: '本次 {{used}}（上限未知）',
+          })) + compactionSuffix
+
+  /**
+   * 悬停明细里关于压缩的那一句。数字一律标明是**估算**：
+   * quill 不带分词器，报不出模型端真正数出来的 token。
+   */
+  const compactionDetail = !turnContext
+    ? ''
+    : turnContext.note
+      ? // 服务端给的原因原样显示：它是中文的完整句子，不翻译、不改写
+        // （翻译一遍就等于替服务端改口径）。
+        turnContext.note
+      : turnContext.compacted
+        ? t('chat.tokenMeter.compactedDetail', {
+            before: formatTokens(turnContext.estimated_history_tokens),
+            after: formatTokens(turnContext.after_tokens),
+            threshold: formatTokens(turnContext.threshold_tokens),
+            defaultValue:
+              '本轮开始前历史估算 {{before}} tokens，超过压缩阈值 {{threshold}}，已自动压缩到约 {{after}} tokens（原消息仍存库，只是不再喂给模型）。',
+          })
+        : t('chat.tokenMeter.notCompactedDetail', {
+            before: formatTokens(turnContext.estimated_history_tokens),
+            threshold: formatTokens(turnContext.threshold_tokens),
+            defaultValue: '本轮开始前历史估算 {{before}} tokens，未超过压缩阈值 {{threshold}}，没有压缩。',
+          })
 
   return (
     <div className="chat-shell">
@@ -662,14 +705,15 @@ export function ChatPage(): ReactNode {
                 <span
                   className="chat-usage-label"
                   title={
-                    contextLimit > 0
+                    (contextLimit > 0
                       ? t('chat.tokenMeter.title', {
                           limit: contextLimit,
                           threshold: compactionThreshold || '—',
                           defaultValue:
-                            '已配置上下文上限 {{limit}} tokens、压缩阈值 {{threshold}} tokens —— 这两个都是 /healthz 里的配置值，不是模型实测值。模型端点的真实窗口可能更小，quill 不去猜它：超了会被模型服务直接拒绝。压缩尚未实现，超过上限不会自动摘要，需要自己新建会话。',
+                            '已配置上下文上限 {{limit}} tokens、压缩阈值 {{threshold}} tokens —— 这两个都是 /healthz 里的配置值，不是模型实测值。模型端点的真实窗口可能更小，quill 不去猜它：超了会被模型服务直接拒绝。超过压缩阈值的历史会在这一轮开始前被摘要压缩。',
                         })
-                      : t('chat.tokenMeter.noLimit', { defaultValue: '/healthz 里还没有 max_context_tokens，上限未知。' })
+                      : t('chat.tokenMeter.noLimit', { defaultValue: '/healthz 里还没有 max_context_tokens，上限未知。' })) +
+                    (compactionDetail ? ' ' + compactionDetail : '')
                   }
                 >
                   {usageLabel}

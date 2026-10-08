@@ -133,7 +133,7 @@ goose 内核的参考源（`vendor/goose/crates/`，实测各 crate 规模）：
 | 对话循环 | `goose/agents/agent.rs` → `Agent::reply` | **`quill-core/src/turn.rs`**（661 行，Q012 已搬）——壳侧 `api_chat.rs` 只剩「拼 TurnInput + 映射错误 + 落库」 | 部分；状态机已有（`quill-core/src/state_machine.rs`，Q020），**未接线** |
 | 工具执行 | `goose/agents/tool_execution.rs` | **`quill-core/src/tools.rs`**（1402 行，Q013 已搬，走 `ToolSources` 端口） | 部分（只读工具，写入类故意不做） |
 | 子 agent | `goose/agents/subagent_handler.rs` | `quill-adapters::MemberExecutor` + `member_executor.rs` | 第一版（`steer`/`abort` 未做） |
-| **上下文压缩** | `goose-context-management`（1156 行） | **只有配置字段** `compaction_threshold_tokens`，**零实现** | **未做** |
+| **上下文压缩** | `goose-context-management`（1156 行） | **已接线**（Q018）：内核 `quill-core/src/compaction.rs` 是纯逻辑，壳 `quill-server/src/chat_compaction.rs` 注入 provider 与 token 估算；`compaction_threshold_tokens` 真的被读 | 可用（估算口径，无真分词器；删工具响应的重试阶梯因缺可信分类器而不触发） |
 | **记忆** | `goose/session` + memory 相关 | **未做** | **未做** |
 | 权限 | `goose/permission` | `quill-control`（用户/角色，面向多租户，口径不同） | 需逐块比对 |
 | skills | `goose/skills` | `skills_repo.rs` / `skillhub.rs` / `api_extensions` | 部分 |

@@ -25,6 +25,9 @@ pub mod auth;
 pub mod body;
 /// 外部消息通道：把智能体接到浏览器之外（微信等）。
 pub mod channels;
+/// 上下文压缩的壳侧接线（Q018）：注入 provider 与 token 估算，读
+/// `compaction_threshold_tokens` 并据此决定是否压缩历史。
+pub mod chat_compaction;
 pub mod chat_repo;
 pub mod config;
 pub mod db;

@@ -779,6 +779,8 @@ pub(crate) struct TurnPrep {
     pub(crate) seq_user: i64,
     pub(crate) user_created_at: i64,
     pub(crate) persona: SessionPersona,
+    /// 这一轮开始前历史的压缩状态（Q018）。响应与 SSE 的 `done` 都从这里出。
+    pub(crate) context: crate::chat_compaction::ContextNotice,
 }
 
 /// 校验内容 → 装 provider → 取历史与人格 → 落用户消息 → 拼 messages → 装工具表。
@@ -829,13 +831,13 @@ pub(crate) async fn prepare_turn(
     if let Some(text) = persona.instructions.as_deref() {
         msgs.push(Message::system(text));
     }
-    for m in &history {
-        if m.0 == "user" {
-            msgs.push(Message::user(m.1.clone()));
-        } else if m.0 == "assistant" && !m.1.trim().is_empty() {
-            msgs.push(Message::assistant(m.1.clone()));
-        }
-    }
+    // 历史先过压缩闸（Q018）：超 `compaction_threshold_tokens` 就压成
+    // 「摘要 + 续跑提示（+ 最近一条 user 消息）」，不超就原样放行。
+    // 无论压不压，都交回一句给界面看的实话（`context` 字段），
+    // 界面据此显示这一轮的状态，而不是继续宣称「压缩尚未实现」。
+    let (history_msgs, context) =
+        crate::chat_compaction::prepare_history(&provider, &llm_config, &history).await;
+    msgs.extend(history_msgs);
     msgs.push(Message::user(content.clone()));
 
     // 工具往返：从这里开始是一段循环，而不是单次调用。
@@ -887,6 +889,7 @@ pub(crate) async fn prepare_turn(
         seq_user,
         user_created_at,
         persona,
+        context,
     })
 }
 
@@ -1046,6 +1049,11 @@ pub(crate) async fn finish_turn(prep: &TurnPrep, outcome: TurnOutcome) -> Result
         "turn_ms": turn_ms,
         "persona_applied": prep.persona.instructions.is_some(),
         "expert_notice": prep.persona.notice,
+        // 这一轮开始前历史的压缩状态（Q018）。**数字是估算**，字段名里
+        // 带 `estimated` 就是为了界面不许把它当实测值显示。
+        // `compacted:false` 且 `note:null` = 「没超阈值，本来就不该压」；
+        // `note` 非空才是「该压却没压成」，界面必须把它显示出来（不许静默降级）。
+        "context": prep.context.to_json(),
         // 工具执行轨迹。没有工具时是空数组 —— 前端按「长度 0」判定不显示，
         // 不需要另设一个布尔开关（两个字段可能不同步的那种设计最难维护）。
         "tool_calls": tool_trace,

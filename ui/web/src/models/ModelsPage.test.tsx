@@ -75,7 +75,7 @@ describe('压缩阈值输入框', () => {
     vi.unstubAllGlobals()
   })
 
-  it('明写「暂未生效」：这个数存得下来，但没有任何代码读它', async () => {
+  it('明写「已生效」与口径：这个数真的会被读，数字是估算值', async () => {
     // 审计结论（2026-10-06，全仓库 grep）：compaction_threshold_tokens 只出现在
     // 迁移、增删改查与测试里，**没有任何运行时读者**。所以它是一个能编辑却不生效
     // 的开关 —— 界面上不给标注，用户就会在这里改一个不动的数字，然后发现对话该超还是超。
@@ -120,11 +120,13 @@ describe('压缩阈值输入框', () => {
     await waitFor(() => expect(screen.getByDisplayValue('8000')).toBeInTheDocument())
     // 按 testid 定位，不用文案：文案一改测试就红，而这里要守的是
     // 「这个输入框旁边必须有一句说明」，不是那一句具体怎么措辞。
-    const note = screen.getByTestId('models-compaction-not-enforced')
+    const note = screen.getByTestId('models-compaction-note')
     // testid 挂在输入框上会让人以为那是输入框的标识；守的是标注本身。
     expect(note.tagName).toBe('SMALL')
-    expect(note).toHaveTextContent(/暂未生效/)
-    expect(note).toHaveTextContent(/没有任何压缩逻辑会读它/)
+    // Q018：压缩本体已接线，标注必须改成「已生效」并说清口径（估算值）。
+    // 文案与实现同批改，不让界面继续宣称「没有任何逻辑会读它」。
+    expect(note).toHaveTextContent(/已生效/)
+    expect(note).toHaveTextContent(/估算/)
 
     // 变异验证：把下面这行去掉，测试必须变红。
     //（已验证会红：删掉 <small> 那整段后，getByTestId 找不到元素。）

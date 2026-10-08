@@ -62,6 +62,22 @@ export interface SendMessageResponse {
    * 老服务端没有这个字段，按 false 处理。
    */
   final_answer_forced?: boolean
+  /**
+   * 这一轮开始前**历史**的压缩状态（queue Q018）。数字是估算值
+   * （quill 不带分词器，字段名里带 `estimated` 就是不许界面把它当实测值显示）。
+   *
+   * `compacted:false` 且 `note` 为空 = 没超阈值，本来就不该压；
+   * `note` 非空 = 该压却没压成，界面必须把它显示出来（不许静默降级）。
+   * 老服务端没有这个字段，按「未知」处理（不要假装成「未压缩」）。
+   */
+  context?: {
+    estimated_history_tokens: number
+    threshold_tokens: number
+    compacted: boolean
+    after_tokens: number
+    summary_tokens: number
+    note?: string | null
+  }
 }
 
 export interface CreateSessionResponse {

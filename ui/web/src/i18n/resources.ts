@@ -303,8 +303,14 @@ export const en = {
         idle: 'No usage this turn',
         label: '{{used}} / configured {{limit}} this turn',
         unknownLimit: '{{used}} this turn (limit unknown)',
+        compactedSuffix: ' · history compacted',
+        compactionFailedSuffix: ' · compaction did not run',
+        compactedDetail:
+          'Estimated {{before}} tokens of history before this turn, over the compaction threshold {{threshold}}, so it was summarized down to about {{after}} tokens. The original messages stay in the database — they are just no longer sent to the model. The number is an estimate: quill does not carry a tokenizer.',
+        notCompactedDetail:
+          'Estimated {{before}} tokens of history before this turn, under the compaction threshold {{threshold}} — nothing was summarized. The number is an estimate: quill does not carry a tokenizer.',
         title:
-          'Configured context limit {{limit}} tokens and compaction threshold {{threshold}} tokens — both are values from /healthz config, not measured from the model. The endpoint may actually allow fewer: quill does not guess, and a request over its real window gets rejected by the model service. Compaction is not implemented, so nothing is summarized automatically when you go over — start a new chat yourself.',
+          'Configured context limit {{limit}} tokens and compaction threshold {{threshold}} tokens — both are values from /healthz config, not measured from the model. The endpoint may actually allow fewer: quill does not guess, and a request over its real window gets rejected by the model service. History over the compaction threshold is summarized before the turn starts.',
         noLimit: '/healthz has no max_context_tokens yet, so the limit is unknown.',
       },
     },
@@ -810,7 +816,7 @@ export const en = {
       disabled: 'Disabled',
       customDescription: 'Any endpoint speaking OpenAI Chat Completions or Anthropic Messages goes here.',
       credentialsNote: 'Data comes from {{route}}: the server only returns has_api_key, and the password field is never filled back in.',
-      compactionNotEnforced: 'Not enforced yet: the value is stored and shown on the chat page, but nothing reads it — nothing summarizes a conversation for you when it goes over the limit. Start a new chat yourself.',
+      compactionEnforced: 'Enforced: history estimated over this many tokens is summarized before the next turn starts (the original messages stay in the database). The number is an estimate — quill does not carry a tokenizer.',
       loadProvidersFailed: 'Could not load the provider list.',
       loadPoolFailed: 'Could not load the model pool.',
       mutateFailed: 'Save failed.',
@@ -1648,7 +1654,7 @@ export const zhCN = {
       disabled: '已停用',
       customDescription: '任何兼容 OpenAI Chat Completions 或 Anthropic Messages 的地址都可以填在这里。',
       credentialsNote: '数据来自 {{route}}：服务端只回 has_api_key，密码框永远不回填已保存的密钥。',
-      compactionNotEnforced: '暂未生效：这个值会被保存、也显示在对话页，但目前没有任何压缩逻辑会读它 —— 超过上限不会自动摘要，需要自己新建会话。',
+      compactionEnforced: '已生效：历史估算超过这个 token 数时，会在下一轮开始前自动摘要压缩（原消息仍存在库里）。这个数是估算值 —— quill 不带分词器。',
       loadProvidersFailed: '取不到提供商列表。',
       loadPoolFailed: '取不到模型池。',
       mutateFailed: '保存失败。',
@@ -2010,8 +2016,14 @@ export const zhCN = {
         idle: '本次尚未产生用量',
         label: '本次 {{used}} / 配置上限 {{limit}}',
         unknownLimit: '本次 {{used}}（上限未知）',
+        compactedSuffix: ' · 已压缩历史',
+        compactionFailedSuffix: ' · 压缩未生效',
+        compactedDetail:
+          '本轮开始前历史估算 {{before}} tokens，超过压缩阈值 {{threshold}}，已自动压缩到约 {{after}} tokens（原消息仍存在库里，只是不再喂给模型）。这个数字是估算值：quill 不带分词器。',
+        notCompactedDetail:
+          '本轮开始前历史估算 {{before}} tokens，未超过压缩阈值 {{threshold}}，没有压缩。这个数字是估算值：quill 不带分词器。',
         title:
-          '已配置上下文上限 {{limit}} tokens、压缩阈值 {{threshold}} tokens —— 这两个都是 /healthz 里的配置值，不是模型实测值。模型端点的真实窗口可能更小，quill 不去猜它：超了会被模型服务直接拒绝。压缩尚未实现，超过上限不会自动摘要，需要自己新建会话。',
+          '已配置上下文上限 {{limit}} tokens、压缩阈值 {{threshold}} tokens —— 这两个都是 /healthz 里的配置值，不是模型实测值。模型端点的真实窗口可能更小，quill 不去猜它：超了会被模型服务直接拒绝。超过压缩阈值的历史会在这一轮开始前被摘要压缩。',
         noLimit: '/healthz 里还没有 max_context_tokens，上限未知。',
       },
     },
