@@ -27,26 +27,34 @@
 | octop 后端路由文件 | 55 个 `.py`，20 970 行 | `find .octop-ref/octop/src/octop/api/routers -name '*.py'` |
 | octop 后端端点数 | **470 条**（含 8 个 WS） | `docs/octop-endpoints.csv` |
 | octop 前端文件 | 735 个 `.ts/.tsx`，128 151 行 | `find .octop-ref/octop/dashboard/src` |
-| quill 工作区 crate | 12 个 | `crates/*/Cargo.toml` |
-| quill 注册路由 | **69 条 `.route(`**，其中 `not_implemented(` 桩 **14 处** | `crates/quill-server/src/routes.rs` |
+| quill 工作区 crate | **13 个** | `ls crates/` |
+| quill 注册路由 | **69 条 `.route(`**，其中 **501 桩 5 处**（`not_implemented(` 3 处 + `api_users` 里两条专用函数；其中 `GET /api/extensions/plugins` 是**刻意**留 501，见 §6） | `grep -c '\.route(' crates/quill-server/src/routes.rs`、`grep -n 'not_implemented' crates/quill-server/src/routes.rs` |
 | quill 迁移 | 10 个（0001–0010） | `crates/quill-store/migrations/` |
-| quill 前端 | 114 个 `.ts/.tsx`，25 328 行 | `find ui/web/src` |
-| quill Rust 测试 | **1266 passed / 0 failed** | `cargo test --workspace`（2026-10-08 实跑） |
+| quill 前端 | 114 个 `.ts/.tsx`，25 406 行 | `find ui/web/src` |
+| quill Rust 测试 | **1468 passed / 0 failed** | `cargo test --workspace`（2026-10-09 实跑） |
 
-### crate 依赖真相（从各 `Cargo.toml` 读出）
+> §1 这几行**是测量，不是转述**：每次改完代码重跑上面那几条命令现填。
+> 2026-10-09 复核时改正了三处漂移 —— crate 12→**13**（`quill-core` 2026-10-08 新建）、
+> 501 桩 14→**5**（experts import/export、MCP PATCH、upgrade 三条、wiki/search 都已转真实现，
+> `GET /api/ws` 已删）、测试 1266→**1468**。
+
+### crate 依赖真相（2026-10-09 从各 `Cargo.toml` 的 `[dependencies]` 段实测）
 
 ```
-quill-adapters  ← agent / control / server / upgrade / wiki     （最底层契约）
-quill-domain    ← server
-quill-store     ← cli / server / upgrade
+quill-adapters  ← agent / backup / cli / control / core / domain / server / testkit / upgrade / wiki
+quill-domain    ← agent / backup / cli / control / server / upgrade / wiki
+quill-store     ← backup / cli / control / server
+quill-provider  ← core / server
 quill-control   ← cli / server
 quill-agent     ← cli / server
+quill-core      ← server            （内核：对话循环 / 工具 / MCP / provider 组装 / 压缩）
 quill-wiki      ← cli / server
-quill-provider  ← server
-quill-backup    ← cli / server
-quill-upgrade   ← cli（**声明了依赖但 src 里零调用**）→ 见 §7
+quill-backup    ← cli / server / upgrade
+quill-upgrade   ← server            （cli 那条依赖 2026-10-08 已删，见 §7）
 quill-testkit   ← 仅 dev-dependency
 ```
+
+复现：`for d in crates/*/; do echo "$(basename $d) <- $(awk '/^\[dependencies\]/{p=1} /^\[/{if($0!="[dependencies]")p=0} p' "$d/Cargo.toml" | grep -oE '^quill-[a-z]+' | tr '\n' ' ')"; done`
 
 ---
 
@@ -302,7 +310,7 @@ quill-testkit   ← 仅 dev-dependency
   `POST /api/auth/refresh`、`POST /api/auth/logout`、`GET /api/auth/me`（`api_auth.rs`）
 - 专家 CRUD：`api_experts.rs`（+ `general_expert.rs` 保证每用户一份「通用专家」）
 - 专家团 CRUD：`api_teams.rs`
-- 派工记账：`api_dispatch.rs`（**只记账，无消费者**）
+- 派工记账与执行：`api_dispatch.rs` + `member_executor.rs`（`POST /api/teams/{id}/dispatch/run` 真调模型跑成员；`steer`/`abort` 与成员 token 用量仍未做）
 - 会话与消息：`api_chat.rs`（含 `POST …/messages/stream` SSE 流式，`api_chat_stream.rs`）
 - MCP：`api_extensions.rs` + `mcp_client.rs`（rmcp 真拉 stdio 子进程、真握手、`tools/list`、`tools/call`）+ `mcp_repo.rs`
 - SKILL：`api_extensions.rs` + `skills_repo.rs` + `tools.rs`（挂进对话工具表）
@@ -316,41 +324,56 @@ quill-testkit   ← 仅 dev-dependency
 - 用户管理：`GET /api/users`、`PATCH /api/users/{id}`（`api_users.rs`）
 - 实例配置：`GET/PUT /api/admin/config`（`api_admin.rs`）
 - 健康：`GET /healthz`
-- 资料库（只读）：`api_wiki.rs` 四端点 + `quill-wiki`
+- 资料库：`api_wiki.rs` 五端点（pages / pages/{path} / index / log / **search 真检索**）+ `quill-wiki`；ingest / query 仍是 501 桩（Q057）
 
-### quill 侧**诚实标注为未接通**的 501 桩（14 处，`routes.rs`）
+### quill 侧**诚实标注为未接通**的 501 桩（**5 处**，2026-10-09 实测）
 
-`POST /api/experts/import`、`GET /api/experts/export`、`POST /api/wiki/{ingest,query,search}`、
-`PATCH /api/extensions/mcp/{name}`、`GET /api/extensions/plugins`、
-`POST /api/extensions/bundle/import`、`GET /api/extensions/bundle/export`、
-`GET /api/upgrade/{check,history}`、`POST /api/upgrade/prepare`、`GET /api/ws`。
-（另有 `POST /api/users`、`DELETE /api/users/{id}` 两条走专用函数返回 501，**有意不做**。）
+只剩三条真桩 + 两条「有意不做」：
+
+- `POST /api/wiki/ingest`、`POST /api/wiki/query`（`routes.rs:130,134`）—— 要模型配合，属 Q057
+- `GET /api/extensions/plugins`（`routes.rs:194`）—— **刻意**留 501：前端 `capabilityGaps.ts`
+  已把这条登记成「已登记路由、处理函数未实现」并如实显示给用户，删掉会让那句「已登记」变假话
+- `POST /api/users`、`DELETE /api/users/{id}` —— 走 `api_users::create_not_allowed` /
+  `delete_not_allowed` 两条专用函数返回 501，**有意不做**
+
+**已从这份清单里转成真实现的**（2026-10-09 复核，逐条 grep 过 `routes.rs`）：
+`POST /api/experts/import`、`GET /api/experts/export`（Q031/Q032）、`POST /api/wiki/search`（Q035）、
+`PATCH /api/extensions/mcp/{name}`（Q036）、`GET /api/upgrade/check` / `POST /api/upgrade/prepare` /
+`GET /api/upgrade/history`（Q038–Q040）、bundle 导入导出（`api_bundle.rs`）。
+`GET /api/ws` 那条假接口**已删**（Q041）。
+复现：`grep -n 'not_implemented' crates/quill-server/src/routes.rs`。
+
+> **上面 §6 那张端点计数表（18 / 193 / 20 / 238）未验证**：它出自 2026-10-08 的
+> `.scratch/gen-octop-inventory.py` 生成结果，而本机没有 python，重跑不了。
+> 本轮已证伪其中一项（「桩(501) 20」对应的 quill 侧真桩只有 5 处），其余**按未验证记**。
 
 ---
 
 ## 7. 代码里发现的真实缺陷（与迁移无关，但要修）
 
-这些**不是迁移项**，是当前代码/机制本身的洞。以代码为准列出：
+这些**不是迁移项**，是当前代码/机制本身的洞。以代码为准列出（2026-10-09 逐条复核）：
 
-1. **`scripts/status.mjs` 的 `selfCheck()` 不校验 `kind` 合法性。**
-   `decide()` 只认 `test/cmd/absent/manual`；`project/items.mjs` 里 `B6-4` 用了
-   `kind: 'script'`、`B6-6` 用了 `kind: 'auto'` → 两条判据永久落在 `BROKEN`（真实状态未知）。
-   而 `selfCheck()` 里没有「未知 kind」这一支，**所以自检报「全部成立」，抓不到它**。
-   这正是本项目最看重的「判据本身坏了」那一类。
-2. **`project/items.mjs` 的 `B2-2` 判据与标题矛盾。**
-   标题「成员执行器存在（子 agent 真被执行）」，`verify` 却是
-   `{ kind: 'absent', path: 'crates/quill-server/src/member_executor.rs' }` ——
-   文件**不存在**时报「已验证」。即：一个说「存在」的条目，靠「不存在」通过。
+1. **`scripts/status.mjs` 的 `selfCheck()` 不校验 `kind` 合法性。** —— **已修（2026-10-08）**：
+   `KNOWN_KINDS` 抽成一处，`selfCheck` 先认「合法 kind 有哪些」，未知 kind 直接报红
+   （`scripts/status.mjs:294-303`）。当初的两条 `kind: 'script'` / `kind: 'auto'` 也已改正。
+2. **`project/items.mjs` 的 `B2-2` 判据与标题矛盾。** —— **已修（2026-10-08）**：
+   不再绑 `absent <member_executor.rs>`，改绑行为测试
+   `running_a_round_really_calls_the_model_and_returns_the_output`。
 3. **`vendor/openoctopus-frontend` 的身份**：`UPSTREAM.md` 声称它只是 `index.css` 来源，
    与 Octop 无关。**以代码为准**：`ui/web/src/index.css` 有 sha256 门禁钉着它的哈希，
    那棵树本地**没有 `.git`**（`git -C vendor/openoctopus-frontend` 会往上找到仓库根）。
    → 结论：它确实只贡献 CSS；但「门禁钉哈希」这件事要自己打开
-   `.vendor-baseline-check.mjs` 核对，不能转述文档。
-4. **`quill-upgrade` 被 cli 声明依赖但零调用**：`crates/quill-cli/Cargo.toml:25` 有它，
-   `crates/quill-cli/src/**` 里 `grep quill_upgrade` 为空。120 行只有升级前守卫。
-5. **`cargo fmt` 从未被采用**：`gates.sh` 与 `.github/workflows/gates.yml` 都不跑 fmt
-   （`gates.yml:51` 注释明写「刻意不开 clippy/rustfmt」）。`cargo fmt --all -- --check`
-   实测 **481 个文件**有差异。→ 这是一处**有意的空白**，不是回归。
+   `.vendor-baseline-check.mjs` 核对，不能转述文档。**（仍成立）**
+4. **`quill-upgrade` 被 cli 声明依赖但零调用** —— **已修（2026-10-08）**：
+   `crates/quill-cli/Cargo.toml` 那条依赖已删（Q091 抽查发现，Q064 收尾）；
+   `quill-upgrade` 现在被 server 的三条 upgrade 路由真调用（Q038–Q040）。
+5. **`cargo fmt` 从未被采用** —— **已修（2026-10-08）**：`rust-toolchain.toml` + `rustfmt.toml`
+   + CI 的 `cargo fmt --all -- --check`（`gates.yml:119-120`），现在退出 0。
+6. **判据绑错测试名（`B3-1a`）** —— **2026-10-09 发现并修（Q109）**：Q018 把界面文案从
+   「暂未生效」改成「已生效」、测试名跟着改，而 `items.mjs` 的 `B3-1a` 还绑着旧名 ——
+   于是这条判据**永久落在 BROKEN**（`node scripts/status.mjs --self-check` 在 WSL 下实测
+   报「1 处有问题」）。判据绑错名字比判据没通过更糟：真实状态是**未知**。
+   同批把 `B3-1` 从「只能人工」降为绑真测试（压缩两半都已有测试钉住）。
 
 ---
 
@@ -358,9 +381,11 @@ quill-testkit   ← 仅 dev-dependency
 
 按最高指示 + 依赖关系排序，不按 octop 的原顺序：
 
-1. **先修机制洞**（§7 第 1、2 条）：判据坏了比功能没做更危险。
+1. **先修机制洞**（§7 第 1、2 条）：判据坏了比功能没做更危险。**（已完成 2026-10-08）**
 2. **M2 核心：派工真执行**（§3.6）—— 参照 `vendor/goose` 的 `run_subagent_task`，
    让 `api_dispatch.rs` 的台账真正被消费者消费。这是「专家团」从「摆件」变「能干活」的分界。
+   **（第一版已完成：`member_executor.rs` 的 `ProviderMemberExecutor` + `dispatch/run`；
+   剩下 `steer`/`abort` 与成员 token 用量，见 Q023–Q026）**
 3. **对话内核补齐**（§3.1）：HITL、轨迹、会话分叉、WS 主通道。
 4. **上下文与记忆**（§3.5）：这是 goose 最有价值、quill 完全空白的一块。
 5. **工作区 / 终端 / 上传**（§3.8）：让界面上那些「点了没反应」的入口真通。

@@ -79,7 +79,7 @@
 - [x] Q050 · 客户端不能指定落盘位置（`../` 与盘符一律拒）的测试 · `api_backup.rs` · **已完成 2026-10-08**：原测试已拒 `../escape`、`..\escape`、`C:\Windows\x`、`/etc/passwd`、空名；本次补 `C:x`（盘符相对）、`\\server\share\x`（UNC）、`/`（只给分隔符）三个更刁的，实测全部 4xx 且落盘为零。**反向验证真做**：临时绕过 `unsafe_reason` 只留 `pathsafe::is_within` → `..\escape` 直接 201 Created（证明那道红线载重：Linux 上 `root.join("C:\Windows\x")` 只是普通分量，`is_within` 单独拦不住盘符）。**顺手修了反向验证暴露的夹具卫生问题**：共享备份根会留下上次的 `..\escape`，让下一次正常运行被上一次的账判红 —— 现在请求前先清掉自己点名的那几个同名残留（手工造残留后仍 18/18 绿）（提交 1b3678c）
 - [x] Q051 · 会话改名：`PATCH /api/sessions/{id}` 注册（现在 405） · `routes.rs`/`api_chat.rs` · **已完成 2026-10-08**：新增 `api_chat::rename` + `chat_repo::rename_session`（`RENAME_SQL` 带 user_id/deleted_at 谓词、**刻意不碰 `last_active_at`** —— 改名不是「用过它」，刷新活跃时间会让会话在侧栏凭空跳到最上面）；标题上限抽成 `TITLE_MAX_CHARS`（建会话与改名**共用同一个 64**，此前 create 里是内联的 64）；空白标题 400（走 Q007 的规范取值助手）、超长按**字符**截断、未知字段 400、软删/别人的 → 404。6 条 HTTP 测试 + 1 条 SQL 测试；**反向验证**：把 rename 换成不落库的 no-op → 「改名必须真落库」实测变红，还原后 6/6 绿
 - [ ] Q052 · 建团队时静默多出的那个会话，不在侧栏露出来 · `api_teams.rs`/`ui/web` · 侧栏干净
-- [ ] Q053 · 换会话时不残留上一会话的话 · `ui/web/src/chat` · 有回归测试
+- [x] Q053 · 换会话时不残留上一会话的话 · `ui/web/src/chat` · **已核实 2026-10-09（已有覆盖）**：`ui/web/src/chat/ChatPage.test.tsx:388` 的 `切到另一个会话时，上一个会话的话不会留在屏幕上` 就是这条的回归测试；前端全套实跑 `npx vitest run` → **32 文件 / 341 tests passed**（含它）
 - [ ] Q054 · 前端审计的「为什么不修」逐条给出理由（若仍在） · `ui/web` · 清单可查
 - [x] Q055 · 分页：列表类接口在没有 `limit` 时的默认行为写清并测 · `api_*` · **已完成 2026-10-08**：「写清」那半的现状 —— `GET /api/users` 有规范分页（`DEFAULT_LIMIT=50`/`MAX_LIMIT=200` + clamp）；`GET /api/usage` 上限 200 且**如实报 `truncated`**；`GET /api/sessions` 硬上限 100（`chat_repo::LIST_LIMIT`）但**零测试**；其余列表（专家/团队/技能/MCP）返回的是用户自己名下的数据、不截断（记在这里，不做静默截断）。「测」那半：新增测试塞 `LIST_LIMIT+1=101` 条会话，断言列表**恰好**回 100 条（钉「恰好」而非「≤100」：后者在查询坏掉只回 0 条时也会绿）。**反向验证**：把 `LIMIT 100` 改成 `LIMIT 10000` → 变红并报「拿到 101」（提交见下）
 
@@ -103,9 +103,9 @@
 ## G. 前端（Web 壳）
 
 - [ ] Q067 · 逐页核「未注册 / 查无此人 / 未接通」三态显示正确 · `ui/web/src` · `capabilityGaps.ts` 覆盖
-- [ ] Q068 · 流式输出（SSE）在界面上逐帧更新（回归） · `ui/web/src/chat` · 有测试
+- [x] Q068 · 流式输出（SSE）在界面上逐帧更新（回归） · `ui/web/src/chat` · **已核实 2026-10-09（已有覆盖）**：`ChatPage.test.tsx:297` 的 `模型还在写的时候，界面就已经把那半句显示出来了`（注释明写「关键是**在 done 之前**就能看见 —— 等 done 才出现的话，那就是一次性返回」）+ `chatStream.test.ts` 的 10 条（逐帧交回、跨行拆帧拼回、UTF-8 被 TCP 切断不产生乱码、断了没 done 绝不把半句话当答案）。实跑 `npx vitest run` → 341 passed / 0 failed
 - [ ] Q069 · 上下文图在加载态有渲染（不是空白） · `ui/web` · 有测试
-- [ ] Q070 · 用量页的数字来自真实累加（不是最后一轮） · `ui/web/src/usage` · 有测试
+- [x] Q070 · 用量页的数字来自真实累加（不是最后一轮） · `ui/web/src/usage` · **已核实 2026-10-09（已有覆盖，且正中「不是最后一轮」这句）**：`crates/quill-server/tests/session_metrics_http.rs` 三条 —— `turns_steps_tokens_and_speed_are_aggregated_from_real_rows`（两轮 1000+500 入参累加）、`usage_totals_equal_the_sum_of_the_rows`（合计 = 各行之和）、**`a_turn_with_tool_rounds_is_charged_for_every_round_not_only_the_last`**（走完工具往返的入参是两轮之和、不是最后一轮）。实跑 `cargo test --workspace` → **1468 passed / 0 failed**
 - [ ] Q071 · 没有「点了必失败」的按钮：逐入口核一遍 · `ui/web` · 清单可查
 - [ ] Q072 · `ui/web` 的 17 条路由逐条核有对应后端 · `ui/web/src/app` · 出对照表
 - [x] Q073 · 前端 typecheck/lint/vitest/build 全进 CI（现状部分已进）· CI · **已核实 2026-10-09**：四项都在 `.github/workflows/gates.yml` 里（`npm run typecheck` / `npm run lint` / `npx vitest run` / `npm run build`，均 `working-directory: ui/web`），且 Q107 修绿后的 CI 实跑通过（run 37784552571 各步骤无 failure）
@@ -137,7 +137,7 @@
 ## J. 文档与事实
 
 - [x] Q091 · `docs/CODE-TRUTH.md` 随代码变化更新（每条带复现命令） · `docs/` · **抽查完成 2026-10-08**：把总账里「代码里查出的真实缺陷」那组的复现命令重跑了一遍 —— #4 仍成立（`quill-cli` 声明 `quill-upgrade` 却零调用），按仓库纪律**删掉了那条依赖**（核实范围含 tests），并把状态改准（`quill-upgrade` 本身已不再零调用，Q039 接了它）；#5 的「26616 行」实测为 **28692 行**，改为实测数字 + 构成说明（内核三块已搬进 `quill-core` 7482 行，剩下的巨石是 `api_*` 与 `*_repo`）。#1–#3 是历史已修条目，#6/#7/7a–c 上几轮刚改过。门禁：build/test/clippy/fmt/layer/mojibake 全绿（提交 0ca159b）
-- [ ] Q092 · `docs/OCTOP-MIGRATION-INVENTORY.md` 的完成度随实现更新 · `docs/` · 抽查一致
+- [x] Q092 · `docs/OCTOP-MIGRATION-INVENTORY.md` 的完成度随实现更新 · `docs/` · **已完成 2026-10-09**：逐条重测并改正了漂移 —— §1 表：crate 12→**13**（`quill-core` 未列入）、501 桩 14→**5**、前端 25 328→**25 406** 行、测试 1266→**1468 passed / 0 failed**（`cargo test --workspace` 实跑）；依赖真相块按各 `Cargo.toml` 的 `[dependencies]` 段重测（补 `quill-core`、删 `quill-upgrade ← cli` 那条早已删掉的依赖，并附可复现命令 —— 该命令**当场跑过**）。§3/§6：`PATCH /api/sessions/{id}`（Q051）、`PATCH /api/extensions/mcp/{name}`（Q036）、wiki/search（Q035）、experts import/export（Q031/Q032）、upgrade 三条（Q038–Q040）、bundle 导入导出 都**已从 501 桩转真实现**，逐条 grep `routes.rs` 核过；`GET /api/ws` 已删。§7 五条缺陷里 1/2/4/5 **都已修**（逐条注明修复提交/位置），补第 6 条（本轮 Q109 发现的判据绑错名）。§8 第 1/2 条标注已完成状态。**未验证如实标注**：§6 那张端点计数表（18/193/20/238）出自 python 生成器、本机无 python 跑不了，标「未验证」
 - [x] Q093 · `docs/ARCHITECTURE.md` 的 §1 现状随重构更新 · `docs/` · **已完成 2026-10-08**：§1.1 补 `quill-core` 层、把「quill-agent → quill-wiki 倒挂」改成**已修**（用 §1.1 自带命令实测）；§1.3 覆盖度表三行按落点改写（mcp_client 1213 / tools 1402 都已在 `quill-core`，对话循环标明「搬运清单已备 KERNEL-PORTS §4.1 / Q012」、状态机「已有未接线」）；§1.5 巨石清单按 `wc -l` 重排（最大 `api_extensions.rs` 2427）；§2 P-2 同步。**顺带修掉一条复现命令的假阳性**：依赖图命令原来扫整个 Cargo.toml，把 `[[bin]] name = "quill-mcp-stub"` 误读成依赖 `quill-mcp`（该 crate 不存在），改成只扫 `[dependencies]` 段并当场跑通（提交 1d7d961）
 - [ ] Q094 · 每个里程碑达成后，把新判据加进 `project/items.mjs` · `project/` · `status.mjs` 能判
 - [x] Q095 · `TESTSETS/` 与真机验收记录对齐 · `TESTSETS/` · **抽查完成 2026-10-08**：抽查一条**头条事实**（`STATUS.md` 开头「本机 LLM 跑在 Windows、从 WSL 经网关访问 `:18080`」）—— 当场 `ip route` 取网关再 `curl` 该端点：**网关仍是 `172.18.48.1`（与记录一致）、`/v1/models` 回 HTTP 200**，即那条环境记录今天仍成立。顺带核了 `TESTSETS/__pycache__/`：**未被 git 跟踪**（`git ls-files` 为空）且 `.gitignore:75-76` 已覆盖 `__pycache__/`、`*.pyc`，不是噪音。**范围如实标注**：`STATUS.md` 共 537 行（含 CPU vs Vulkan 基准、100 条任务记录），本次只抽验 1 条头条事实，**其余未逐条复验**（标 未验证）
@@ -170,7 +170,9 @@
 
 - [x] Q108 · 升级 CI 里的 action 版本，去掉「Node.js 20 is deprecated」这条 annotation · `.github/workflows/gates.yml` · **已完成 2026-10-08（提交 e4e52bf），2026-10-09 复核**：`actions/checkout@v4 → v7`、`actions/setup-node@v4 → v7`、`actions/cache@v4 → v6`。**判据实测**：`gh run view 37784552571`（Q108 提交那一轮）两个 job 均 success（3m58s），且 `gh run view 37784552571 | grep -i "node\|deprecat"` **零命中** —— annotation 里只剩前端 ESLint 的 fast-refresh 提示与「ubuntu-latest 将迁到 Ubuntu 26」的 runner 提示，Node 20 弃用那条已消失。一次只升一个的要求在实操里合并成一次提交（三个 action 属同一主题），风险由该轮 CI 双绿覆盖
 
-## 取用规则
+- [x] Q109 · 修掉 `items.mjs` 里**绑错测试名**的判据（判据的真实状态是「未知」） · `project/items.mjs` · **已完成 2026-10-09**：在 WSL 里跑 `node scripts/status.mjs --self-check`（能读到真 vitest JSON）实测「**1 处有问题**」—— 只有 `B3-1a` 是真坏的：Q018 把界面文案从「暂未生效」改成「已生效」、测试名跟着改，而 `B3-1a` 还绑着旧名 `明写「暂未生效」…`，于是**永远不可能通过**。（另 3 条 B1-6/B1-7/B1-8 在 Windows 侧 Git Bash 跑时被报成坏的 —— 那是 `status.mjs` 读不到 `D:\tmp\quill-status-vitest.json` 的环境假阳性，在 WSL 下不出现，已核。）**同批把 `B3-1` 从「只能人工」降为绑真测试**：压缩两半都已有测试 —— 端到端 `chat_compaction_http.rs::a_history_over_the_threshold_is_really_compacted`（真发生压缩 + 摘要进下一轮）与内核 `quill-core/src/compaction.rs::billable_usage_is_continuous_across_compaction`（用量前后连续）。实测：修后 `--self-check` 退出 0；`npx vitest run` 341 passed（`B3-1a` 绑的那条真存在）；`cargo test --workspace` 1468 passed（`B3-1` 绑的那条真存在）
+
+- [x] Q110 · **已实现清单漏登**：`PATCH /api/sessions/{id}` 既不在 `CONTRACT_ROUTES` 也不在 `EXTRA_ROUTES` · `crates/quill-server/src/routes.rs` · **已完成 2026-10-09**：Q051 在 2026-10-08 就接通了会话改名（`routes.rs` 的 `.patch(api_chat::rename)`，见 `:106`），但两张声明表都没登记它 —— 正是 `http_contract.rs:414` 自己点名的那类「接好了却忘了登记」。octop 侧确有 `PATCH .../threads/{tid}`，所以属契约路由，补进 `CONTRACT_ROUTES` + 测试的 `IMPLEMENTED` 清单（63→64）。**判据实测**：`cargo test -p quill-server --test http_contract` → **33 passed / 0 failed**；**反向验证真做**：把 `IMPLEMENTED` 里那条临时改成 `("PUT", …)` → 该测试**变红**并报「契约路由 PATCH /api/sessions/… 未实现，必须返回 501 而非 400（假成功）」，还原后 33/33 绿（证明这张清单是载重的，不是摆设）
 
 1. 从**最上面未完成**的取。**批次由用户指定**（默认 1~3 条；用户说「取 30 条」就按 30 条列批，
    能一次做完的做完，做不完的留 `[ ]` 并写明卡在哪）。做完就提交（最高指示第 5 条）。

@@ -256,18 +256,25 @@ export const ITEMS = [
     id: 'B3-1',
     milestone: 'M3',
     title: '压缩阈值不再只存不读（真发生压缩，用量前后连续）',
-    // 为什么只能人工：判据是「真的发生压缩，且能从压缩点续上」。
-    // 现在的实现只有阈值字段与界面标注，没有压缩本体 —— B3-1a 已经把那半个
-    // 真相用测试钉住了（明写「暂未生效」）。剩下这半个要跑一次真实的长对话
-    // 才能验，没有能替代的断言。
-    verify: { kind: 'manual', how: '为什么只能人工：现在只有阈值字段与标注、没有压缩本体，剩下这半个要跑一次真实长对话才能验。超阈值后要真的发生压缩并能从压缩点续上' },
+    // 2026-10-09（Q109）：Q018 把压缩接进对话路径后，这条不再「只能人工」——
+    // 两半都各有测试钉住：
+    //   · 真发生压缩 + 从压缩点续上：`crates/quill-server/tests/chat_compaction_http.rs`
+    //     的 `a_history_over_the_threshold_is_really_compacted`（端到端，走 HTTP）
+    //   · 用量前后连续：`crates/quill-core/src/compaction.rs`
+    //     的 `billable_usage_is_continuous_across_compaction`
+    // 这里绑端到端那条（更强的那个）；用量那半写在上面，免得只剩一半被机器看着。
+    verify: { kind: 'test', name: 'a_history_over_the_threshold_is_really_compacted' },
     blocks: ['M3'],
   },
   {
     id: 'B3-1a',
     milestone: 'M3',
-    title: '压缩阈值在界面上明写「暂未生效」（不允许出现不生效却不标注的开关）',
-    verify: { kind: 'test', name: 'src/models/ModelsPage.test.tsx > 压缩阈值输入框 > 明写「暂未生效」：这个数存得下来，但没有任何代码读它' },
+    // 2026-10-09 修正（Q109）：Q018 把压缩接线落地后，界面标注从「暂未生效」
+    // 改成了「已生效」，测试名跟着改了 —— 而这里还绑着旧名，于是这条判据
+    // **永久落在 BROKEN**（`node scripts/status.mjs --self-check` 在 WSL 下
+    // 实测报「1 处有问题」）。判据绑错名字比判据没通过更糟：它的真实状态是未知。
+    title: '压缩阈值在界面上明写「已生效」与估算口径（不允许出现不生效却不标注的开关）',
+    verify: { kind: 'test', name: 'src/models/ModelsPage.test.tsx > 压缩阈值输入框 > 明写「已生效」与口径：这个数真的会被读，数字是估算值' },
     blocks: [],
   },
   {
