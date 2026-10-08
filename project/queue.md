@@ -160,6 +160,8 @@
 - [ ] Q105 · `max_ask_depth` 接进提问链路（前置：成员执行器要有「追问通道」；`DispatchRecord::mark_asking` 生产侧目前零调用） · `quill-agent`/`quill-server` · 成员提问时按深度过闸
 
 
+- [ ] Q106 · 给 `.i18n-check.mjs` 补 `--self-test`（其余门禁都有，唯独它没有），并把「每个门禁脚本都必须有**非 0 退出路径**」做成一条机器可跑的自检 · `.i18n-check.mjs` / `.scripts/` · **背景（2026-10-08 审计）**：Q074 修掉的那个缺陷是「脚本一个 `process.exit` 都没有 → 永远退 0 → CI 永远绿」；当场把其余 11 个门禁脚本逐个核了一遍：`.octop-baseline-check` `exit(1)`、`.library-check` `failures===0?0:1`、`.upstream-check`/`.provenance-check` `exitCode=1`、`.mojibake-check` `exit(1)`、`.vendor-freedom-check`/`.vendor-baseline-check` `exit(1)`、`.scripts/*-selftest` `exit(1)`，`.layer-guard` 与 `.api-compat-check` 上几轮用**注入违例**实测过退出 1 —— **除 i18n 外没有第二个漏网**。判据：一条自检脚本扫全部门禁，发现「既没有非 0 退出路径、也没有抛错」就直接红；`.i18n-check.mjs` 的逻辑要抽成函数才能自测（现在是一段内联流程）
+
 ## 取用规则
 
 1. 从**最上面未完成**的取。**批次由用户指定**（默认 1~3 条；用户说「取 30 条」就按 30 条列批，
