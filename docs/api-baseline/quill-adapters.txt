@@ -1,0 +1,138 @@
+# quill-adapters 公开 API 基线
+#
+# 这是**已发布契约的近似**，不是类型级真值：由 .api-compat-check.mjs 的文本扫描生成，
+# 覆盖边界（宏生成项、泛型约束语义、trait 实现兼容性、cfg 门控、复杂 pub use 等）
+# 见脚本头注释「这个判据不能覆盖什么」。
+#
+# 生成/接受变更：node .api-compat-check.mjs --update（CI 里只跑检查，不跑 --update）
+# 判据：删除条目 / 签名变化 → 退出码 1；新增 → 允许。
+# 格式：<源文件>\t<形态> <名字>\t<归一化签名>
+#
+crates/quill-adapters/src/ids.rs	const MAX_SLUG_LEN	pub const MAX_SLUG_LEN:usize = 64;
+crates/quill-adapters/src/ids.rs	enum ParseIdError	pub enum ParseIdError{
+crates/quill-adapters/src/ids.rs	enum ParseSlugError	pub enum ParseSlugError{
+crates/quill-adapters/src/ids.rs	fn as_bytes	pub const fn as_bytes(&self)->&[u8;16]{
+crates/quill-adapters/src/ids.rs	fn as_bytes	pub const fn as_bytes(&self)->&[u8;16]{
+crates/quill-adapters/src/ids.rs	fn as_bytes	pub const fn as_bytes(&self)->&[u8;16]{
+crates/quill-adapters/src/ids.rs	fn as_str	pub fn as_str(&self)->&str{
+crates/quill-adapters/src/ids.rs	fn as_str	pub fn as_str(&self)->&str{
+crates/quill-adapters/src/ids.rs	fn as_str	pub fn as_str(&self)->&str{
+crates/quill-adapters/src/ids.rs	fn for_expert	pub fn for_expert(expert:&ExpertId,seq:u32)->Result<Self,ParseSlugError>{
+crates/quill-adapters/src/ids.rs	fn from_bytes	pub const fn from_bytes(b:[u8;16])->Self{
+crates/quill-adapters/src/ids.rs	fn from_bytes	pub const fn from_bytes(b:[u8;16])->Self{
+crates/quill-adapters/src/ids.rs	fn from_bytes	pub const fn from_bytes(b:[u8;16])->Self{
+crates/quill-adapters/src/ids.rs	fn parse	pub fn parse(s:&str)->Result<Self,ParseIdError>{
+crates/quill-adapters/src/ids.rs	fn parse	pub fn parse(s:&str)->Result<Self,ParseIdError>{
+crates/quill-adapters/src/ids.rs	fn parse	pub fn parse(s:&str)->Result<Self,ParseIdError>{
+crates/quill-adapters/src/ids.rs	fn parse	pub fn parse(s:&str)->Result<Self,ParseSlugError>{
+crates/quill-adapters/src/ids.rs	fn parse	pub fn parse(s:&str)->Result<Self,ParseSlugError>{
+crates/quill-adapters/src/ids.rs	fn parse	pub fn parse(s:&str)->Result<Self,ParseSlugError>{
+crates/quill-adapters/src/ids.rs	fn to_compact_hex	pub fn to_compact_hex(&self)->String{
+crates/quill-adapters/src/ids.rs	fn to_compact_hex	pub fn to_compact_hex(&self)->String{
+crates/quill-adapters/src/ids.rs	fn to_compact_hex	pub fn to_compact_hex(&self)->String{
+crates/quill-adapters/src/ids.rs	fn to_hex_lower	pub fn to_hex_lower(bytes:&[u8])->String{
+crates/quill-adapters/src/ids.rs	fn to_hex_upper	pub fn to_hex_upper(bytes:&[u8])->String{
+crates/quill-adapters/src/ids.rs	fn to_hyphenated	pub fn to_hyphenated(&self)->String{
+crates/quill-adapters/src/ids.rs	fn validate_slug	pub fn validate_slug(s:&str)->Result<(),ParseSlugError>{
+crates/quill-adapters/src/ids.rs	struct ExpertId	pub struct ExpertId(String);
+crates/quill-adapters/src/ids.rs	struct MemberId	pub struct MemberId(String);
+crates/quill-adapters/src/ids.rs	struct ProviderId	pub struct ProviderId(String);
+crates/quill-adapters/src/ids.rs	struct SessionId	pub struct SessionId(UuidBytes);
+crates/quill-adapters/src/ids.rs	struct UserId	pub struct UserId(UuidBytes);
+crates/quill-adapters/src/ids.rs	struct UuidBytes	pub struct UuidBytes([u8;16]);
+crates/quill-adapters/src/knowledge.rs	struct IndexDoc	pub struct IndexDoc{
+crates/quill-adapters/src/knowledge.rs	struct IndexReceipt	pub struct IndexReceipt{
+crates/quill-adapters/src/knowledge.rs	struct IngestContext	pub struct IngestContext{
+crates/quill-adapters/src/knowledge.rs	struct KnowledgePage	pub struct KnowledgePage{
+crates/quill-adapters/src/knowledge.rs	struct KnowledgeSource	pub struct KnowledgeSource{
+crates/quill-adapters/src/knowledge.rs	struct LintContext	pub struct LintContext{
+crates/quill-adapters/src/knowledge.rs	struct QueryAnswer	pub struct QueryAnswer{
+crates/quill-adapters/src/knowledge.rs	struct QueryContext	pub struct QueryContext{
+crates/quill-adapters/src/knowledge.rs	trait KnowledgeBackend	pub trait KnowledgeBackend:Send + Sync + 'static{
+crates/quill-adapters/src/lib.rs	mod ids	pub mod ids;
+crates/quill-adapters/src/lib.rs	mod knowledge	pub mod knowledge;
+crates/quill-adapters/src/lib.rs	mod member	pub mod member;
+crates/quill-adapters/src/lib.rs	use AbortScope	pub use member::AbortScope;
+crates/quill-adapters/src/lib.rs	use AdapterError	pub use member::AdapterError;
+crates/quill-adapters/src/lib.rs	use ChainCheck	pub use member::ChainCheck;
+crates/quill-adapters/src/lib.rs	use ChainHop	pub use member::ChainHop;
+crates/quill-adapters/src/lib.rs	use ExpertId	pub use ids::ExpertId;
+crates/quill-adapters/src/lib.rs	use IndexDoc	pub use knowledge::IndexDoc;
+crates/quill-adapters/src/lib.rs	use IndexReceipt	pub use knowledge::IndexReceipt;
+crates/quill-adapters/src/lib.rs	use IngestContext	pub use knowledge::IngestContext;
+crates/quill-adapters/src/lib.rs	use InvalidChainHop	pub use member::InvalidChainHop;
+crates/quill-adapters/src/lib.rs	use InvalidMessage	pub use member::InvalidMessage;
+crates/quill-adapters/src/lib.rs	use InvalidOutcome	pub use member::InvalidOutcome;
+crates/quill-adapters/src/lib.rs	use InvalidStartRequest	pub use member::InvalidStartRequest;
+crates/quill-adapters/src/lib.rs	use KnowledgeBackend	pub use knowledge::KnowledgeBackend;
+crates/quill-adapters/src/lib.rs	use KnowledgePage	pub use knowledge::KnowledgePage;
+crates/quill-adapters/src/lib.rs	use KnowledgeSource	pub use knowledge::KnowledgeSource;
+crates/quill-adapters/src/lib.rs	use LintContext	pub use knowledge::LintContext;
+crates/quill-adapters/src/lib.rs	use MAX_CHAIN_DEPTH	pub use member::MAX_CHAIN_DEPTH;
+crates/quill-adapters/src/lib.rs	use MAX_SLUG_LEN	pub use ids::MAX_SLUG_LEN;
+crates/quill-adapters/src/lib.rs	use MemberExecutor	pub use member::MemberExecutor;
+crates/quill-adapters/src/lib.rs	use MemberId	pub use ids::MemberId;
+crates/quill-adapters/src/lib.rs	use MemberOutcome	pub use member::MemberOutcome;
+crates/quill-adapters/src/lib.rs	use MemberStartRequest	pub use member::MemberStartRequest;
+crates/quill-adapters/src/lib.rs	use MemberStatus	pub use member::MemberStatus;
+crates/quill-adapters/src/lib.rs	use Message	pub use member::Message;
+crates/quill-adapters/src/lib.rs	use MessageRole	pub use member::MessageRole;
+crates/quill-adapters/src/lib.rs	use ParseIdError	pub use ids::ParseIdError;
+crates/quill-adapters/src/lib.rs	use ParseSlugError	pub use ids::ParseSlugError;
+crates/quill-adapters/src/lib.rs	use ProviderId	pub use ids::ProviderId;
+crates/quill-adapters/src/lib.rs	use QueryAnswer	pub use knowledge::QueryAnswer;
+crates/quill-adapters/src/lib.rs	use QueryContext	pub use knowledge::QueryContext;
+crates/quill-adapters/src/lib.rs	use SessionId	pub use ids::SessionId;
+crates/quill-adapters/src/lib.rs	use UserId	pub use ids::UserId;
+crates/quill-adapters/src/lib.rs	use UuidBytes	pub use ids::UuidBytes;
+crates/quill-adapters/src/lib.rs	use check_chain	pub use member::check_chain;
+crates/quill-adapters/src/lib.rs	use to_hex_lower	pub use ids::to_hex_lower;
+crates/quill-adapters/src/lib.rs	use to_hex_upper	pub use ids::to_hex_upper;
+crates/quill-adapters/src/lib.rs	use validate_slug	pub use ids::validate_slug;
+crates/quill-adapters/src/member.rs	const MAX_CHAIN_DEPTH	pub const MAX_CHAIN_DEPTH:usize = 4;
+crates/quill-adapters/src/member.rs	enum AbortScope	pub enum AbortScope{
+crates/quill-adapters/src/member.rs	enum AdapterError	pub enum AdapterError{
+crates/quill-adapters/src/member.rs	enum ChainCheck	pub enum ChainCheck{
+crates/quill-adapters/src/member.rs	enum InvalidChainHop	pub enum InvalidChainHop{
+crates/quill-adapters/src/member.rs	enum InvalidMessage	pub enum InvalidMessage{
+crates/quill-adapters/src/member.rs	enum InvalidOutcome	pub enum InvalidOutcome{
+crates/quill-adapters/src/member.rs	enum InvalidStartRequest	pub enum InvalidStartRequest{
+crates/quill-adapters/src/member.rs	enum MemberStatus	pub enum MemberStatus{
+crates/quill-adapters/src/member.rs	enum MessageRole	pub enum MessageRole{
+crates/quill-adapters/src/member.rs	fn as_wire	pub fn as_wire(&self)->&'static str{
+crates/quill-adapters/src/member.rs	fn as_wire	pub fn as_wire(&self)->&'static str{
+crates/quill-adapters/src/member.rs	fn chain	pub fn chain(&self)->&[ChainHop]{
+crates/quill-adapters/src/member.rs	fn check_chain	pub fn check_chain(chain:&[ChainHop],node:&str)->ChainCheck{
+crates/quill-adapters/src/member.rs	fn completed_scope	pub fn completed_scope(&self)->&str{
+crates/quill-adapters/src/member.rs	fn detail	pub fn detail(&self)->&str{
+crates/quill-adapters/src/member.rs	fn done	pub fn done(member:MemberId,scope:&str,output:&str)->Result<Self,InvalidOutcome>{
+crates/quill-adapters/src/member.rs	fn expert	pub fn expert(&self)->&ExpertId{
+crates/quill-adapters/src/member.rs	fn failed	pub fn failed(member:MemberId,scope:&str)->Result<Self,InvalidOutcome>{
+crates/quill-adapters/src/member.rs	fn halts_members	pub fn halts_members(&self)->bool{
+crates/quill-adapters/src/member.rs	fn instructions	pub fn instructions(&self)->&str{
+crates/quill-adapters/src/member.rs	fn is_deliverable	pub fn is_deliverable(&self)->bool{
+crates/quill-adapters/src/member.rs	fn is_retryable	pub fn is_retryable(&self)->bool{
+crates/quill-adapters/src/member.rs	fn member	pub fn member(&self)->&MemberId{
+crates/quill-adapters/src/member.rs	fn member	pub fn member(&self)->&MemberId{
+crates/quill-adapters/src/member.rs	fn new	pub fn new(member:MemberId,status:MemberStatus,completed_scope:impl Into<String>,output:impl Into<String>)->Result<Self,InvalidOutcome>{
+crates/quill-adapters/src/member.rs	fn new	pub fn new(node:impl Into<String>,task:impl Into<String>)->Result<Self,InvalidChainHop>{
+crates/quill-adapters/src/member.rs	fn new	pub fn new(owner:UserId,session:SessionId,expert:ExpertId,member:MemberId,title:impl Into<String>,instructions:impl Into<String>)->Result<Self,InvalidStartRequest>{
+crates/quill-adapters/src/member.rs	fn new	pub fn new(role:MessageRole,text:impl Into<String>)->Result<Self,InvalidMessage>{
+crates/quill-adapters/src/member.rs	fn node	pub fn node(&self)->&str{
+crates/quill-adapters/src/member.rs	fn output	pub fn output(&self)->&str{
+crates/quill-adapters/src/member.rs	fn owner	pub fn owner(&self)->UserId{
+crates/quill-adapters/src/member.rs	fn required_capabilities	pub fn required_capabilities(&self)->Option<&[String]>{
+crates/quill-adapters/src/member.rs	fn role	pub fn role(&self)->MessageRole{
+crates/quill-adapters/src/member.rs	fn session	pub fn session(&self)->SessionId{
+crates/quill-adapters/src/member.rs	fn status	pub fn status(&self)->MemberStatus{
+crates/quill-adapters/src/member.rs	fn task	pub fn task(&self)->&str{
+crates/quill-adapters/src/member.rs	fn text	pub fn text(&self)->&str{
+crates/quill-adapters/src/member.rs	fn title	pub fn title(&self)->&str{
+crates/quill-adapters/src/member.rs	fn user	pub fn user(text:impl Into<String>)->Result<Self,InvalidMessage>{
+crates/quill-adapters/src/member.rs	fn with_chain	pub fn with_chain(mut self,hop:ChainHop)->Self{
+crates/quill-adapters/src/member.rs	fn with_required_capabilities	pub fn with_required_capabilities(mut self,caps:Option<Vec<String>>)->Self{
+crates/quill-adapters/src/member.rs	struct ChainHop	pub struct ChainHop{
+crates/quill-adapters/src/member.rs	struct MemberOutcome	pub struct MemberOutcome{
+crates/quill-adapters/src/member.rs	struct MemberStartRequest	pub struct MemberStartRequest{
+crates/quill-adapters/src/member.rs	struct Message	pub struct Message{
+crates/quill-adapters/src/member.rs	trait MemberExecutor	pub trait MemberExecutor:Send + Sync + 'static{

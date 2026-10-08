@@ -115,6 +115,31 @@ jobs:
       - name: 该判定的自测
         run: node .vendor-freedom-check.mjs --self-test
 
+      # 分层守卫（docs/ARCHITECTURE.md §3.1「依赖只能向下」）：
+      # 回答「有没有 crate 的 [dependencies] 反向依赖了上层——或同层的——quill-* crate」。
+      # 编译/测试全绿也照样可能层次倒挂（Cargo.toml 里加一行的事），只有依赖图能看见它。
+      # 已知的既成事实违例（quill-upgrade -> quill-backup 同层）走脚本里的显式基线豁免：
+      # 出现**不在基线里**的新违例 = 报红；基线条目**已修复却还留着**（陈旧）= 也报红，
+      # 逼着清单只减不增。dev-dependencies 放宽但会在输出里逐条列出。
+      - name: 文本门禁 · 分层守卫（依赖只能向下）
+        run: node .layer-guard.mjs
+
+      - name: 分层守卫判定的自测
+        run: node .layer-guard.mjs --self-test
+
+      # 公开 API 兼容门禁（Q010）：回答「这次改动有没有把 quill-adapters 的公开 API
+      # 删掉/改坏」。基线是 docs/api-baseline/quill-adapters.txt —— **已发布契约的
+      # 近似，不是类型级真值**；删除条目 / 签名变化 → 红，新增 → 允许。
+      # CI 里只跑检查，绝不跑 --update（接受契约变更必须在 review 里显式发生）。
+      # 本仓库 crate 都是 publish = false，cargo-semver-checks 的 check-release
+      # 没有可比的已发布版本（实测直接报 not found in registry），故用本脚本；
+      # 局限与升级路径（semver-checks 的 --baseline-rev 可用）见脚本头注释。
+      - name: 文本门禁 · 公开 API 兼容（quill-adapters）
+        run: node .api-compat-check.mjs
+
+      - name: 公开 API 兼容判定的自测
+        run: node .api-compat-check.mjs --self-test
+
       - name: 文本门禁 · 乱码
         run: node .mojibake-check.mjs
 
