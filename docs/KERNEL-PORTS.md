@@ -123,6 +123,32 @@ grep -rn "fn models_url\|probe_models" crates/ --include=*.rs | head
 **HTTP / SSE / 鉴权 / 限流 / 错误信封不进内核** —— 那是壳的活。
 内核产出「事件」（正文增量、工具往返、结束原因），壳负责把它编码成 SSE 或 JSON。
 
+### 4.1 Q012 现状与搬运清单（2026-10-08 清点，**尚未搬运**）
+
+行号是清点时的（`crates/quill-server/src/api_chat.rs` 共 1648 行、`api_chat_stream.rs` 222 行）：
+
+| 现在的样子 | 位置 | 搬/留 | 怎么改 |
+|---|---|---|---|
+| `TurnPrep`（db / uid / sid / provider / llm_config / registry / tools / user_created_at） | `api_chat.rs:827` | **拆** | 内核要的那半（provider / llm_config / tools / registry）进 `quill_core::turn::TurnInput`；壳那半（db / uid / sid / 消息 id）留在壳 |
+| `ReplyMode`（`Once` / `Streamed`） | `:994` | 搬 | 内核只认「要不要流」这一位，与 HTTP 无关 |
+| 取回循环本体（建请求 → 流式或一次性 → 有工具就执行回灌 → 再问） | `:1073-1190`（`run_turn`） | **搬** | 进 `quill_core::turn::run_turn`，产出 `TurnOutcome { text, reasoning, usage, turn_ms, rounds, exhausted }` |
+| 工具预算闸 `MAX_TOOL_ROUNDS` | `:1094`、`:1160` | 搬 | 跟着循环走（该常量已在 `quill_core::tools`） |
+| 工具执行 `prep.registry.call(call)` | `:1109` | 搬 | `ToolRegistry` 已在内核（Q013），直接调 |
+| 增量转发 `StreamDelta` → sink | `:1035-1045`；SSE 侧 `api_chat_stream.rs:68` | **搬成观察者** | 内核定义 `TurnObserver`（`on_text` / `on_reasoning` / `on_tool_round`）；SSE 壳实现它写事件，非流式壳给空实现 |
+| 用户消息落库 `append_message` | `:870`、`:1432` | 留壳 | 内核不写库；壳在调 `run_turn` **之前**写用户消息（现在也在这之前） |
+| 助手消息落库 + `touch_session` | `:1259`、`:1276`、`:1472` | 留壳 | 内核返回 `TurnOutcome` 后由壳写。**先不引入 `TurnRecorder` 端口** —— 返回值就够，等真需要（例如内核要中途落库）再加，别为对称而对称 |
+| `user_message_json` / HTTP 错误映射 | `:1195`、`provider_failure` | 留壳 | 纯 HTTP 契约 |
+
+**搬运顺序（每步都能单独跑绿）**：
+1. 内核加 `turn.rs`：`TurnInput` / `TurnOutcome` / `TurnObserver` + 循环本体（从 `run_turn` 复制过来，**先不改调用方**）；
+2. 内核补测试：假 provider（照 `quill-core/src/tools.rs` 里 `Recorder` 桩的写法）+ 假 registry，覆盖「无工具一轮」「工具往返后收正文」「预算耗尽」「流式观察者真收到增量」；
+3. 壳侧 `run_turn` 改成薄壳：拼 `TurnInput` → 调内核 → 落库 + 拼响应/SSE；
+4. 删掉壳侧循环残留，跑 `cargo test --workspace`（总数不减）与 `.layer-guard.mjs`；
+5. 提交信息写清「哪些行从壳搬进了内核」「SSE 路径怎么变成观察者」。
+
+**判据**：`grep -c "MAX_TOOL_ROUNDS\|registry.call" crates/quill-server/src/api_chat.rs` → 0；
+`cargo test --workspace` 总数不减；`api_chat.rs` 行数明显下降（1648 → 预计 ~1300）。
+
 ---
 
 ## 5. 搬运的通用配方（Q012/Q013/Q015 共用）
