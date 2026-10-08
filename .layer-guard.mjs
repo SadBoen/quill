@@ -34,8 +34,9 @@
  * ## 判据（扫什么、怎么判）
  *
  * - 只扫 `crates/<crate>/Cargo.toml`（workspace 成员的清单，每个 crate 目录一份）。
- *   刻意**不递归**进 `crates/quill-testkit/fixtures/`：那下面是合成的假清单
- *   （boundary 测试数据），不是真依赖声明，扫它等于拿测试数据当事实。
+ *   刻意**不递归**进 `fixtures/`：那下面曾是合成的假清单（`quill-testkit` 的
+ *   boundary 测试数据），不是真依赖声明，扫它等于拿测试数据当事实。
+ *   那批数据已按 queue Q101 删除（没有读者）；不递归这条保留是防御性的。
  * - `[dependencies]`（含 `[build-dependencies]`、`[target.*.dependencies]`、
  *   `[dependencies.<name>]` 子表等一切会进入真实依赖图的形式）：
  *   依赖层级必须**严格小于**自己；同层（`L==L`）也是违例。
@@ -251,7 +252,7 @@ function discoverManifests() {
   const out = [];
   for (const dirName of readdirSync(cratesDir)) {
     // 只认 workspace 成员那一层：`crates/<crate>/Cargo.toml`。
-    // 不递归 —— `crates/quill-testkit/fixtures/` 下是合成的假清单（boundary 测试数据）。
+    // 不递归 —— `fixtures/` 下曾放着合成的假清单（queue Q101 已删除）。
     const p = join(cratesDir, dirName, 'Cargo.toml');
     if (!existsSync(p)) continue;
     const parsed = parseManifestText(readFileSync(p, 'utf8'));
@@ -266,7 +267,7 @@ const REL = { down: '向下', same: '同层', up: '向上' };
 function report(result, scanned) {
   const lines = [];
   lines.push('分层守卫：依赖只能向下（docs/ARCHITECTURE.md §3.1）');
-  lines.push(`扫了 ${scanned} 个 crate 的 Cargo.toml（不递归 fixtures/，那是合成的测试数据）`);
+  lines.push(`扫了 ${scanned} 个 crate 的 Cargo.toml（只认 workspace 成员那一层）`);
 
   if (result.dev.length > 0) {
     lines.push('');

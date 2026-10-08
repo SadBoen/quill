@@ -34,7 +34,10 @@ const HERE = fileURLToPath(new URL('.', import.meta.url));
 
 /// 这些目录里的 Cargo.toml 不是我们的：
 /// - `vendor/`、`.octop-ref/` 是参考源自己的清单；`target/`、`node_modules/`、`.git/` 是产物；
-/// - `fixtures/` 是**合成的测试数据**（喂给检测器的假清单），不是真依赖声明。
+/// - `fixtures/` 曾经装着一批合成的假清单（`crates/quill-testkit/fixtures/boundary/`）。
+///   **那批数据已按 queue Q101 删除**（没有任何读者，且其中「最干净」的那份把
+///   `goose = { git = … }` 当成合法样子，与最高指示第 4 条冲突）。这一条 skip 保留
+///   是防御性的：真要再引合成清单，别让它们变成这道门禁的假阳性来源。
 const SKIP_DIRS = new Set(['vendor', '.octop-ref', 'target', 'node_modules', '.git', 'fixtures']);
 
 /// 依赖键开头命中这些即违规。

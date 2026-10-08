@@ -1,6 +1,0 @@
-[workspace]
-members = ["crates/quill-good"]
-
-[workspace.dependencies]
-
-goose = { git = "https://github.com/aaif-goose/goose", rev = "76da81cb964b21cd096db739302329b40c2998b8" }

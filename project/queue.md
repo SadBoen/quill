@@ -119,7 +119,7 @@
 - [ ] Q078 · 每条上游引用逐行核过（`node .provenance-check.mjs` 常绿） · `UPSTREAM-USAGE.md` · 无坏引用
 - [ ] Q079 · 「刻意没抄上游」的地方写清是哪几处、为什么 · `docs/` · 有清单
 - [x] Q080 · `vendor/` 与 `.octop-ref/` 删掉后 `cargo build` 必须成功 —— 已做成门禁 `.vendor-freedom-check.mjs`（扫全部 Cargo.toml，禁 goose/octop 依赖键、禁指向参考源的 path/git；带 `--self-test`）· CI 已加
-- [ ] Q101 · 处理 `crates/quill-testkit/fixtures/boundary/`（13 个夹具 + manifest.json）：**没有任何代码读它**（改成孤儿数据），且其中 `bnd00-all-clean`/`bnd03-floating-dep` 把 `goose = { git = … }` 当成合法/待修的样子，**与最高指示第 4 条冲突**。要么删掉，要么接回真读者 · `crates/quill-testkit/` · 二选一并说明
+- [x] Q101 · 处理 `crates/quill-testkit/fixtures/boundary/`（13 个夹具 + manifest.json）· `crates/quill-testkit/` · **已完成 2026-10-09，选择「删掉」**：三个理由都当场核过 —— ① **零读者**：全仓搜索只在 `.layer-guard.mjs` / `.vendor-freedom-check.mjs` 的「跳过 fixtures」注释里出现，没有任何代码把 manifest.json 或夹具目录当输入；② **它描述的规则不存在**：manifest 里每条 `covered_by` 都指向 `G26-1/2/3/4/5`，而 `G26` 在全仓**只出现在这份 manifest 里**（`grep -rn G26` 除它以外零命中）—— 那是一套没建起来的规则系统；③ **与最高指示第 4 条冲突**：`bnd00-all-clean/Cargo.toml`（所谓「最干净」的基线）写 `goose = { git = … }`、`bnd03-floating-dep` 也只把它当「版本浮动」缺陷 —— 而这个目录恰好落在两道依赖门禁**刻意跳过**的位置（`.vendor-freedom-check.mjs` 的 SKIP_DIRS 含 `fixtures`），也就是「唯一不看它的地方住着一份假契约」。接回真读者意味着新建一套 fixture 驱动检测器，那是新机制（违反最小改动），而真检查器（`.vendor-freedom-check.mjs` + `.layer-guard.mjs`）已各有 `--self-test` 用内联合成数据覆盖。**判据**：`git rm -r` 后 `cargo build --workspace` 通过、逐层门禁 `node .layer-guard.mjs` / `--self-test` / `node .vendor-freedom-check.mjs` / `--self-test` 全部退出 0；两道门禁里「跳过 fixtures」的注释同批改成「该批数据已按 Q101 删除，skip 保留是防御性的」
 
 ## I. 测试 / 健壮性 / 可诊断性
 

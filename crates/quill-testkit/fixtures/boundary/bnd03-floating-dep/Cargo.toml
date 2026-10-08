@@ -1,6 +1,0 @@
-[workspace]
-members = []
-
-[workspace.dependencies]
-
-goose = { git = "https://github.com/aaif-goose/goose", branch = "main" }

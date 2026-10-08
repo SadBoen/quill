@@ -1,2 +1,0 @@
-# ✅ 正确写法（对照用，不参与检查）：精确 commit
-goose = { git = "https://github.com/aaif-goose/goose", rev = "76da81cb964b21cd096db739302329b40c2998b8" }
