@@ -75,7 +75,9 @@ quill-server ──► adapters domain store control agent wiki provider backup 
     ├─ quill-backup  ──► adapters domain store
     ├─ quill-wiki    ──► adapters domain
     ├─ quill-control ──► adapters domain store
-    ├─ quill-agent   ──► adapters domain **wiki**   ← 层次倒挂，见 §2.4
+    ├─ quill-agent   ──► adapters domain（dev: testkit）（**倒挂已修**，见 §2.4；
+    │                     2026-10-08 用上面的命令实测：不再依赖 quill-wiki）
+    ├─ quill-core    ──► adapters provider          ← 内核层（Q011 新建，L3）
     ├─ quill-domain  ──► adapters
     └─ quill-provider / quill-store / quill-adapters ──► (叶子，无内部依赖)
 ```
@@ -84,7 +86,7 @@ quill-server ──► adapters domain store control agent wiki provider backup 
 
 ```bash
 for d in crates/*/; do n=$(basename "$d"); \
-  deps=$(grep -oE 'quill-[a-z]+' "$d/Cargo.toml" | grep -v "^$n$" | sort -u | tr '\n' ' '); \
+  deps=$(sed -n '/^[[]dependencies[]]/,/^[[]/p' "$d/Cargo.toml" | grep -oE 'quill-[a-z]+' | grep -v "^$n$" | sort -u | paste -sd' ' -); \
   echo "$n -> $deps"; done
 ```
 
@@ -127,9 +129,9 @@ goose 内核的参考源（`vendor/goose/crates/`，实测各 crate 规模）：
 | 内核能力 | goose 出处 | quill 落点 | 覆盖度 |
 |---|---|---|---|
 | provider 抽象 | `goose-providers`/`-provider-types` | `quill-provider`（叶子，传输）+ `quill-core::llm`（配置与组装，Q015 已搬） | 部分；**组装只剩一套**（2026-10-08） |
-| MCP 客户端 | `goose/agents/mcp_client.rs`、`goose-mcp` | `quill-server/src/mcp_client.rs`（1174 行） | 部分，**寄生在 HTTP 层** |
-| 对话循环 | `goose/agents/agent.rs` → `Agent::reply` | `quill-server/src/api_chat.rs`（2069 行） | 部分，**寄生在 HTTP 层**，无状态机/快照/重试 |
-| 工具执行 | `goose/agents/tool_execution.rs` | `quill-server/src/tools.rs`（1140 行） | 部分，**寄生在 HTTP 层** |
+| MCP 客户端 | `goose/agents/mcp_client.rs`、`goose-mcp` | **`quill-core/src/mcp_client.rs`**（1213 行，Q014 已搬出 HTTP 层） | 部分（只铺 stdio） |
+| 对话循环 | `goose/agents/agent.rs` → `Agent::reply` | 仍在 `quill-server/src/api_chat.rs`（1648 行）—— **搬运清单已备**（`docs/KERNEL-PORTS.md §4.1`，Q012） | 部分；状态机已有（`quill-core/src/state_machine.rs`，Q020），**未接线** |
+| 工具执行 | `goose/agents/tool_execution.rs` | **`quill-core/src/tools.rs`**（1402 行，Q013 已搬，走 `ToolSources` 端口） | 部分（只读工具，写入类故意不做） |
 | 子 agent | `goose/agents/subagent_handler.rs` | `quill-adapters::MemberExecutor` + `member_executor.rs` | 第一版（`steer`/`abort` 未做） |
 | **上下文压缩** | `goose-context-management`（1156 行） | **只有配置字段** `compaction_threshold_tokens`，**零实现** | **未做** |
 | **记忆** | `goose/session` + memory 相关 | **未做** | **未做** |
@@ -169,12 +171,13 @@ crates/quill-agent/src/
 `quill-server` 同时承担四件事：**HTTP 契约 + 业务编排 + 数据访问 + agent 内核**。
 
 ```
-2069 api_chat.ts      ← 对话 + 工具往返循环（本该在内核层）
-1737 api_extensions    ← MCP/SKILL 的 HTTP + 校验 + 落盘
-1715 skillhub          ← 技能市场客户端
-1174 mcp_client        ← MCP 协议客户端（本该在内核层）
-1140 tools             ← 工具执行（本该在内核层）
- 509 llm_providers     ← 只剩持久化（Q015 把组装与探测搬进 quill-core）
+2427 api_extensions     ← MCP/SKILL 的 HTTP + 校验 + 落盘（现最大，尚未拆）
+1648 api_chat           ← 对话 + 工具往返循环（**搬运清单已备**：KERNEL-PORTS §4.1 / Q012）
+ 956 api_experts        ← 专家 HTTP + 导入导出
+ 910 mcp_repo           ← MCP 配置的 SQL 口径（非 api_* 里最大）
+ 818 api_channels       ← 通道 HTTP
+（已搬出 HTTP 层：tools 1402 与 mcp_client 1213 在 quill-core；
+  skillhub 族拆分后单文件最大 627；llm_providers 957 → 509 只剩持久化）
 ```
 
 内核逻辑寄生在 HTTP crate = 内核**无法被单测**、**无法被 CLI 复用**、**无法换实现**。
@@ -203,7 +206,7 @@ grep -rhoE '^(pub )?(async )?fn [a-z_]+' crates/*/src/**/*.rs | grep -oE 'fn [a-
 ## 2. 结构性问题（按危害排序）
 
 - **P-1 内核没有独立层（最重）**：按 `C1`，内核应**移植自 goose** 且独立成层；实际它散在 HTTP crate 里，且最重的两块（压缩/记忆）为零。**这是"地基不牢"的根**。
-- **P-2 分层泄漏**：`quill-server` 既 HTTP 又编排又 SQL 又内核；`quill-agent` 依赖 `quill-wiki`（领域编排依赖应用层，倒挂）。
+- **P-2 分层泄漏**：`quill-server` 既 HTTP 又编排又 SQL 又内核（内核部分 2026-10-08 起已按 Q013/Q014/Q015 搬出三块）；`quill-agent → quill-wiki` 的倒挂**已修**（`.layer-guard.mjs` 的基线里现在只剩 `quill-upgrade → quill-backup` 同层依赖）。
 - **P-3 冗余**：id/hex 转换 6+ 处、取值助手 5+ 套、provider 组装 2 套、SQL 未收口。
 - **P-4 名实不符**：`quill-agent` 不装 agent（仍在）；`quill-upgrade` 零调用 —— **2026-10-08 已不再成立**（`/api/upgrade/prepare` 真走它的升级前备份守卫），但「真能升级」本体仍未做（queue Q063）。
 - **P-5 空壳问题（正面案例）**：`quill-bridge`/`quill-ext-hub`/`quill-xtask` 已被移出（`Cargo.toml:21`）—— 说明"建了没人用"要被清掉。
@@ -319,7 +322,7 @@ L0  quill-adapters  quill-store  quill-provider
 ```bash
 # 依赖图
 for d in crates/*/; do n=$(basename "$d"); \
-  deps=$(grep -oE 'quill-[a-z]+' "$d/Cargo.toml" | grep -v "^$n$" | sort -u | tr '\n' ' '); \
+  deps=$(sed -n '/^[[]dependencies[]]/,/^[[]/p' "$d/Cargo.toml" | grep -oE 'quill-[a-z]+' | grep -v "^$n$" | sort -u | paste -sd' ' -); \
   echo "$n -> $deps"; done
 
 # goose/octop 不是依赖（符合意图）
