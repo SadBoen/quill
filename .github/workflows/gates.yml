@@ -46,7 +46,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # 按仓库根的 `rust-toolchain.toml` 装工具链，并带上 rustfmt 与 clippy：
       # 最高指示第 5 条把 `cargo fmt --check` 与 `cargo clippy -D warnings` 列为门禁的一部分。
@@ -77,7 +77,7 @@ jobs:
       # （~/.npm）才是 `npm ci` 真正能复用的部分，由 setup-node 的
       # cache: npm 按 package-lock.json 的哈希来管理。
       - name: 缓存 cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -85,7 +85,7 @@ jobs:
             target
           key: cargo-${{ hashFiles('Cargo.lock') }}-${{ runner.os }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: npm
@@ -240,9 +240,9 @@ jobs:
     env:
       OCTOP_REPO: ${{ secrets.OCTOP_REPO || vars.OCTOP_REPO }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
 
