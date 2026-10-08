@@ -20,10 +20,12 @@ use std::sync::{Arc, RwLock};
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use axum::response::IntoResponse;
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
-use quill_server::auth::{AuthContext, EnvTokenResolver};
+use quill_server::auth::{AuthContext, AuthUser, EnvTokenResolver};
+use quill_server::body::JsonBody;
 use quill_server::config::Config;
 use quill_server::db::{storage_error, DbBridge};
 use quill_server::routes::build_router;
@@ -594,6 +596,599 @@ async fn delete_reports_honestly_when_there_was_nothing_to_delete() {
         serde_json::json!(false),
         "第二次删什么都没发生，报 true 等于凭空告诉用户「刚删掉了一台服务器」"
     );
+}
+
+// ---------------------------------------------------------- 单条 PATCH（MCP）
+//
+// `PATCH /api/extensions/mcp/{name}` 的**路由**已接上
+// （`routes.rs` 里是 `patch(api_extensions::patch_mcp)`）。这一组仍直接调 handler
+// 本体 `api_extensions::patch_mcp` —— 验的是这一层的真行为：改名/改配置的往返、
+// 缺省=不丢、跨用户改不到、撞名 409，全都**真读真写**；HTTP 面由别的用例覆盖。
+
+fn auth_of(uid: &str) -> AuthUser {
+    AuthUser(AuthContext {
+        user_id: user_id(uid),
+        is_admin: uid == UID_A,
+    })
+}
+
+async fn patch_mcp(
+    h: &Harness,
+    uid: &str,
+    name: &str,
+    body: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let out = quill_server::api_extensions::patch_mcp(
+        axum::extract::State(h.state()),
+        auth_of(uid),
+        axum::extract::Path(name.to_string()),
+        JsonBody(body),
+    )
+    .await;
+    let resp = match out {
+        Ok(resp) => resp,
+        Err(e) => e.into_response(),
+    };
+    let st = resp.status();
+    let v = json_of(&body_text(resp).await);
+    (st, v)
+}
+
+async fn patch_ok(
+    h: &Harness,
+    uid: &str,
+    name: &str,
+    body: serde_json::Value,
+) -> serde_json::Value {
+    let (st, v) = patch_mcp(h, uid, name, body).await;
+    assert_eq!(st, StatusCode::OK, "PATCH 应当成功：{v}");
+    v
+}
+
+fn names_of(v: &serde_json::Value) -> Vec<String> {
+    v["servers"]
+        .as_array()
+        .expect("servers 必须是数组")
+        .iter()
+        .map(|s| s["name"].as_str().expect("名字是字符串").to_string())
+        .collect()
+}
+
+fn server_of<'a>(v: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
+    v["servers"]
+        .as_array()
+        .expect("servers 必须是数组")
+        .iter()
+        .find(|s| s["name"] == serde_json::json!(name))
+        .unwrap_or_else(|| panic!("列表里没有 {name}：{v}"))
+}
+
+/// 改名往返：按新名读得到新配置、旧名查不到，且别的字段一个不丢。
+#[tokio::test]
+async fn renaming_an_mcp_server_round_trips_by_the_new_name() {
+    let h = Harness::new("ext-mcp-patch-rename");
+    seed_user(&h.db.bridge(), UID_A);
+    save(
+        &h,
+        TOKEN_A,
+        serde_json::json!({"servers": [{
+            "name": "old-name",
+            "transport": "stdio",
+            "command": "quill-no-such-mcp-binary",
+            "args": ["-y", "some-server"],
+            "cwd": "/tmp/work",
+            "env": {"TOKEN": "secret"},
+            "description": "改名前",
+            "max_concurrent_calls": 4,
+            "enabled_capabilities": null,
+            "timeout_ms": 30000
+        }]}),
+    )
+    .await;
+
+    let v = patch_ok(
+        &h,
+        UID_A,
+        "old-name",
+        serde_json::json!({"name": "New Name"}),
+    )
+    .await;
+    assert_eq!(v["changed"], serde_json::json!(true));
+    assert_eq!(v["changed_fields"], serde_json::json!(["name"]));
+    assert_eq!(v["renamed_from"], serde_json::json!("old-name"));
+    assert_eq!(
+        v["server"]["name"],
+        serde_json::json!("new-name"),
+        "回读的必须是归一后的名字：{v}"
+    );
+    // 改名不许把别的字段带走 —— env 里存着 token，丢了就是真丢配置。
+    assert_eq!(v["server"]["env"], serde_json::json!({"TOKEN": "secret"}));
+    assert_eq!(
+        v["server"]["args"],
+        serde_json::json!(["-y", "some-server"])
+    );
+    assert_eq!(v["server"]["cwd"], serde_json::json!("/tmp/work"));
+    assert_eq!(v["server"]["description"], serde_json::json!("改名前"));
+    assert_eq!(v["server"]["max_concurrent_calls"], serde_json::json!(4));
+
+    // 按新名 GET（列表）：新配置在，旧名不在。
+    let listed = list(&h, TOKEN_A).await;
+    assert_eq!(names_of(&listed), vec!["new-name".to_string()], "{listed}");
+    assert_eq!(
+        server_of(&listed, "new-name")["env"],
+        serde_json::json!({"TOKEN": "secret"})
+    );
+
+    // 旧名 PATCH 不到了：404 + 下一步，而不是安静地新建一条。
+    let (st, v) = patch_mcp(
+        &h,
+        UID_A,
+        "old-name",
+        serde_json::json!({"description": "x"}),
+    )
+    .await;
+    assert_eq!(st, StatusCode::NOT_FOUND, "旧名字必须查不到：{v}");
+    assert!(v["error"]["next_step"].is_string(), "{v}");
+    assert!(!v["error"]["detail"]
+        .as_str()
+        .unwrap_or("")
+        .contains("本实例没有路由"));
+
+    // 按新名继续改配置，读回一致（往返闭环）。
+    let v = patch_ok(
+        &h,
+        UID_A,
+        "new-name",
+        serde_json::json!({"description": "改名后"}),
+    )
+    .await;
+    assert_eq!(v["server"]["description"], serde_json::json!("改名后"));
+    assert_eq!(v["changed_fields"], serde_json::json!(["description"]));
+    assert_eq!(v["renamed_from"], serde_json::Value::Null, "没改名就说没改");
+    let listed = list(&h, TOKEN_A).await;
+    assert_eq!(
+        server_of(&listed, "new-name")["description"],
+        serde_json::json!("改名后")
+    );
+    assert_eq!(
+        server_of(&listed, "new-name")["env"],
+        serde_json::json!({"TOKEN": "secret"}),
+        "第二次改配置也不许丢 env"
+    );
+}
+
+/// 局部更新：只动点名的字段，别的**保持原样**；清空要显式 `null`。
+#[tokio::test]
+async fn a_partial_patch_changes_only_what_it_names() {
+    let h = Harness::new("ext-mcp-patch-partial");
+    seed_user(&h.db.bridge(), UID_A);
+    save(
+        &h,
+        TOKEN_A,
+        serde_json::json!({"servers": [{
+            "name": "filesystem",
+            "transport": "stdio",
+            "command": "quill-no-such-mcp-binary",
+            "args": ["-y", "some-server"],
+            "cwd": "/tmp/work",
+            "env": {"B": "2", "A": "1"},
+            "description": "原说明",
+            "max_concurrent_calls": 4,
+            "enabled_capabilities": [],
+            "timeout_ms": 30000
+        }]}),
+    )
+    .await;
+
+    let v = patch_ok(
+        &h,
+        UID_A,
+        "filesystem",
+        serde_json::json!({"timeout_ms": 45000}),
+    )
+    .await;
+    assert_eq!(v["changed_fields"], serde_json::json!(["timeout_ms"]));
+    let s = server_of(&list(&h, TOKEN_A).await, "filesystem").clone();
+    assert_eq!(s["timeout_ms"], serde_json::json!(45000));
+    assert_eq!(
+        s["env"],
+        serde_json::json!({"A": "1", "B": "2"}),
+        "没提 env，env 必须原样在：{s}"
+    );
+    assert_eq!(s["args"], serde_json::json!(["-y", "some-server"]));
+    assert_eq!(s["cwd"], serde_json::json!("/tmp/work"));
+    assert_eq!(s["command"], serde_json::json!("quill-no-such-mcp-binary"));
+    assert_eq!(s["description"], serde_json::json!("原说明"));
+    assert_eq!(s["max_concurrent_calls"], serde_json::json!(4));
+    assert_eq!(
+        s["enabled_capabilities"],
+        serde_json::json!([]),
+        "三态里的「全开」不许被抹平成别的：{s}"
+    );
+
+    // 显式 null 才是清空。
+    let v = patch_ok(&h, UID_A, "filesystem", serde_json::json!({"env": null})).await;
+    assert_eq!(v["changed_fields"], serde_json::json!(["env"]));
+    assert_eq!(
+        server_of(&list(&h, TOKEN_A).await, "filesystem")["env"],
+        serde_json::json!({}),
+        "显式 null 才清空"
+    );
+
+    // 能力三态在 PATCH 上也逐态成立：全开 → 全禁 → 精确列举。
+    let v = patch_ok(
+        &h,
+        UID_A,
+        "filesystem",
+        serde_json::json!({"enabled_capabilities": null}),
+    )
+    .await;
+    assert_eq!(v["server"]["enabled_capabilities"], serde_json::Value::Null);
+    let v = patch_ok(
+        &h,
+        UID_A,
+        "filesystem",
+        serde_json::json!({"enabled_capabilities": ["read"]}),
+    )
+    .await;
+    assert_eq!(
+        v["server"]["enabled_capabilities"],
+        serde_json::json!(["read"])
+    );
+
+    // 停用：列表里的 enabled 与 status 的「已停用」必须同时翻过去。
+    let v = patch_ok(
+        &h,
+        UID_A,
+        "filesystem",
+        serde_json::json!({"enabled": false}),
+    )
+    .await;
+    assert_eq!(v["changed_fields"], serde_json::json!(["enabled"]));
+    let listed = list(&h, TOKEN_A).await;
+    assert_eq!(
+        server_of(&listed, "filesystem")["enabled"],
+        serde_json::json!(false)
+    );
+    assert_eq!(
+        listed["status"][0]["disabled"],
+        serde_json::json!(true),
+        "停用必须在 status 里如实说：{listed}"
+    );
+}
+
+/// http/sse 那一形态的 `headers` 同样不许丢：它在库里是 JSON 列
+/// （`headers_json`），读回路径与 `env_json` 是两条不同的路。
+#[tokio::test]
+async fn a_partial_patch_keeps_headers_on_an_http_server() {
+    let h = Harness::new("ext-mcp-patch-headers");
+    seed_user(&h.db.bridge(), UID_A);
+    save(
+        &h,
+        TOKEN_A,
+        serde_json::json!({"servers": [{
+            "name": "remote",
+            "transport": "streamable_http",
+            "url": "http://127.0.0.1:1/mcp",
+            "headers": {"X-Token": "secret"},
+            "description": "远端",
+            "enabled_capabilities": []
+        }]}),
+    )
+    .await;
+
+    let v = patch_ok(
+        &h,
+        UID_A,
+        "remote",
+        serde_json::json!({"description": "改说明"}),
+    )
+    .await;
+    assert_eq!(v["changed_fields"], serde_json::json!(["description"]));
+    assert_eq!(
+        v["server"]["headers"],
+        serde_json::json!({"X-Token": "secret"}),
+        "没提 headers，headers 必须原样在：{v}"
+    );
+    assert_eq!(
+        v["server"]["url"],
+        serde_json::json!("http://127.0.0.1:1/mcp")
+    );
+    assert!(
+        v["server"].get("command").is_none(),
+        "http 配置不该冒出 command：{v}"
+    );
+
+    // 显式改 headers（轮换 token 是真实用法），读回一致。
+    let v = patch_ok(
+        &h,
+        UID_A,
+        "remote",
+        serde_json::json!({"headers": {"X-Token": "rotated"}}),
+    )
+    .await;
+    assert_eq!(v["changed_fields"], serde_json::json!(["headers"]));
+    let listed = list(&h, TOKEN_A).await;
+    assert_eq!(
+        server_of(&listed, "remote")["headers"],
+        serde_json::json!({"X-Token": "rotated"})
+    );
+    assert_eq!(
+        server_of(&listed, "remote")["description"],
+        serde_json::json!("改说明"),
+        "改 headers 不许把上一次改的说明带回去：{listed}"
+    );
+}
+
+/// 软删的行仍然占着名字 —— 这是 409 那句「下一步」敢那么写的依据，必须真跑一遍。
+///
+/// 想复用一个已删除服务器的名字，路是 POST 全量提交（`replace_all` 的
+/// `ON CONFLICT ... deleted_at = NULL` 会把同名行整行复活），不是先删再改名。
+#[tokio::test]
+async fn a_soft_deleted_row_still_owns_its_name_for_renames() {
+    let h = Harness::new("ext-mcp-patch-soft-deleted-name");
+    seed_user(&h.db.bridge(), UID_A);
+    save(
+        &h,
+        TOKEN_A,
+        serde_json::json!({"servers": [stdio("a"), stdio("b")]}),
+    )
+    .await;
+
+    let resp = build_router(h.state())
+        .oneshot(req("DELETE", "/api/extensions/mcp/b", TOKEN_A))
+        .await
+        .expect("请求失败");
+    assert_eq!(
+        json_of(&body_text(resp).await)["deleted"],
+        serde_json::json!(true)
+    );
+    assert_eq!(names_of(&list(&h, TOKEN_A).await), vec!["a".to_string()]);
+
+    // b 已经不在可见列表里，但它还占着主键上的那个名字。
+    let (st, v) = patch_mcp(&h, UID_A, "a", serde_json::json!({"name": "b"})).await;
+    assert_eq!(
+        st,
+        StatusCode::CONFLICT,
+        "软删的行仍占着名字，改名必须被拒：{v}"
+    );
+    assert_eq!(names_of(&list(&h, TOKEN_A).await), vec!["a".to_string()]);
+
+    // 「下一步」里指的那条路真的存在：全量提交把同名行复活。
+    save(
+        &h,
+        TOKEN_A,
+        serde_json::json!({"servers": [stdio("a"), stdio("b")]}),
+    )
+    .await;
+    assert_eq!(
+        names_of(&list(&h, TOKEN_A).await),
+        vec!["a".to_string(), "b".to_string()],
+        "POST 全量提交应当复活同名行"
+    );
+}
+
+/// 一字未改的 PATCH：不写库、`updated_at` 不动，并如实说「没写」。
+#[tokio::test]
+async fn a_patch_that_changes_nothing_writes_nothing_and_says_so() {
+    let h = Harness::new("ext-mcp-patch-noop");
+    seed_user(&h.db.bridge(), UID_A);
+    save(&h, TOKEN_A, serde_json::json!({"servers": [stdio("same")]})).await;
+
+    let before = common::scalar_i64(
+        &h.db.bridge(),
+        "SELECT updated_at AS c FROM mcp_servers WHERE name='same'",
+    );
+
+    // 同名（归一后一致）也是「没改」。
+    let v = patch_ok(&h, UID_A, "same", serde_json::json!({"name": "SAME"})).await;
+    assert_eq!(v["changed"], serde_json::json!(false), "{v}");
+    assert_eq!(v["changed_fields"], serde_json::json!([]));
+    assert_eq!(v["renamed_from"], serde_json::Value::Null);
+
+    // 空对象 = 什么都不改（缺省 = 不变）。
+    let v = patch_ok(&h, UID_A, "same", serde_json::json!({})).await;
+    assert_eq!(v["changed"], serde_json::json!(false), "{v}");
+    assert!(
+        v["note"].as_str().unwrap_or("").contains("没有写库"),
+        "要说清没写库：{v}"
+    );
+
+    let after = common::scalar_i64(
+        &h.db.bridge(),
+        "SELECT updated_at AS c FROM mcp_servers WHERE name='same'",
+    );
+    assert_eq!(before, after, "一字未改却动了 updated_at");
+}
+
+/// 改名是**同一行的键换了**，不是「软删一条 + 新插一条」。
+///
+/// 判据取自这一行的两列：`created_at` 不许动（delete+insert 会重置成现在），
+/// 可见行数不许变（1 条还是 1 条），而 `updated_at` 必须真的往前走。
+#[tokio::test]
+async fn a_rename_updates_the_same_row_instead_of_deleting_and_inserting() {
+    let h = Harness::new("ext-mcp-patch-rename-row");
+    seed_user(&h.db.bridge(), UID_A);
+    save(
+        &h,
+        TOKEN_A,
+        serde_json::json!({"servers": [stdio("before")]}),
+    )
+    .await;
+
+    let created_before = common::scalar_i64(
+        &h.db.bridge(),
+        "SELECT created_at AS c FROM mcp_servers WHERE name='before'",
+    );
+    let updated_before = common::scalar_i64(
+        &h.db.bridge(),
+        "SELECT updated_at AS c FROM mcp_servers WHERE name='before'",
+    );
+    // 让 now_ms 一定往前走：同毫秒会让 > 变成偶发。
+    std::thread::sleep(std::time::Duration::from_millis(10));
+
+    patch_ok(&h, UID_A, "before", serde_json::json!({"name": "after"})).await;
+
+    let created_after = common::scalar_i64(
+        &h.db.bridge(),
+        "SELECT created_at AS c FROM mcp_servers WHERE name='after'",
+    );
+    let updated_after = common::scalar_i64(
+        &h.db.bridge(),
+        "SELECT updated_at AS c FROM mcp_servers WHERE name='after'",
+    );
+    assert_eq!(
+        created_before, created_after,
+        "改名不许重置 created_at —— 那是 delete + insert 的行为"
+    );
+    assert!(
+        updated_after > updated_before,
+        "真改了就要更新 updated_at：{updated_before} → {updated_after}"
+    );
+    let rows = common::scalar_i64(
+        &h.db.bridge(),
+        "SELECT COUNT(*) AS c FROM mcp_servers WHERE user_id IS NOT NULL",
+    );
+    assert_eq!(rows, 1, "改名后应当还是同一行，不是两行");
+}
+
+/// 撞名：本用户已经有同名行 → 409，且两行都不动。
+#[tokio::test]
+async fn renaming_onto_an_existing_name_is_refused_and_leaves_both_rows_alone() {
+    let h = Harness::new("ext-mcp-patch-conflict");
+    seed_user(&h.db.bridge(), UID_A);
+    save(
+        &h,
+        TOKEN_A,
+        serde_json::json!({"servers": [stdio("a"), stdio("b")]}),
+    )
+    .await;
+
+    let (st, v) = patch_mcp(&h, UID_A, "a", serde_json::json!({"name": "b"})).await;
+    assert_eq!(st, StatusCode::CONFLICT, "撞名必须是 409：{v}");
+    assert!(
+        v["error"]["detail"].as_str().unwrap_or("").contains('b'),
+        "要说清撞的是哪个名字：{v}"
+    );
+    let advice = v["error"]["next_step"].as_str().expect("要带下一步");
+    assert!(
+        advice.contains("仍然占着"),
+        "「下一步」不许教「先删再改名」—— 软删的行仍占着名字：{advice}"
+    );
+
+    let listed = list(&h, TOKEN_A).await;
+    assert_eq!(names_of(&listed), vec!["a".to_string(), "b".to_string()]);
+    // 两行都还连不上（command 不存在），但配置必须一模一样地还在。
+    assert_eq!(
+        server_of(&listed, "a")["command"],
+        serde_json::json!("quill-no-such-mcp-binary")
+    );
+    assert_eq!(
+        server_of(&listed, "b")["command"],
+        serde_json::json!("quill-no-such-mcp-binary")
+    );
+}
+
+/// 用户隔离：改不到别人的行；而名字的主键是 `(user_id, name)`，
+/// 别的用户用掉的名字**不算**撞名。
+#[tokio::test]
+async fn a_patch_never_reaches_another_users_row_but_names_are_per_user() {
+    let h = Harness::new("ext-mcp-patch-isolation");
+    seed_user(&h.db.bridge(), UID_A);
+    seed_user(&h.db.bridge(), UID_B);
+    save(
+        &h,
+        TOKEN_A,
+        serde_json::json!({"servers": [stdio("a-secret")]}),
+    )
+    .await;
+
+    let (st, v) = patch_mcp(
+        &h,
+        UID_B,
+        "a-secret",
+        serde_json::json!({"description": "hijack"}),
+    )
+    .await;
+    assert_eq!(st, StatusCode::NOT_FOUND, "B 改不到 A 的行：{v}");
+
+    let a = list(&h, TOKEN_A).await;
+    assert_eq!(
+        server_of(&a, "a-secret")["description"],
+        serde_json::json!(""),
+        "A 的行必须一个字没变：{a}"
+    );
+
+    // B 自己有一台叫 b-name：A 改名叫 b-name 不算撞名（主键含 user_id）。
+    save(
+        &h,
+        TOKEN_B,
+        serde_json::json!({"servers": [stdio("b-name")]}),
+    )
+    .await;
+    let v = patch_ok(&h, UID_A, "a-secret", serde_json::json!({"name": "b-name"})).await;
+    assert_eq!(v["server"]["name"], serde_json::json!("b-name"));
+    assert_eq!(
+        names_of(&list(&h, TOKEN_A).await),
+        vec!["b-name".to_string()]
+    );
+    assert_eq!(
+        names_of(&list(&h, TOKEN_B).await),
+        vec!["b-name".to_string()],
+        "B 的那一份必须还在，且还是 B 的"
+    );
+}
+
+#[tokio::test]
+async fn patching_a_missing_server_is_a_404_with_a_next_step() {
+    let h = Harness::new("ext-mcp-patch-missing");
+    seed_user(&h.db.bridge(), UID_A);
+    let (st, v) = patch_mcp(
+        &h,
+        UID_A,
+        "not-there",
+        serde_json::json!({"enabled": false}),
+    )
+    .await;
+    assert_eq!(st, StatusCode::NOT_FOUND, "{v}");
+    assert!(v["error"]["next_step"].is_string(), "错误必须带下一步：{v}");
+}
+
+/// 请求层面的坏输入一律 400，且**一个字节都不许写**。
+#[tokio::test]
+async fn a_bad_patch_is_refused_before_any_write() {
+    let h = Harness::new("ext-mcp-patch-bad");
+    seed_user(&h.db.bridge(), UID_A);
+    save(&h, TOKEN_A, serde_json::json!({"servers": [stdio("keep")]})).await;
+
+    for bad in [
+        serde_json::json!({"timeout_ms": 999}),
+        serde_json::json!({"autorize": "Bearer x"}),
+        serde_json::json!({"transport": "streamable_http"}),
+        serde_json::json!({"args": "-y"}),
+        serde_json::json!({"enabled": "yes"}),
+        serde_json::json!({"name": "!!!"}),
+    ] {
+        let (st, v) = patch_mcp(&h, UID_A, "keep", bad.clone()).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST, "{bad} 应当 400：{v}");
+        assert!(
+            v["error"]["next_step"].is_string(),
+            "{bad} 的错误必须带下一步：{v}"
+        );
+        assert!(
+            v["error"]["detail"]
+                .as_str()
+                .unwrap_or("")
+                .contains("下一步"),
+            "{bad}：{v}"
+        );
+    }
+
+    // 被拒之后原行必须原样：没被顺手改掉。
+    let s = server_of(&list(&h, TOKEN_A).await, "keep").clone();
+    assert_eq!(s["timeout_ms"], serde_json::json!(30000));
+    assert_eq!(s["transport"], serde_json::json!("stdio"));
+    assert_eq!(s["enabled"], serde_json::json!(true));
 }
 
 // ------------------------------------------------------------------ 拒绝与隔离

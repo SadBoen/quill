@@ -62,18 +62,8 @@ pub fn build_router(state: AppState) -> Router {
             "/api/experts",
             get(api_experts::list).post(api_experts::create),
         )
-        .route(
-            "/api/experts/import",
-            post(|_u: crate::auth::AuthUser| async {
-                not_implemented("POST", "/api/experts/import")
-            }),
-        )
-        .route(
-            "/api/experts/export",
-            get(|_u: crate::auth::AuthUser| async {
-                not_implemented("GET", "/api/experts/export")
-            }),
-        )
+        .route("/api/experts/import", post(api_experts::import))
+        .route("/api/experts/export", get(api_experts::export))
         .route("/api/experts/market", get(api_expert_market::list))
         .route(
             "/api/experts/market/{slug}/install",
@@ -125,7 +115,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/sessions/{id}/context", get(api_chat::context))
         .route("/api/usage", get(api_chat::usage));
 
-    // 只读四个端点已接通（不需要模型）；写入/检索类要模型配合，仍是 501 桩。
+    // 只读端点与「只读索引」的检索已接通（不需要模型）：pages / pages/{path} /
+    // search / index / log。写入与问答（ingest / query）要模型配合，仍是 501 桩。
     let wiki = Router::new()
         .route("/api/wiki/pages", get(crate::api_wiki::list_pages))
         .route("/api/wiki/pages/{*path}", get(crate::api_wiki::get_page))
@@ -137,10 +128,7 @@ pub fn build_router(state: AppState) -> Router {
             "/api/wiki/query",
             post(|_u: crate::auth::AuthUser| async { not_implemented("POST", "/api/wiki/query") }),
         )
-        .route(
-            "/api/wiki/search",
-            post(|_u: crate::auth::AuthUser| async { not_implemented("POST", "/api/wiki/search") }),
-        )
+        .route("/api/wiki/search", post(crate::api_wiki::search))
         .route("/api/wiki/index", get(crate::api_wiki::read_index))
         .route("/api/wiki/log", get(crate::api_wiki::read_log));
 
@@ -151,13 +139,9 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/api/extensions/mcp/{name}",
-            // PATCH 还没接：前端目前是全量 POST，单条改用不上。
-            // 留着桩是为了契约完整，但**必须继续报 501** ——
-            // 悄悄改成 200 才叫假成功。
-            patch(|_u: crate::auth::AuthUser, _n: Path<String>| async {
-                not_implemented("PATCH", "/api/extensions/mcp/{name}")
-            })
-            .delete(api_extensions::delete_mcp),
+            // 单条局部更新（缺省字段 = 不变）与改名都接上了：前端主流程仍是全量
+            // POST，但「只改一个字段」以前没有任何出口，且改名只能靠删了重建。
+            patch(api_extensions::patch_mcp).delete(api_extensions::delete_mcp),
         )
         .route(
             "/api/extensions/skills",

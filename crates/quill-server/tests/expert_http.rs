@@ -400,26 +400,56 @@ async fn bad_input_is_400_in_chinese_and_unknown_fields_are_rejected() {
     assert!(body.contains("default_enabled"), "应列出可改字段：{body}");
 }
 
+/// Q031 / Q032（2026-10-08）：import / export 真的接通了。
+///
+/// 这条测试以前叫 `expert_import_export_are_still_501_not_fake_success`，钉的是
+/// 「桩不许返回假成功」。路由落地后它的前提没了，按本项目对过期测试的处理口径
+/// （`http_contract.rs`：「样本路由必须挑一条仍然是 501 的」）改成钉**新事实**：
+/// 两条路由是真 handler（不是空壳 200），且仍然先鉴权。完整往返判据在
+/// `expert_bundle_http.rs`。
 #[tokio::test]
-async fn expert_import_export_are_still_501_not_fake_success() {
-    let t = TestDb::new("http-expert-501");
+async fn expert_import_export_are_real_handlers_not_a_fake_success() {
+    let t = TestDb::new("http-expert-bundle-real");
     let app = state(&t);
+
+    // 未带令牌：鉴权在 handler 之前，两条都必须 401。
     for (method, path) in [
         ("POST", "/api/experts/import"),
         ("GET", "/api/experts/export"),
     ] {
         let resp = build_router(app.clone())
-            .oneshot(req(method, path, Some(TOKEN_A), None))
+            .oneshot(req(method, path, None, None))
             .await
             .expect("oneshot 失败");
         assert_eq!(
             resp.status(),
-            StatusCode::NOT_IMPLEMENTED,
-            "{method} {path} 未实现，必须 501"
+            StatusCode::UNAUTHORIZED,
+            "{method} {path} 未带令牌必须 401"
         );
-        let body = text(resp).await;
-        assert!(body.contains(path), "501 文案必须点名路由：{body}");
     }
+
+    // export 是真实现：200 且带清单版本，不是空壳。
+    let resp = build_router(app.clone())
+        .oneshot(req("GET", "/api/experts/export", Some(TOKEN_A), None))
+        .await
+        .expect("oneshot 失败");
+    assert_eq!(resp.status(), StatusCode::OK, "导出必须 200");
+    let body = text(resp).await;
+    assert!(
+        body.contains("\"bundle_version\":1"),
+        "导出必须带清单版本：{body}"
+    );
+
+    // import 是真实现：没有 JSON 体的请求必须 400（不是 501，也不是静默 200）。
+    let resp = build_router(app.clone())
+        .oneshot(req("POST", "/api/experts/import", Some(TOKEN_A), None))
+        .await
+        .expect("oneshot 失败");
+    assert_eq!(
+        resp.status(),
+        StatusCode::BAD_REQUEST,
+        "没有 JSON 体的导入必须 400（否则就是静默成功）"
+    );
 }
 
 #[tokio::test]

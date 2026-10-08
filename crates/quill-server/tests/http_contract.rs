@@ -407,7 +407,7 @@ async fn created_session_id_is_byte_identical_to_the_listed_one() {
 async fn every_contract_route_responds_and_is_never_a_false_success() {
     // 「已实现」清单必须跟着实现一起长，否则新接通的路由会因为不再返回 501
     // 而被判成「假成功」——这正是本测试要抓的东西，所以清单不能手懒。
-    const IMPLEMENTED: [(&str, &str); 56] = [
+    const IMPLEMENTED: [(&str, &str); 60] = [
         ("GET", "/api/version"),
         ("GET", "/api/auth/me"),
         ("GET", "/api/healthz"),
@@ -420,6 +420,11 @@ async fn every_contract_route_responds_and_is_never_a_false_success() {
         ("GET", "/api/extensions/mcp"),
         ("POST", "/api/extensions/mcp"),
         ("DELETE", "/api/extensions/mcp/{name}"),
+        // 单条 PATCH（Q035/Q036 那一批的 handler，2026-10-08 随路由一起接通）。
+        // 那一批的用例直接调 handler 本体、把接线留给主任务；`routes.rs` 里这条
+        // 注册已经换成 `patch(api_extensions::patch_mcp)`，这里如实登记 ——
+        // 否则本测试会因为「路由不再是 501」而误判成假成功。
+        ("PATCH", "/api/extensions/mcp/{name}"),
         ("GET", "/api/extensions/skills"),
         ("POST", "/api/extensions/skills"),
         // 技能市场。**上游是外部服务**（SkillHub），所以能不能返回 200
@@ -443,6 +448,10 @@ async fn every_contract_route_responds_and_is_never_a_false_success() {
         ("GET", "/api/experts/{slug}"),
         ("PATCH", "/api/experts/{slug}"),
         ("DELETE", "/api/experts/{slug}"),
+        // 专家清单导出 / 导入（Q031 / Q032，2026-10-08 接通）。导入是逐条
+        // upsert、不是全量替换；往返判据在 `expert_bundle_http.rs`。
+        ("POST", "/api/experts/import"),
+        ("GET", "/api/experts/export"),
         // 专家市场（2026-10-06 接线，B1-6）。连上游，接不上时报的是上游不可达
         // 而不是 501 —— 那是**上游**的问题，不是这条路由没做。
         ("GET", "/api/experts/market"),
@@ -462,6 +471,9 @@ async fn every_contract_route_responds_and_is_never_a_false_success() {
         ("POST", "/api/sessions/{id}/messages"),
         ("GET", "/api/wiki/pages"),
         ("GET", "/api/wiki/pages/{path}"),
+        // 只读索引的检索（Q035/Q036 那一批，2026-10-08 接通）：写入与问答
+        // （ingest / query）仍是 501 桩，所以只登记 search 这一条。
+        ("POST", "/api/wiki/search"),
         ("GET", "/api/wiki/index"),
         ("GET", "/api/wiki/log"),
         ("GET", "/api/admin/config"),

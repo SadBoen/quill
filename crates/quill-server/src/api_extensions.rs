@@ -286,6 +286,477 @@ pub async fn delete_mcp(
 
 const ALLOWED_TRANSPORTS: [&str; 3] = ["stdio", "streamable_http", "sse"];
 
+/// `PATCH /api/extensions/mcp/{name}` —— 单条局部更新（含改名）。
+///
+/// ## 为什么要有这一条
+///
+/// 前端目前是全量 `POST`（提交整个 `servers` 数组），要改一台服务器就得把**所有**
+/// 服务器的完整配置回填再重传一遍；改名更是只能「删一条 + 加一条」，而删除是
+/// 软删、名字又占着主键，删完再建同一个名字是否成立全看历史。这一条把
+/// 「改一台」收成一个只关于那一台的请求。
+///
+/// ## 语义（缺省 = 不变）
+///
+/// **请求体里没有的键 = 这个字段保持原值**，不是清空。清空要显式给 `null`
+/// （对 `enabled_capabilities` 来说 `null` 是**有意义的取值**：全禁 ——
+/// 想「不变」就不发这个键，想全禁就发 `null`）。
+///
+/// 路径里的 `{name}` 是**现在的名字**；请求体里的 `name`（如果发）是
+/// **想改成的新名字**，与前端 `McpServerConfig.name` 同义 —— 于是
+/// 「GET 一台 → 改几个字段 → PATCH 回来」这条往返是通的。
+///
+/// ## 只改自己名下的行
+///
+/// `mcp_repo::get` / `apply_patch` 的 WHERE 都带 `user_id`（见 `mcp_repo::GET_SQL`、
+/// `PATCH_SQL`），别人的行在这里是 404，不是能改的对象。
+pub async fn patch_mcp(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(name): Path<String>,
+    JsonBody(body): JsonBody,
+) -> Result<Response, ApiError> {
+    let norm = mcp_repo::normalize_name(&name).map_err(ApiError::bad_request)?;
+    let patch = parse_patch(&body)?;
+
+    let db = state.db()?;
+    // 先读一次：合并字段要有基准。冲突判定不靠这次读，见 `mcp_repo::apply_patch`
+    // 的说明（它在事务里贴着写再读一次）。
+    let current = mcp_repo::get(db, user.0.user_id, &norm)
+        .await
+        .map_err(|e| map_err("读取 MCP 服务器", e))?
+        .ok_or_else(|| mcp_not_found(&norm))?;
+    let next = patch.apply_to(&current)?;
+    let fields = changed_fields(&current, &next);
+    // `apply_patch` 会吃掉 `next`；冲突文案里要用新名字，先留一份。
+    let next_name = next.name.clone();
+
+    let outcome = mcp_repo::apply_patch(db, user.0.user_id, &norm, next)
+        .await
+        .map_err(|e| map_err("更新 MCP 服务器", e))?;
+    let (row, changed) = match outcome {
+        mcp_repo::PatchOutcome::NotFound => return Err(mcp_not_found(&norm)),
+        mcp_repo::PatchOutcome::NameTaken => {
+            let detail = format!(
+                "改成的名字「{next_name}」已经被你名下的另一台 MCP 服务器占着，这次没有任何改动。\
+                 名字是主键的一部分（`(user_id, name)`），库里的两行不能同名。"
+            );
+            return Err(ApiError::conflict(detail, RENAME_TAKEN_ADVICE));
+        }
+        mcp_repo::PatchOutcome::Unchanged(row) => (row, false),
+        mcp_repo::PatchOutcome::Updated(row) => (row, true),
+    };
+
+    // 不变量：**写没写库**与**字段到底变没变**必须是同一件事。
+    // 两边说法不一致的话，要么改了却报「没改」（用户以为没生效，实际生效了），
+    // 要么报「改了」而库里一字未动 —— 两种都是本项目的红线。
+    if changed != !fields.is_empty() {
+        return Err(ApiError::internal(format!(
+            "PATCH 的变更判定自相矛盾：字段差异 {fields:?}，落库结果说{}。",
+            if changed { "写了" } else { "没写" }
+        )));
+    }
+
+    let renamed_from = fields.contains(&"name").then(|| current.name.clone());
+    let note = if !changed {
+        format!(
+            "请求里的值与库里「{norm}」的当前值逐字相同：这次没有写库，`updated_at` 也没动 —— \
+             与全量提交那条「内容没变就别动时间戳」的语义一致。"
+        )
+    } else {
+        let mut n = format!("已写入并回读：{} 变了。", fields.join("、"));
+        if let Some(from) = &renamed_from {
+            n.push_str(&format!(
+                "改名是同一行的键换了（保留 created_at），不是删一条加一条；旧名字「{from}」现在查不到了。"
+            ));
+        }
+        n.push_str(
+            "连通性不在这一步测 —— 要测请 GET /api/extensions/mcp，它会对启用的服务器真的握手。",
+        );
+        n
+    };
+
+    let rows = mcp_repo::list(db, user.0.user_id)
+        .await
+        .map_err(|e| map_err("更新后回读列表", e))?;
+    Ok(Json(json!({
+        "server": mcp_repo::to_json(&row),
+        "changed": changed,
+        "changed_fields": fields,
+        "renamed_from": renamed_from,
+        "servers": rows.iter().map(mcp_repo::to_json).collect::<Vec<Value>>(),
+        "note": note,
+    }))
+    .into_response())
+}
+
+/// 改名撞名时的「下一步」。
+///
+/// 不能写「先删掉占名字的那台再改名」—— 删除是**软删**，行还在、名字还占着
+/// 主键（`mcp_servers` 的 PRIMARY KEY 是 `(user_id, name)`，见 migrations/0007），
+/// 删完照样改名失败。那句话是照着做仍然错的建议。
+const RENAME_TAKEN_ADVICE: &str = "下一步：换一个没被用过的名字。\
+     注意已删除（软删）的服务器仍然占着它原来的名字 —— 名字是主键的一部分，历史保留；\
+     要复用某个旧名字，请走 POST /api/extensions/mcp 全量提交（它会把同名行整行复活）。";
+
+fn mcp_not_found(norm: &str) -> ApiError {
+    // 用 `entity_not_found` 而不是 `not_found`：后者的文案是「本实例没有路由」，
+    // 拿它说「这台服务器不存在」会拼出一句病句。
+    ApiError::entity_not_found(format!(
+        "名为 {norm} 的 MCP 服务器不存在或已删除，所以这次没有任何改动。\
+         下一步：GET /api/extensions/mcp 确认名字；要新建请 POST /api/extensions/mcp（全量提交）。"
+    ))
+}
+
+/// `PATCH` 的局部改动。每个字段的 `None` 都是「请求里没提这个键」→ 不变；
+/// 提了就按请求里的值算（`null` 也是取值：清空，或能力三态里的「全禁」）。
+#[derive(Debug, Default)]
+struct McpPatch {
+    name: Option<String>,
+    transport: Option<String>,
+    command: Option<Option<String>>,
+    args: Option<Vec<String>>,
+    cwd: Option<Option<String>>,
+    env: Option<Vec<(String, String)>>,
+    url: Option<Option<String>>,
+    headers: Option<Vec<(String, String)>>,
+    enabled: Option<bool>,
+    timeout_ms: Option<i64>,
+    description: Option<String>,
+    max_concurrent_calls: Option<Option<i64>>,
+    enabled_capabilities: Option<Option<Vec<String>>>,
+}
+
+fn parse_patch(v: &Value) -> Result<McpPatch, ApiError> {
+    // 白名单与 POST 同一份 `SERVER_FIELDS`：两条路能改的字段集合必须一致，
+    // 否则会出现「POST 存不进去的键，PATCH 悄悄写进去」。
+    crate::api_experts::only_keys_at(v, SERVER_FIELDS, "MCP 服务器的 PATCH")?;
+    let obj = v.as_object().expect("only_keys_at 已经确认是对象");
+
+    let mut p = McpPatch::default();
+    if let Some(val) = obj.get("name") {
+        p.name = Some(patch_str(val, "name")?);
+    }
+    if let Some(val) = obj.get("transport") {
+        let t = patch_str(val, "transport")?;
+        if !ALLOWED_TRANSPORTS.contains(&t.as_str()) {
+            return Err(ApiError::bad_request(format!(
+                "PATCH 里的 transport（{t}）不是支持的传输方式。可用：{}。\
+                 下一步：下拉框里选一个，或整个键不发（不发 = 不改传输方式）。",
+                ALLOWED_TRANSPORTS.join(" / ")
+            )));
+        }
+        p.transport = Some(t);
+    }
+    if let Some(val) = obj.get("command") {
+        p.command = Some(patch_opt_str(val, "command")?);
+    }
+    if let Some(val) = obj.get("args") {
+        p.args = Some(patch_args(val)?);
+    }
+    if let Some(val) = obj.get("cwd") {
+        p.cwd = Some(patch_opt_str(val, "cwd")?);
+    }
+    if let Some(val) = obj.get("env") {
+        p.env = Some(kv(Some(val), "PATCH 里的 env（stdio 专用）")?);
+    }
+    if let Some(val) = obj.get("url") {
+        p.url = Some(patch_opt_str(val, "url")?);
+    }
+    if let Some(val) = obj.get("headers") {
+        p.headers = Some(kv(Some(val), "PATCH 里的 headers（http/sse 专用）")?);
+    }
+    if let Some(val) = obj.get("enabled") {
+        p.enabled = Some(val.as_bool().ok_or_else(|| {
+            ApiError::bad_request(
+                "PATCH 里的 enabled 必须是 true 或 false。\
+                 下一步：{\"enabled\": false} 会停用它（不握手、不挂工具），\
+                 或整个键不发（不发 = 不改）。"
+                    .to_string(),
+            )
+        })?);
+    }
+    if let Some(val) = obj.get("timeout_ms") {
+        p.timeout_ms = Some(patch_int_in_range(val, "timeout_ms", 1000, 600_000)?);
+    }
+    if let Some(val) = obj.get("description") {
+        p.description = Some(patch_str(val, "description")?);
+    }
+    if let Some(val) = obj.get("max_concurrent_calls") {
+        p.max_concurrent_calls = Some(patch_opt_int_in_range(val, "max_concurrent_calls", 1, 64)?);
+    }
+    if let Some(val) = obj.get("enabled_capabilities") {
+        p.enabled_capabilities = Some(patch_caps(val)?);
+    }
+    Ok(p)
+}
+
+impl McpPatch {
+    /// 把局部改动合并到当前行上，并做与 POST 同一套的交叉校验。
+    fn apply_to(&self, current: &McpServerRow) -> Result<McpServerRow, ApiError> {
+        let name = match &self.name {
+            Some(n) => mcp_repo::normalize_name(n).map_err(ApiError::bad_request)?,
+            None => current.name.clone(),
+        };
+        let transport = self
+            .transport
+            .clone()
+            .unwrap_or_else(|| current.transport.clone());
+        let command = match &self.command {
+            Some(c) => c.clone(),
+            None => current.command.clone(),
+        };
+        let args = self.args.clone().unwrap_or_else(|| current.args.clone());
+        let cwd = match &self.cwd {
+            Some(c) => c.clone(),
+            None => current.cwd.clone(),
+        };
+        let env = self.env.clone().unwrap_or_else(|| current.env.clone());
+        let url = match &self.url {
+            Some(u) => u.clone(),
+            None => current.url.clone(),
+        };
+        let headers = self
+            .headers
+            .clone()
+            .unwrap_or_else(|| current.headers.clone());
+        let enabled = self.enabled.unwrap_or(current.enabled);
+        let timeout_ms = self.timeout_ms.unwrap_or(current.timeout_ms);
+        let description = self
+            .description
+            .clone()
+            .unwrap_or_else(|| current.description.clone());
+        let max_concurrent_calls = match self.max_concurrent_calls {
+            Some(v) => v,
+            None => current.max_concurrent_calls,
+        };
+        let enabled_capabilities = match &self.enabled_capabilities {
+            Some(v) => v.clone(),
+            None => current.enabled_capabilities.clone(),
+        };
+
+        let next = McpServerRow {
+            name,
+            transport,
+            command,
+            args,
+            env,
+            url,
+            headers,
+            enabled,
+            timeout_ms,
+            description,
+            cwd,
+            max_concurrent_calls,
+            enabled_capabilities,
+            // 时间戳不是配置：合并时保持原值，写库时由 `mcp_repo::apply_patch`
+            // 决定要不要动 `updated_at`。
+            created_at: current.created_at,
+            updated_at: current.updated_at,
+        };
+        // 与 POST 共用同一份交叉校验：PATCH 能把 transport 换掉，
+        // 换完必须仍是「stdio 有 command 无 url / http 有 url 无 command」。
+        check_transport_shape(
+            "PATCH 后的",
+            &next.transport,
+            next.command.as_deref(),
+            next.url.as_deref(),
+        )?;
+        Ok(next)
+    }
+}
+
+/// 两个整行之间「能被 PATCH 改动的字段」的差异清单（固定顺序，便于测试与阅读）。
+///
+/// 与 `mcp_repo::asset_hash` 覆盖的字段**必须一一对应**：指纹漏了哪个字段，
+/// 那个字段就会被 `apply_patch` 判成「没改」而不落库。有一条测试逐字段钉这件事。
+fn changed_fields(a: &McpServerRow, b: &McpServerRow) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    if a.name != b.name {
+        out.push("name");
+    }
+    if a.transport != b.transport {
+        out.push("transport");
+    }
+    if a.command != b.command {
+        out.push("command");
+    }
+    if a.args != b.args {
+        out.push("args");
+    }
+    if a.cwd != b.cwd {
+        out.push("cwd");
+    }
+    if a.env != b.env {
+        out.push("env");
+    }
+    if a.url != b.url {
+        out.push("url");
+    }
+    if a.headers != b.headers {
+        out.push("headers");
+    }
+    if a.enabled != b.enabled {
+        out.push("enabled");
+    }
+    if a.timeout_ms != b.timeout_ms {
+        out.push("timeout_ms");
+    }
+    if a.description != b.description {
+        out.push("description");
+    }
+    if a.max_concurrent_calls != b.max_concurrent_calls {
+        out.push("max_concurrent_calls");
+    }
+    if a.enabled_capabilities != b.enabled_capabilities {
+        out.push("enabled_capabilities");
+    }
+    out
+}
+
+fn patch_str(val: &Value, key: &str) -> Result<String, ApiError> {
+    val.as_str().map(str::to_string).ok_or_else(|| {
+        ApiError::bad_request(format!(
+            "PATCH 里的 {key} 必须是字符串。\
+             下一步：给它一个字符串值，或整个键不发（不发 = 不改这个字段）。"
+        ))
+    })
+}
+
+fn patch_opt_str(val: &Value, key: &str) -> Result<Option<String>, ApiError> {
+    if val.is_null() {
+        return Ok(None);
+    }
+    let s = patch_str(val, key)?;
+    let t = s.trim();
+    Ok(if t.is_empty() {
+        None
+    } else {
+        Some(t.to_string())
+    })
+}
+
+fn patch_int_in_range(val: &Value, key: &str, lo: i64, hi: i64) -> Result<i64, ApiError> {
+    let n = val.as_i64().ok_or_else(|| {
+        ApiError::bad_request(format!(
+            "PATCH 里的 {key} 必须是整数。\
+             下一步：填 {lo}~{hi} 之间的数字，或整个键不发（不发 = 不改）。"
+        ))
+    })?;
+    if !(lo..=hi).contains(&n) {
+        return Err(ApiError::bad_request(format!(
+            "PATCH 里的 {key}={n} 超出范围（{lo}..{hi}）。\
+             下一步：改成范围内的数字，或整个键不发（不发 = 不改）。"
+        )));
+    }
+    Ok(n)
+}
+
+fn patch_opt_int_in_range(
+    val: &Value,
+    key: &str,
+    lo: i64,
+    hi: i64,
+) -> Result<Option<i64>, ApiError> {
+    if val.is_null() {
+        return Ok(None);
+    }
+    patch_int_in_range(val, key, lo, hi).map(Some)
+}
+
+fn patch_args(val: &Value) -> Result<Vec<String>, ApiError> {
+    if val.is_null() {
+        return Ok(Vec::new());
+    }
+    let a = val.as_array().ok_or_else(|| {
+        ApiError::bad_request(
+            "PATCH 里的 args 必须是字符串数组（`null` 表示清空）。\
+             下一步：写成 [\"-y\", \"some-server\"]，或整个键不发（不发 = 不改）。"
+                .to_string(),
+        )
+    })?;
+    let mut out = Vec::with_capacity(a.len());
+    for x in a {
+        let s = x.as_str().ok_or_else(|| {
+            ApiError::bad_request(
+                "PATCH 里的 args 的元素必须是字符串。\
+                 下一步：检查有没有写成数字或对象的元素，或整个键不发（不发 = 不改）。"
+                    .to_string(),
+            )
+        })?;
+        out.push(s.to_string());
+    }
+    Ok(out)
+}
+
+fn patch_caps(val: &Value) -> Result<Option<Vec<String>>, ApiError> {
+    match val {
+        // `null` = 全禁，是**取值**不是「不变」：想不变就别发这个键。
+        Value::Null => Ok(None),
+        Value::Array(a) => {
+            let mut out: Vec<String> = Vec::new();
+            for x in a {
+                let s = x.as_str().ok_or_else(|| {
+                    ApiError::bad_request(
+                        "PATCH 里的 enabled_capabilities 的元素必须是字符串。\
+                         下一步：写成 [\"read\", \"write\"] 这样的一串字符串。"
+                            .to_string(),
+                    )
+                })?;
+                if !out.iter().any(|y| y == s) {
+                    out.push(s.to_string());
+                }
+            }
+            Ok(Some(out))
+        }
+        _ => Err(ApiError::bad_request(
+            "PATCH 里的 enabled_capabilities 必须是数组（[]=全部启用）或 null（全部禁用）。\
+             下一步：想全开传 []，想全禁传 null，想不改就别发这个键。"
+                .to_string(),
+        )),
+    }
+}
+
+/// 传输方式与必填字段的交叉校验。**POST 与 PATCH 共用这一份** ——
+/// 两边各写一遍迟早会漂，而漂的后果是「POST 拦得住的错配置，PATCH 放得进去」。
+///
+/// `label` 自带尾部的「的」：POST 传「第 0 项的」，PATCH 传「PATCH 后的」。
+fn check_transport_shape(
+    label: &str,
+    transport: &str,
+    command: Option<&str>,
+    url: Option<&str>,
+) -> Result<(), ApiError> {
+    let bad = ApiError::bad_request;
+    if transport == "stdio" {
+        if command.unwrap_or("").trim().is_empty() {
+            return Err(bad(format!(
+                "{label} command 必填：stdio 传输要启动一个本地进程。\
+                 下一步：填上可执行文件名，例如 `npx` 或 `uvx`。"
+            )));
+        }
+        if url.is_some() {
+            return Err(bad(format!(
+                "{label} url 不该出现在 stdio 配置上：stdio 连的是本地进程，没有地址。\
+                 下一步：清空 url（PATCH 传 null），或把传输方式改成 streamable_http / sse。"
+            )));
+        }
+    } else {
+        if url.unwrap_or("").is_empty() {
+            return Err(bad(format!(
+                "{label} url 必填：{transport} 要连一个 HTTP 地址。\
+                 下一步：填上完整地址，例如 https://example.com/mcp"
+            )));
+        }
+        if command.is_some() {
+            return Err(bad(format!(
+                "{label} command 不该出现在 {transport} 配置上：它连的是远端，不在本机起进程。\
+                 下一步：清空 command（PATCH 传 null），并把命令要带的参数挪到 headers 之外的正确位置。"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// 单个 MCP 服务器对象接受的字段。与前端 `McpServerConfig` 一一对应。
 ///
 /// 逐个字段白名单而不是「挑认识的读」：多写一个不认识的键就静默返回 200，
@@ -385,33 +856,12 @@ fn parse_server(v: &Value, idx: usize) -> Result<McpServerRow, ApiError> {
 
     // 传输方式与必填字段对不上时**在这里**报错，而不是丢给数据库 CHECK ——
     // 数据库只说 "CHECK constraint failed"，用户无从知道是哪台服务器的哪个字段。
-    if transport == "stdio" {
-        if command.as_deref().unwrap_or("").trim().is_empty() {
-            return Err(bad(format!(
-                "第 {idx} 项的 command 必填：stdio 传输要启动一个本地进程。\
-                 下一步：填上可执行文件名，例如 `npx` 或 `uvx`。"
-            )));
-        }
-        if url.is_some() {
-            return Err(bad(format!(
-                "第 {idx} 项的 url 不该出现在 stdio 配置上：stdio 连的是本地进程，没有地址。\
-                 下一步：清空 url，或把传输方式改成 streamable_http / sse。"
-            )));
-        }
-    } else {
-        if url.as_deref().unwrap_or("").is_empty() {
-            return Err(bad(format!(
-                "第 {idx} 项的 url 必填：{transport} 要连一个 HTTP 地址。\
-                 下一步：填上完整地址，例如 https://example.com/mcp"
-            )));
-        }
-        if command.is_some() {
-            return Err(bad(format!(
-                "第 {idx} 项的 command 不该出现在 {transport} 配置上：它连的是远端，不在本机起进程。\
-                 下一步：清空 command，并把命令要带的参数挪到 headers 之外的正确位置。"
-            )));
-        }
-    }
+    check_transport_shape(
+        &format!("第 {idx} 项的"),
+        &transport,
+        command.as_deref(),
+        url.as_deref(),
+    )?;
 
     let max_concurrent_calls = match obj.get("max_concurrent_calls") {
         Some(Value::Null) | None => None,
@@ -668,6 +1118,228 @@ mod hub_source_tests {
             file_name.trim_end_matches(".md"),
             "绝不能退回包内文件名"
         );
+    }
+}
+
+/// 钉住 [`patch_mcp`] 的合并语义与 [`changed_fields`] 的覆盖度。
+///
+/// 这一组是**纯函数**测试：真库往返在 `tests/extensions_http.rs`（`patch_mcp` 本体
+/// 直接调用；`routes.rs` 那条路由的接线不归本文件管）。
+#[cfg(test)]
+mod mcp_patch_tests {
+    use super::*;
+
+    fn base() -> McpServerRow {
+        McpServerRow {
+            name: "a".into(),
+            transport: "stdio".into(),
+            command: Some("npx".into()),
+            args: vec!["-y".into(), "some-server".into()],
+            env: vec![("TOKEN".into(), "secret".into())],
+            url: None,
+            headers: vec![],
+            enabled: true,
+            timeout_ms: 30_000,
+            description: "说明".into(),
+            cwd: Some("/tmp/work".into()),
+            max_concurrent_calls: Some(4),
+            enabled_capabilities: Some(vec!["read".into()]),
+            created_at: 111,
+            updated_at: 222,
+        }
+    }
+
+    fn mutate(base: &McpServerRow, f: impl FnOnce(&mut McpServerRow)) -> McpServerRow {
+        let mut r = base.clone();
+        f(&mut r);
+        r
+    }
+
+    /// **每一个 PATCH 能改的字段，落库层的变更判定都必须看得见。**
+    ///
+    /// `mcp_repo::apply_patch` 用「名字变了或指纹变了」决定写不写。指纹
+    /// （`asset_hash`）漏掉哪个字段，那个字段就会被判成「没改」而**静默不落库** ——
+    /// 请求 200，库里没变。这条测试逐个字段钉住这件事，是这一组的支点。
+    #[test]
+    fn every_patchable_field_is_visible_to_the_repos_change_detection() {
+        let b = base();
+        let changes: Vec<(&str, McpServerRow)> = vec![
+            ("name", mutate(&b, |r| r.name = "b".into())),
+            (
+                "transport",
+                mutate(&b, |r| {
+                    r.transport = "streamable_http".into();
+                    r.command = None;
+                    r.url = Some("https://example/mcp".into());
+                }),
+            ),
+            ("command", mutate(&b, |r| r.command = Some("uvx".into()))),
+            ("args", mutate(&b, |r| r.args = vec![])),
+            ("cwd", mutate(&b, |r| r.cwd = None)),
+            (
+                "env",
+                mutate(&b, |r| r.env = vec![("TOKEN".into(), "other".into())]),
+            ),
+            (
+                "url",
+                mutate(&b, |r| {
+                    r.transport = "streamable_http".into();
+                    r.command = None;
+                    r.url = Some("https://example/mcp".into());
+                }),
+            ),
+            (
+                "headers",
+                mutate(&b, |r| r.headers = vec![("TOKEN".into(), "1".into())]),
+            ),
+            ("enabled", mutate(&b, |r| r.enabled = false)),
+            ("timeout_ms", mutate(&b, |r| r.timeout_ms = 45_000)),
+            ("description", mutate(&b, |r| r.description = "别的".into())),
+            (
+                "max_concurrent_calls",
+                mutate(&b, |r| r.max_concurrent_calls = None),
+            ),
+            (
+                "enabled_capabilities",
+                mutate(&b, |r| r.enabled_capabilities = None),
+            ),
+        ];
+
+        for (label, changed) in &changes {
+            let fields = changed_fields(&b, changed);
+            assert!(
+                fields.contains(label),
+                "{label} 改了却不在差异清单里：{fields:?}"
+            );
+            assert!(
+                b.name != changed.name || mcp_repo::asset_hash(&b) != mcp_repo::asset_hash(changed),
+                "{label} 改了，但指纹与名字都看不出来 —— apply_patch 会当成没改而不落库"
+            );
+        }
+        // 反方向：一字不动时，差异清单是空的、指纹也一样。
+        assert!(changed_fields(&b, &base()).is_empty(), "没改就什么都不该报");
+        assert_eq!(mcp_repo::asset_hash(&b), mcp_repo::asset_hash(&base()));
+    }
+
+    #[test]
+    fn a_patch_only_touches_the_keys_it_carries() {
+        let current = base();
+        let next = parse_patch(&serde_json::json!({"timeout_ms": 45_000}))
+            .expect("合法请求体")
+            .apply_to(&current)
+            .expect("合并");
+
+        assert_eq!(next.timeout_ms, 45_000);
+        // 缺省 = 不变：其余字段逐字保持。
+        assert_eq!(next.name, current.name);
+        assert_eq!(next.transport, current.transport);
+        assert_eq!(next.command, current.command);
+        assert_eq!(next.args, current.args);
+        assert_eq!(next.cwd, current.cwd);
+        assert_eq!(next.env, current.env, "env 不许被顺手清掉");
+        assert_eq!(next.headers, current.headers);
+        assert_eq!(next.enabled, current.enabled);
+        assert_eq!(next.description, current.description);
+        assert_eq!(next.max_concurrent_calls, current.max_concurrent_calls);
+        assert_eq!(next.enabled_capabilities, current.enabled_capabilities);
+        assert_eq!(next.created_at, current.created_at);
+        assert_eq!(next.updated_at, current.updated_at);
+    }
+
+    #[test]
+    fn an_explicit_null_clears_while_an_absent_key_keeps() {
+        let current = base();
+        let next = parse_patch(&serde_json::json!({
+            "cwd": null,
+            "env": null,
+            "max_concurrent_calls": null
+        }))
+        .expect("合法请求体")
+        .apply_to(&current)
+        .expect("合并");
+
+        assert_eq!(next.cwd, None, "显式 null = 清空");
+        assert!(next.env.is_empty(), "显式 null = 清空");
+        assert_eq!(next.max_concurrent_calls, None);
+        assert_eq!(next.description, current.description, "没提的键不动");
+        assert_eq!(next.args, current.args, "没提的键不动");
+    }
+
+    /// `enabled_capabilities` 的三态里，`null` 是**取值**（全禁），不是「不变」。
+    /// 混了就是把用户明确的全禁改成了「保持原样」。
+    #[test]
+    fn a_null_capability_list_means_all_off_not_unchanged() {
+        let all_on = mutate(&base(), |r| r.enabled_capabilities = Some(vec![]));
+        let next = parse_patch(&serde_json::json!({"enabled_capabilities": null}))
+            .expect("合法请求体")
+            .apply_to(&all_on)
+            .expect("合并");
+        assert_eq!(next.enabled_capabilities, None, "null 必须落成「全禁」");
+
+        let keep = parse_patch(&serde_json::json!({}))
+            .expect("合法请求体")
+            .apply_to(&all_on)
+            .expect("合并");
+        assert_eq!(
+            keep.enabled_capabilities,
+            Some(vec![]),
+            "不发这个键才是「不变」"
+        );
+    }
+
+    #[test]
+    fn the_merge_runs_the_same_transport_checks_as_post() {
+        let current = base();
+        // stdio → streamable_http：只发 transport 不够 —— 合并后仍是「有 command、没 url」。
+        let err = parse_patch(&serde_json::json!({"transport": "streamable_http"}))
+            .expect("合法请求体")
+            .apply_to(&current)
+            .expect_err("必须拦下");
+        assert_eq!(err.status(), axum::http::StatusCode::BAD_REQUEST);
+        assert!(err.detail().contains("url"), "{}", err.detail());
+        assert!(err.detail().contains("下一步"), "{}", err.detail());
+
+        // 一次把 url 补上、command 清掉就成立。
+        let next = parse_patch(&serde_json::json!({
+            "transport": "streamable_http",
+            "url": "http://127.0.0.1:1/mcp",
+            "command": null
+        }))
+        .expect("合法请求体")
+        .apply_to(&current)
+        .expect("合并");
+        assert_eq!(next.transport, "streamable_http");
+        assert_eq!(next.url.as_deref(), Some("http://127.0.0.1:1/mcp"));
+        assert_eq!(next.command, None);
+        assert!(
+            next.env == current.env,
+            "换传输方式不清 env（与 POST 的口径一致：怎么存就怎么读）"
+        );
+    }
+
+    #[test]
+    fn a_patch_that_does_not_parse_refuses_the_whole_request() {
+        for bad in [
+            serde_json::json!({"autorize": "Bearer x"}),
+            serde_json::json!({"timeout_ms": 999}),
+            serde_json::json!({"timeout_ms": "30000"}),
+            serde_json::json!({"enabled": "yes"}),
+            serde_json::json!({"args": "-y"}),
+            serde_json::json!({"enabled_capabilities": "all"}),
+            serde_json::json!([]),
+        ] {
+            let err = parse_patch(&bad).expect_err("必须被拒");
+            assert_eq!(err.status(), axum::http::StatusCode::BAD_REQUEST, "{bad}");
+            assert!(err.detail().contains("下一步"), "{bad}：{}", err.detail());
+        }
+
+        // 名字非法在合并那一步才判（它要过归一）。
+        let err = parse_patch(&serde_json::json!({"name": "!!!"}))
+            .expect("解析得通")
+            .apply_to(&base())
+            .expect_err("非法名字必须被拒");
+        assert_eq!(err.status(), axum::http::StatusCode::BAD_REQUEST);
+        assert!(err.detail().contains("下一步"), "{}", err.detail());
     }
 }
 

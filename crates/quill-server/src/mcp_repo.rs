@@ -25,6 +25,7 @@ use crate::db::{digest32, invariant_broken, now_ms, storage_error, DbBridge};
 
 const OP_LIST: &str = "列出 MCP 服务器";
 const OP_WRITE: &str = "写入 MCP 服务器";
+const OP_PATCH: &str = "更新 MCP 服务器";
 
 /// 显式列清单。`*` 会在列顺序变化时静默错位。
 pub const COLUMNS: &str = "name, transport, command, args_json, env_json, url, headers_json, \
@@ -35,6 +36,24 @@ pub const LIST_SQL: &str = "SELECT name, transport, command, args_json, env_json
      headers_json, enabled, timeout_ms, description, cwd, max_concurrent_calls, \
      enabled_capabilities_json, asset_hash, created_at, updated_at FROM mcp_servers \
      WHERE user_id = ? AND deleted_at IS NULL ORDER BY name ASC";
+
+/// 单条读取。**列清单与 [`LIST_SQL`] 必须逐列一致**（`row_from` 按列名取值，
+/// 少一列会在运行时报「读列失败」，而不是编译期报错）—— 有一条测试逐列比这两条 SQL。
+///
+/// 谓词口径与 `LIST_SQL` 相同（同一个 `user_id` 隔离 + 同一个软删过滤），
+/// 只多一个 `name`。少 `user_id` 就是跨用户可改。
+pub const GET_SQL: &str = "SELECT name, transport, command, args_json, env_json, url, \
+     headers_json, enabled, timeout_ms, description, cwd, max_concurrent_calls, \
+     enabled_capabilities_json, asset_hash, created_at, updated_at FROM mcp_servers \
+     WHERE user_id = ? AND name = ? AND deleted_at IS NULL";
+
+/// 单条更新的写语句。**只改可见行、只改自己名下的行**：三个谓词少一个就是
+/// 跨用户可改或改到软删行；`created_at` 不在 SET 列表里 —— 改名保留行身份，
+/// 不能顺手把「什么时候加的」重置。
+pub const PATCH_SQL: &str = "UPDATE mcp_servers SET name = ?, transport = ?, command = ?, \
+     args_json = ?, env_json = ?, url = ?, headers_json = ?, enabled = ?, timeout_ms = ?, \
+     description = ?, cwd = ?, max_concurrent_calls = ?, enabled_capabilities_json = ?, \
+     asset_hash = ?, updated_at = ? WHERE user_id = ? AND name = ? AND deleted_at IS NULL";
 
 /// 一行配置 —— 定义已随 MCP 协议客户端搬进内核层（queue Q014）：
 /// 内核要拿它拉起进程，存储要按列拼它，**唯一一份**只能住在 `quill-core`，
@@ -125,6 +144,176 @@ pub async fn list(
                 .await
                 .map_err(|e| storage_error(OP_LIST, e))?;
             rows.iter().map(row_from).collect()
+        })
+    })
+}
+
+/// 单条读取（同一用户的可见行）。`PATCH` 的前置读用这一条。
+pub async fn get(
+    db: &DbBridge,
+    uid: UserId,
+    name: &str,
+) -> Result<Option<McpServerRow>, quill_agent::AgentError> {
+    let b = crate::db::blob_of(&uid);
+    let name = name.to_string();
+    db.call(move |pool, _rt| {
+        Box::pin(async move {
+            let row = sqlx::query(GET_SQL)
+                .bind(&b)
+                .bind(&name)
+                .fetch_optional(&pool)
+                .await
+                .map_err(|e| storage_error(OP_LIST, e))?;
+            row.as_ref().map(row_from).transpose()
+        })
+    })
+}
+
+/// `PATCH` 单条的落库结局。
+///
+/// 用枚举而不是 `Result<McpServerRow>`：这一层要能分开说「没这一行」「想改成的
+/// 名字被占了」「一个字都没改」「真改了」—— 它们在 HTTP 上是 404 / 409 / 200
+/// 三种不同的回答，压成一个 `Option` 就只能靠调用方猜。
+#[derive(Debug)]
+pub enum PatchOutcome {
+    /// 这个用户名下没有这一行（不存在，或已被软删）。
+    NotFound,
+    /// 想改成的名字已被**本用户**的另一行占着（活跃或软删都算：主键是
+    /// `(user_id, name)`，软删的行仍然占着那个名字）。别的用户有同名行不算冲突。
+    NameTaken,
+    /// 名字与配置内容都没变：**没有写库**，`updated_at` 也没动。
+    Unchanged(McpServerRow),
+    /// 真写进去了；这是回读得到的、库里现在的那一行。
+    Updated(McpServerRow),
+}
+
+/// 单条局部更新的落库：`next` 是**合并完成后**的整行（合并语义在 HTTP 层，见
+/// `api_extensions::patch_mcp`），这一层只管「按主键定位、检查冲突、写、回读」。
+///
+/// ## 改名走 `UPDATE`，不是 delete + insert
+///
+/// 主键是 `(user_id, name)`（migrations/0007 第 48 行），改名在本用户内是
+/// 「同一行的键换了」：`UPDATE ... SET name=?` 保留 `created_at` 与行身份。
+/// 走 delete + insert 的话，每次改名都会把 `created_at` 重置成现在 ——
+/// 界面上「什么时候加的」会凭空变成「刚刚」。
+///
+/// ## `updated_at` 的语义按指纹 + 名字两条判定
+///
+/// `asset_hash` **刻意不含 `name` 与时间戳**（见 [`asset_hash`] 的说明），
+/// 所以「只改名字」的内容指纹不变。若照抄 `replace_all` 里「指纹没变就整行跳过」，
+/// 改名就会被静默丢掉 —— 于是这里改成：**名字变了或指纹变了**才算改过，
+/// 两者都没变就一个字都不写（`updated_at` 自然不动，与全量提交那条语义一致）。
+pub async fn apply_patch(
+    db: &DbBridge,
+    uid: UserId,
+    current_name: &str,
+    next: McpServerRow,
+) -> Result<PatchOutcome, quill_agent::AgentError> {
+    let b = crate::db::blob_of(&uid);
+    let current_name = current_name.to_string();
+    db.call(move |pool, _rt| {
+        Box::pin(async move {
+            let mut tx = pool.begin().await.map_err(|e| storage_error(OP_PATCH, e))?;
+
+            // 事务内再读一次：HTTP 层那次读只用来合并字段，冲突判定必须贴着写。
+            let current = sqlx::query(GET_SQL)
+                .bind(&b)
+                .bind(&current_name)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| storage_error(OP_PATCH, e))?;
+            let Some(current) = current.as_ref().map(row_from).transpose()? else {
+                // 提前返回时事务由 Drop 回滚；这里本来就没写过，回滚是空操作。
+                return Ok(PatchOutcome::NotFound);
+            };
+
+            let renaming = current.name != next.name;
+            if renaming {
+                // 不加 `deleted_at IS NULL`：软删的行仍占着主键的那个名字，
+                // 直接 UPDATE 会撞 UNIQUE 并报成一条难懂的 500。
+                //
+                // 并发窗口：两条同名改名的请求可能同时通过这条预检，后到的那条
+                // 会在 UPDATE 上撞 UNIQUE → 一条 500，而不是静默把行改错。
+                // 单用户本地应用接受这个窗口（无声的错误才是不能接受的）。
+                let taken =
+                    sqlx::query("SELECT 1 FROM mcp_servers WHERE user_id = ? AND name = ? LIMIT 1")
+                        .bind(&b)
+                        .bind(&next.name)
+                        .fetch_optional(&mut *tx)
+                        .await
+                        .map_err(|e| storage_error(OP_PATCH, e))?;
+                if taken.is_some() {
+                    return Ok(PatchOutcome::NameTaken);
+                }
+            }
+
+            let content_changed = asset_hash(&current) != asset_hash(&next);
+            if !renaming && !content_changed {
+                return Ok(PatchOutcome::Unchanged(current));
+            }
+
+            let args_json =
+                serde_json::to_string(&next.args).map_err(|e| storage_error(OP_PATCH, e))?;
+            let env_json = serde_json::to_string(
+                &next
+                    .env
+                    .iter()
+                    .cloned()
+                    .collect::<std::collections::BTreeMap<_, _>>(),
+            )
+            .map_err(|e| storage_error(OP_PATCH, e))?;
+            let headers_json = serde_json::to_string(
+                &next
+                    .headers
+                    .iter()
+                    .cloned()
+                    .collect::<std::collections::BTreeMap<_, _>>(),
+            )
+            .map_err(|e| storage_error(OP_PATCH, e))?;
+            let caps_json = match &next.enabled_capabilities {
+                None => None,
+                Some(v) => Some(serde_json::to_string(v).map_err(|e| storage_error(OP_PATCH, e))?),
+            };
+            let hash = asset_hash(&next);
+            let now = now_ms();
+
+            sqlx::query(PATCH_SQL)
+                .bind(&next.name)
+                .bind(&next.transport)
+                .bind(&next.command)
+                .bind(&args_json)
+                .bind(&env_json)
+                .bind(&next.url)
+                .bind(&headers_json)
+                .bind(if next.enabled { 1i64 } else { 0i64 })
+                .bind(next.timeout_ms)
+                .bind(&next.description)
+                .bind(&next.cwd)
+                .bind(next.max_concurrent_calls)
+                .bind(&caps_json)
+                .bind(&hash)
+                .bind(now)
+                .bind(&b)
+                .bind(&current_name)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| storage_error(OP_PATCH, e))?;
+
+            // 回读而不是把 `next` 返回：调用方要看到库里现在的样子。
+            let row = sqlx::query(GET_SQL)
+                .bind(&b)
+                .bind(&next.name)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| storage_error(OP_PATCH, e))?;
+            let row = row
+                .as_ref()
+                .map(row_from)
+                .transpose()?
+                .ok_or_else(|| invariant_broken("刚更新完的 MCP 行在同一个事务里读不回来"))?;
+
+            tx.commit().await.map_err(|e| storage_error(OP_PATCH, e))?;
+            Ok(PatchOutcome::Updated(row))
         })
     })
 }
@@ -453,6 +642,62 @@ mod tests {
         // 少一个谓词就是跨用户泄露。逐字断言，不靠肉眼看。
         assert!(LIST_SQL.contains("user_id = ?"), "必须按用户过滤");
         assert!(LIST_SQL.contains("deleted_at IS NULL"), "必须过滤软删行");
+    }
+
+    /// 单条读与单条写的隔离口径。
+    ///
+    /// `PATCH` 这条路最危险的两件事：改到别人的行、改到软删行。两条语句的
+    /// WHERE 都必须同时带 `user_id` / `name` / `deleted_at IS NULL` 三个谓词。
+    #[test]
+    fn the_single_row_statements_only_touch_this_users_visible_row() {
+        for (label, sql) in [("GET_SQL", GET_SQL), ("PATCH_SQL", PATCH_SQL)] {
+            let where_ = sql
+                .split(" WHERE ")
+                .nth(1)
+                .unwrap_or_else(|| panic!("{label} 必须有 WHERE"));
+            assert!(where_.contains("user_id = ?"), "{label} 必须按用户过滤");
+            assert!(where_.contains("name = ?"), "{label} 必须按 name 定位");
+            assert!(
+                where_.contains("deleted_at IS NULL"),
+                "{label} 不许动软删行"
+            );
+        }
+
+        // 改名保留行身份：`created_at` 与 `deleted_at` 都不该出现在 SET 列表里，
+        // 而 `updated_at` 必须在 —— 改了却不更新时间戳，界面上的「更新时间」就是假话。
+        let set = PATCH_SQL
+            .split(" SET ")
+            .nth(1)
+            .and_then(|s| s.split(" WHERE ").next())
+            .expect("PATCH_SQL 必须是 SET ... WHERE 的形状");
+        assert!(
+            !set.contains("created_at"),
+            "改名不许重置 created_at：{set}"
+        );
+        assert!(!set.contains("deleted_at"), "更新不许碰 deleted_at：{set}");
+        assert!(
+            set.contains("updated_at = ?"),
+            "真改了就要更新时间戳：{set}"
+        );
+    }
+
+    /// 两条读语句的列清单必须逐列一致。
+    ///
+    /// `row_from` 按列名取值，少一列只会在运行时报「读列失败」——
+    /// 编译期、clippy 都看不见，只有这条测试看得见。
+    #[test]
+    fn get_and_list_select_the_same_columns() {
+        fn cols(sql: &str) -> String {
+            sql.strip_prefix("SELECT ")
+                .expect("必须是 SELECT")
+                .split(" FROM ")
+                .next()
+                .expect("必须有 FROM")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        }
+        assert_eq!(cols(GET_SQL), cols(LIST_SQL), "两条读语句的列清单漂了");
     }
 
     #[test]
