@@ -88,6 +88,31 @@ async fn apply_pragmas(conn: &mut sqlx::SqliteConnection) -> Result<(), sqlx::Er
     Ok(())
 }
 
+/// 本来 `configure_pool` 没有任何说明（queue Q066 要「写清」的正是它）。四个 PRAGMA
+/// 与连接数上界都不是随手写的，逐条记下理由，免得下一版有人「顺手优化」掉其中一条：
+///
+/// - **`journal_mode = WAL`**：读写不互相阻塞 —— 默认的 rollback journal 下一次写
+///   就锁住整库，长会话的写会让所有读排队，而 WAL 允许「多读 + 一写」。代价是多了
+///   `-wal` / `-shm` 两个边车文件（备份口径见 `quill-backup`：边车**不进**用户数据副本，
+///   权威快照走 `VACUUM INTO`）。
+/// - **`synchronous = NORMAL`**：WAL 下 NORMAL 只在 checkpoint 时 fsync，掉电可能丢
+///   最近若干次提交但**不会坏库**；FULL 每次提交都 fsync，对话场景的写频率下等于把
+///   磁盘当瓶颈。注意这是**有意的取舍**：本项目接受「掉电丢最后几条消息」，
+///   不接受「库损坏」。
+/// - **`busy_timeout = ` [`BUSY_TIMEOUT_MS`]**（5 秒）：WAL 仍然只允许**一个**写者。
+///   两条连接同时写时，后到的那条会拿到 `SQLITE_BUSY`；给它 5 秒重试窗口，
+///   让「并发写」表现为变慢而不是报错。这个值是**连接级**的，所以
+///   `apply_pragmas` 里也要再设一遍（`SqliteConnectOptions` 只管新建的连接，
+///   池里的连接由 `after_connect` 逐条兜底）。
+/// - **`foreign_keys = ON`**：SQLite 默认**关**外键。关着的时候
+///   `ON DELETE CASCADE` 与所有复合外键全部是装饰品 —— 「删会话连带删消息」
+///   这类保证会静默消失，而库里看起来一切正常。
+/// - **`max_connections`**：SQLite 的写是串行的，池子开大只增加内存与锁竞争，
+///   不会提高写吞吐。调用方按「同时有多少请求在等库」给值（服务端在
+///   `quill-server` 里定），这里只保证「给多少就是多少」。
+///
+/// 这五条都被 `every_connection_has_foreign_keys_on` 逐连接钉住（含
+/// `synchronous` 与池子上界），改坏了会红。
 pub async fn configure_pool(path: &str, max_connections: u32) -> Result<SqlitePool, sqlx::Error> {
     let opts = SqliteConnectOptions::from_str(path)?
         .create_if_missing(true)
@@ -538,6 +563,9 @@ mod tests {
         let path = dir.to_string_lossy().to_string();
 
         let pool = configure_pool(&path, 5).await.expect("建池");
+        // **同时**持有 5 条：池子是按需开连接的（不会预先开满 max），所以
+        // 「上界被遵守」只能这样验 —— 一条一条借了还，借到第 5 次池里也只有 1~2 条。
+        let mut held = Vec::new();
         for i in 1..=5 {
             let mut conn = pool.acquire().await.expect("取连接");
             let fk: i64 = sqlx::query_scalar("PRAGMA foreign_keys")
@@ -561,7 +589,25 @@ mod tests {
                 "第 {i} 条连接 busy_timeout 未生效"
             );
             assert_eq!(jm.to_ascii_lowercase(), "wal", "第 {i} 条连接未启用 WAL");
+            // `synchronous` 是**有意的取舍**（掉电丢最近几次提交，但不坏库）：
+            // NORMAL = 1。改成 FULL(2) 会让每次提交都 fsync，OFF(0) 则连
+            // 「不坏库」都没了 —— 两头都不是本项目要的，所以钉住中间这个值。
+            let sync: i64 = sqlx::query_scalar("PRAGMA synchronous")
+                .fetch_one(&mut *conn)
+                .await
+                .expect("读 PRAGMA");
+            assert_eq!(
+                sync, 1,
+                "第 {i} 条连接的 synchronous 不是 NORMAL（1）：要么拖慢每次提交，要么掉电可能坏库"
+            );
+            held.push(conn);
         }
+        assert_eq!(
+            pool.size(),
+            5,
+            "池子必须真的开到给它的上界（SQLite 写是串行的，这里给多少就是多少）"
+        );
+        drop(held);
         drop(pool);
         let _ = std::fs::remove_file(&dir);
         let _ = std::fs::remove_file(dir.with_extension("db-wal"));
