@@ -195,6 +195,10 @@ pub fn build_router(state: AppState) -> Router {
             "/api/extensions/skill-hub/skills/{slug}/install",
             post(api_extensions::skill_hub_install_skill),
         )
+        // **刻意保持 501，不是漏做。** 前端 `ui/web/src/capabilityGaps.ts` 把这条
+        // 登记成「已登记路由、处理函数未实现（501）」并在技能库里如实显示给用户。
+        // quill 没有插件系统，也不打算有 —— 删掉这条路由会让前端那句「已登记」变成假话
+        // （会退化成 404），所以留着一个**如实标注的缺口**比删掉更诚实。
         .route(
             "/api/extensions/plugins",
             get(|_u: crate::auth::AuthUser| async {
@@ -292,11 +296,7 @@ pub fn build_router(state: AppState) -> Router {
         // 公开的话等于任何人都能来续期别人的会话。
         .route("/api/auth/refresh", post(api_auth::refresh))
         .route("/api/auth/logout", post(api_auth::logout))
-        .route("/api/auth/me", get(api_auth::me))
-        .route(
-            "/api/ws",
-            get(|_u: crate::auth::AuthUser| async { not_implemented("GET", "/api/ws") }),
-        );
+        .route("/api/auth/me", get(api_auth::me));
 
     let spa = {
         let web_dir = state.config.web_dir.clone();
@@ -502,7 +502,6 @@ pub const CONTRACT_ROUTES: &[(&str, &str)] = &[
 
 pub const EXTRA_ROUTES: &[(&str, &str)] = &[
     ("GET", "/healthz"),
-    ("GET", "/api/ws"),
     // 流式发消息。**不是 octop 的契约路由**（上游那条还是一次性返回），
     // 是我们为了让长回复能边写边看自己加的，所以登记在 EXTRA 而不是 CONTRACT。
     ("POST", "/api/sessions/{id}/messages/stream"),
