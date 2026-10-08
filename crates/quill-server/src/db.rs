@@ -21,7 +21,39 @@ pub use quill_core::digest::{digest16, digest32};
 
 const WORKER_THREAD_NAME: &str = "quill-db";
 
-pub const REQUIRED_TABLES: [&str; 2] = ["experts", "task_dispatches"];
+/// `/healthz` 判「schema 就绪了吗」要看的表 —— **列的是「接线在用」的表**，
+/// 不是迁移里的全部表（queue Q087）。
+///
+/// 为什么不能只留原来的两张：`ready: true` 是一句给运维看的话，它说「可以发请求了」。
+/// 原来只查 `experts` 与 `task_dispatches`，于是 `sessions` / `messages` 缺失时
+/// `/healthz` 照样回 `ready: true`，而聊天路由一进去就 500 —— 健康检查比它担保的
+/// 东西弱，等于没担保。现在按「哪张表缺了会让一条**已接线**的路由坏掉」来列。
+///
+/// 刻意**不**列 `wiki_index` 与 `plugins`：它们是迁移里存在的死表（Rust 侧零读写，
+/// 见 `docs/CODE-TRUTH.md` 缺陷 7c 与 queue Q104），缺了不影响任何路由。
+/// `schema_version` 也不列：它由迁移器自己维护。
+pub const REQUIRED_TABLES: [&str; 14] = [
+    // 登录 / 账号（api_auth、middleware）
+    "users",
+    "sessions_auth",
+    // 对话（api_chat、api_chat_stream）
+    "sessions",
+    "messages",
+    // 专家与专家团（api_experts、api_teams、api_dispatch、quill-agent 的台账）
+    "experts",
+    "teams",
+    "team_members",
+    "task_dispatches",
+    // 扩展：技能包与 MCP（api_extensions、api_bundle、api_expert_market）
+    "skills",
+    "mcp_servers",
+    // 实例配置与模型供应商（api_admin、api_providers）
+    "admin_config",
+    "llm_providers",
+    // 通道与 MBTI（api_channels、api_mbti）
+    "channels",
+    "mbti_results",
+];
 
 type Job = Box<dyn FnOnce(SqlitePool, &mut Runtime) + Send + 'static>;
 
@@ -336,14 +368,21 @@ impl DbBridge {
     pub fn missing_tables(&self) -> Result<Vec<String>, AgentError> {
         self.call(|pool, _rt| {
             Box::pin(async move {
-                let rows = sqlx::query(
-                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?)",
-                )
-                .bind(REQUIRED_TABLES[0])
-                .bind(REQUIRED_TABLES[1])
-                .fetch_all(&pool)
-                .await
-                .map_err(|e| storage_error("探测数据库表结构", e))?;
+                // 占位符按 `REQUIRED_TABLES` 的长度现拼：写死 `IN (?, ?)` 时
+                // 往清单里加表会静默漏查（编译能过、探测没报错，只是那张表永远
+                // 不被检查）—— 这正是 Q087 之前的样子。
+                let placeholders = vec!["?"; REQUIRED_TABLES.len()].join(", ");
+                let sql = format!(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ({placeholders})"
+                );
+                let mut q = sqlx::query(&sql);
+                for t in REQUIRED_TABLES {
+                    q = q.bind(t);
+                }
+                let rows = q
+                    .fetch_all(&pool)
+                    .await
+                    .map_err(|e| storage_error("探测数据库表结构", e))?;
                 let mut present: Vec<String> = Vec::with_capacity(rows.len());
                 for r in &rows {
                     present.push(col!(r, String, "name", "探测数据库表结构"));
