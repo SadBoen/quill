@@ -164,6 +164,8 @@
 
 - [x] Q107 · **`gates-core` 在第一步就挂：CI 上的门禁从未真正跑过** · `.github/workflows/gates.yml` / `rust-toolchain.toml` · **已完成 2026-10-08**：根因是**装 Rust 那一步的输入形态** —— 原来只给 `components` 不给 `toolchain`，指望 `dtolnay/rust-toolchain` 自己去读仓库里的 `rust-toolchain.toml`；实测那一步在 runner 上 ~30ms 内失败、日志里只有 `##[error]Process completed with exit code 1.`、其后 20 多个步骤全被跳过（整 job 6~7 秒）。改为**先用 `awk` 从 `rust-toolchain.toml` 读出 `channel` 再喂给 action**（版本仍只有那一处来源）。**修的过程中我又踩了一次坑并留档**：第一次拼接把旧的 `with:`/`components:` 两行留在原处 → 重复的 `with:` 让 GitHub 判「工作流文件有问题」，整轮 **0 秒**失败（比原来更糟）；删掉那两行后正常。**实测结果（`gh run view 37782011837`）**：`✓ 门禁（可公开跑的部分） in 4m40s` + `✓ 门禁（需要私有上游的那部分） in 22s` —— **CI 第一次真正把门禁跑完**（构建、全部测试、clippy、fmt、各文本门禁、前端 typecheck/lint/vitest/build），同时也验证了上面那条出处引用修复在 CI 上成立
 
+- [ ] Q108 · 升级 CI 里的 action 版本，去掉「Node.js 20 is deprecated」这条 annotation · `.github/workflows/gates.yml` · **背景（2026-10-08 实测）**：CI 首次跑绿的那一轮（run 37782011837）带两条 annotation —— `actions/checkout@v4` / `actions/setup-node@v4` / `actions/cache@v4` 声明的是 Node 20 运行时，GitHub 已强制它们在 Node 24 上跑并给出弃用提示。**现在只是警告，但迟早会变成硬失败**（与「装 Rust 那一步静默挂掉」同一类风险：坏掉的时候没人看着）。**做法**：把这三个 action 升到当前主版本（`checkout@v5`、`setup-node@v5`，`cache` 按最新），**一次只升一个**、每次 push 后用 `gh run view` 确认两个 job 仍绿再升下一个 —— 升级 action 主版本有可能改默认行为（例如 checkout 的凭据持久化），所以要能一眼看出是哪一次升级弄坏的。**判据**：CI 绿，且 annotation 里不再有 Node 20 弃用那条
+
 ## 取用规则
 
 1. 从**最上面未完成**的取。**批次由用户指定**（默认 1~3 条；用户说「取 30 条」就按 30 条列批，
