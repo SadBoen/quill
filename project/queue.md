@@ -85,18 +85,39 @@
 
 ## E. 知识库 / 资料库（需求里的 xu-wiki）
 
-- [ ] Q056 · 核 `quill-wiki` 与用户 GitHub 上 xu-wiki 的能力差 · `docs/` · 出一张差集表
-- [ ] Q057 · wiki 的 `ingest_context` / `query_context` 接上真 LLM 后端 · `quill-wiki` · 端到端可跑 · **2026-10-09 实测复核（本轮未做，但把范围量准了 —— 别再照旧说法估工）**：
+- [x] Q056 · 核 `quill-wiki` 与用户 GitHub 上 xu-wiki 的能力差 · `docs/` · **已完成 2026-10-09**：条目原来没写「卡在」但其实**没人核过**；xu-wiki 是**公开**仓库，`gh api` 直接读得到，不必等它 clone 到本地。复现：`gh repo view SadBoen/xu-wiki --json name,description,visibility` → `PUBLIC`；`gh api repos/SadBoen/xu-wiki/git/trees/HEAD?recursive=1 --jq '.tree[].path'`；`gh api -H "Accept: application/vnd.github.raw" repos/SadBoen/xu-wiki/contents/design-docs/05-ingest.md`。
+  **差集表（quill-wiki 现状 vs xu-wiki）**：
+
+  | 能力 | xu-wiki | quill-wiki |
+  |---|---|---|
+  | raw/wiki/schema 三层 | ✓ `layers` 命令 | ✓ `WikiStore` 三层 + `layer()` |
+  | 节点类型 | Node_Page + Entity / List / Report | 只有 Page；`PageType` = Summary / Entity / Concept / Comparison / Overview / Synthesis |
+  | 关系 / 图 | `relations.py` + `ingest/relations_lru.py`（**50 边 LRU**） | `graph.rs`（`LinkGraph` + `STRUCTURAL_FILES`），**没有 LRU 上限** |
+  | ingest 两阶段（暂存 → commit） | ✓ `[PRIN-ING-1/2]`：commit 是唯一写盘入口 | ✗ 一步走（`ingest()` 里模型规划 + 校验 + 落盘） |
+  | 去重 | ✓ SHA256 三路（source / content / 相册） | ✗ 没有 hash 去重 |
+  | 解析器插件（PDF/DOCX/图片/OCR/minerU） | ✓ `parsers/registry.py` + `mineru_parser` + `image_meta` | ✗ 只有 markdown 页面 |
+  | 切分（300 行 / 标题优先 / 短节上并） | ✓ `ingest/splitter.py` | ✗ |
+  | 索引 | 无 | ✓ `index.md` + `WikiIndex` |
+  | 变更追溯 | frontmatter patches（`[PRIN-ING-15]`：**不走过程层日志**） | ✓ `log.rs` 追加式日志 —— **两边的追溯模型不一样** |
+  | 体检 | ✓ `selfcheck` / `doctor` | ✓ `lint.rs` + `run_lint` |
+  | query | ✓ `query/scanner.py` + `slicing.py` | ✓ `query.rs`（候选页 + 拼上下文），**但没接模型**（Q057） |
+  | 技能 | ✓ `skills/` + `deploy_skill`（技能装在 wiki 里） | ✗（quill 的技能在 `skills` 表 / SkillHub，与 wiki 无关） |
+  | CLI | ✓ 一整套 xu CLI | 部分：`quill wiki ls` / `show`（`cmd_wiki.rs`） |
+  | 安装 / 卸载 / 更新 | ✓ `install` / `uninstall` / `update`（装进项目） | ✗（quill 是常驻服务，不是装进项目的 CLI） |
+
+  **结论（范围事实，不是缺陷清单）**：quill-wiki 做的是「**索引 + 变更日志 + lint + 只读检索**」这一半；xu-wiki 的**摄入管线**（解析器插件、两阶段 commit、SHA256 去重、切分）与**关系 LRU** 在 quill 侧**完全没有**。要不要补取决于需求 —— 补的时候按 Q057 去读那几份上游文档，别再自创
+- [ ] Q057 · wiki 的 `ingest_context` / `query_context` 接上真 LLM 后端 · `quill-wiki` · 端到端可跑 · **2026-10-09 二次复核：原来那条「没有可抄的源、要先拍板」已经不成立 —— xu-wiki 是**公开**仓库，`gh api` 直接读得到**（`gh repo view SadBoen/xu-wiki` → `PUBLIC`、`defaultBranchRef=main`）。要读的源：`design-docs/05-ingest.md`（两阶段：解析暂存 → commit 落库；`[PRIN-ING-1]` commit 是唯一写盘入口）、`design-docs/06-query.md`、`src/xu/commands/{ingest,query}.py`、`src/xu/skills/references/{ingest,query}.md`。**动手前先读这几份**（能力差见 Q056 的差集表）。原「需要拍板」那段保留在下面供对照：
   - **wiki 侧其实已经写完了**：`quill-wiki::ingest::ingest()` 与 `query::query()` 都是**完整的泛型实现**（读 raw/索引/schema/日志 → 拼上下文 → 调后端 → 校验落盘页可读回 → 重建索引 → 写日志），只依赖 `quill_adapters::KnowledgeBackend`（`crates/quill-adapters/src/knowledge.rs:74`，三个方法：`plan_ingest` / `answer_query` / `lint_semantics`）。**全仓唯一的实现是测试里的 `FakeBackend`**（`crates/quill-wiki/tests/flow.rs:85`）。
   - 所以 Q057 的真身 = ① 在壳侧写一个 `KnowledgeBackend` 实现（拿这一轮的 provider 调模型，照 Q018 的 `chat_compaction::ProviderSummarizer` 那个壳侧注入模式）+ ② 把 `routes.rs:130/134` 那两条 501 桩换成真 handler（`POST /api/wiki/{ingest,query}`）。
   - **需要先拍板的一件事（别默默自创）**：`plan_ingest` 拿到的只是一个 `IngestContext`（源文 + 索引 + schema + 日志 + 相关页），**没有「让模型输出什么」的协议** —— 写页是模型干的，所以得定「提示词 + 模型回什么形状（页路径与正文怎么给）+ 怎么解析成 `IndexReceipt`」。`.octop-ref/octop` 的 `api/routers/knowledge_bases.py` 是 **embedding/RAG** 那套（961 行：上传/OCR/向量），**不是**这套 LLM-WIKI 流程；xu-wiki 也没在本地（`vendor/` 只有 goose 与 openoctopus-frontend）。→ 这个协议要么按 xu-wiki 的设计（需先取回该项目，见 Q056），要么明确标注「自创」（Q077 的纪律）。**先定这一条再动手**，否则就是凭记忆发明。
   - 落点文件：`crates/quill-server/src/api_wiki.rs`（已有 `store_for()` 与 `map_wiki()` 可复用）、`crates/quill-server/src/routes.rs:130-135`。
 - [x] Q058 · wiki 索引的增删改查 HTTP 面接通（见 Q033–Q035） · `api_wiki.rs` · **已完成 2026-10-09（写的那半）**：**先核了条目本身** —— 它引的 Q033–Q035 里，读的那半（pages / pages/{path} / search / index / log）**早就接通了**，所以这条真正缺的只有**页面的手写增删改**，而那件事**不需要模型**（不必等 Q057）。新增 `PUT /api/wiki/pages/{path}` 与 `DELETE /api/wiki/pages/{path}?expected_version=`（`api_wiki.rs`），契约就是前端 `ui/web/src/memory/api.ts` 里早就写死的 `WIKI_WRITE_ROUTE`。要点：版本号 = **磁盘原文的 sha256**（新增 `WikiStore::read_page_text`，走原文而不是 `parse_page`+`render_page`，否则版本会随重排漂）；`expected_version` 缺省/null = 「必须还不存在」（重复新建 409），给值 = 「我看到的就是这一版」（过期 409 **且不动盘**）；删除**必须**带版本号（缺 → 400，因为不可逆）；写入前用 `page_from_wire` 校验能解析成合法页，否则 400。成功路径写文件 → 重建 `index.md` → 追加变更日志（新增 `WikiStore::remove_page`、`Date::from_unix_days`/`Date::today` 供日志日期用）。`GET pages/{path}` 的响应新增 `version` 字段。**判据实测**：新增 `crates/quill-server/tests/wiki_write_http.rs` 7 条 → `cargo test -p quill-server --test wiki_write_http` **7 passed / 0 failed**；`cargo test --workspace` **1494 passed / 0 failed**（原 1483，+11）。**反向验证三条，各自只让对应那条新测试变红**：① 关掉乐观并发（把 expected/current 都当 None）→「重复新建」与「过期版本」两条红；② 跳过 `page_from_wire` 校验 → 只有「写不进去的内容被拒」红；③ 去掉删除的版本号强制 → 只有「删除必须带版本号」红。三条探针全部还原（`git diff -- crates/quill-server/src/` 只留正式改动）。**仍未做**：ingest / query 两条仍是 501 桩（属 Q057，要先拍板「模型输出什么形状」）
-- [~] Q059 · 资料库页面（`ui/web/src/workspace`）接真接口 · `ui/web` · **2026-10-09 实测：条目点名的路径是错的，而且读的那半早就接通了 —— 只剩编辑界面没做（标 `[~]`）**：
-  - **路径更正**：资料库页面是 `ui/web/src/memory/MemoryPage.tsx`（路由 `/memory`，标题就是「资料库」），**不是** `ui/web/src/workspace/` —— 后者是**工作区**页，指向一个根本不存在的 `/api/workspace/*`，是另一件事。
-  - **读的那半已完成且真实**：`memory/api.ts` 真调 `GET /api/wiki/{pages,pages/{path},index,log}`，页面渲染真数据、解析告警、索引与变更日志；没有假数据、没有假按钮。
-  - **本轮做了**：后端写入面接通后（Q058），把页面里那句已经**变成假话**的文案改掉 —— `memory.writeNotWired` 原写「quill 后端目前只有资料库的只读路由，写入接口尚未接通」，现在改成「写入接口已接通（`PUT`/`DELETE` + `expected_version`），但本页还没接上编辑界面」（中英同批改）。**这是必需的**：不一起改，界面就在替后端说假话。
-  - **仍缺（下一轮直接接）**：把正文框改成可编辑 + 保存/删除按钮（保存带 `version`、删除带 `expected_version`）+ 409 冲突原样显示；`memory/api.ts` 要加 `writePage`/`deletePage`，`WikiPage` 要加 `version` 字段；补一个 `MemoryPage.test.tsx`。
+- [x] Q059 · 资料库页面接真接口 · `ui/web` · **已完成 2026-10-09（后半在 2026-10-09 第二轮收口）**：
+  - **路径更正**：资料库页面是 `ui/web/src/memory/MemoryPage.tsx`（路由 `/memory`，标题就是「资料库」），**不是**条目原写的 `ui/web/src/workspace/` —— 后者是**工作区**页，指向一个根本不存在的 `/api/workspace/*`，是另一件事。
+  - **读的那半本来就已完成且真实**：`memory/api.ts` 真调 `GET /api/wiki/{pages,pages/{path},index,log}`，页面渲染真数据、解析告警、索引与变更日志；没有假数据、没有假按钮。
+  - **本轮做完编辑界面**（后端写入面由 Q058 提供）：`memory/api.ts` 加 `writePage`（`PUT` + `expected_version`）与 `deletePage`（`DELETE` + 版本号），`WikiPage` 加 `version`；`MemoryPage.tsx` 的正文框改成可编辑（`编辑`/`保存`/`取消`），加 `删除这一页`，页面不存在时给 `新建这一页`（并预填合法 frontmatter 模板 —— 服务端写入前会校验能解析成页面，给空框的话第一次保存必然 400）；**保存带 `content.data.version`、新建带 `null`、删除带版本号**；保存/删除的失败单独走一条 `ErrorNotice`（**409 的 detail 里有当前版本号，是用户重试的唯一依据**，混进上面两条会被 `??` 顺序挡掉）。切页时不写 effect 清草稿：草稿连「属于哪一页」一起存，`draft.path !== activePath` 就当没在编辑（沿用本文件既有的「派生状态别放进 state」纪律）。
+  - **判据实测**：新增 `ui/web/src/memory/MemoryPage.test.tsx` 4 条 → `npx vitest run src/memory/MemoryPage.test.tsx` **4 passed / 0 failed**；全套 `npx vitest run` **34 files / 349 passed**（原 33/345，+4）；`npm run typecheck` 0、`npm run lint` 0 errors（12 warnings，基线）、`npm run build` 0。
+  - **反向验证两条，各自只让对应那条新测试变红**：① 保存时把 `content.data?.version ?? null` 改成恒 `null` → 「保存带上 version」那条红；② 去掉保存/删除的 `ErrorNotice` → 「409 冲突端出来」那条红。两条探针均已还原。
 - [x] Q060 · wiki 文件路径安全（`pathsafe`）的边界测试 · `quill-wiki` · **已完成 2026-10-09**：`store.rs` 新增两条 + 一条 Windows-only。`resolve_never_lands_outside_the_root` —— 21 个边界输入（`C:x` 盘符相对、`c:/…` 盘符绝对、`dir/C:x.md` 非首段冒号、`/`、`//`、`a/../../b`、`..`、`../..`、`sub/../..`、`a//b.md`、`./a.md`、`\etc\passwd`、`..\other\secret.md` 等）跑**两条互补判据**：① 放行的必须规范化后仍在**层目录**内（基准是 `layer()` 不是 `root()` —— 拿 root 比会宽出一层，判据当场被这条抓出来并改正）；② 点名的 12 个必须直接拒。另外钉住 `concepts/..` **必须放行**（归零后仍在根内，拒掉属过度拦截）。`write_apis_refuse_escapes_and_write_nothing` —— 判据落在**真没落盘**（`write_page`/`write_raw` 会 `create_dir_all(parent)`，放行一次就越权建目录），且合法路径仍能写（否则「拒」可能只是 API 坏了）。`#[cfg(windows)] windows_treats_backslash_traversal_as_escape` **本机跑不到、未验证**（与 `pathsafe.rs` 既有几条同一纪律）。实测 `cargo test -p quill-wiki` → 72 passed / 0 failed（原 69）
 
 ## F. 数据安全 / 备份 / 升级
@@ -115,7 +136,30 @@
 - [x] Q069 · 上下文图在加载态有渲染（不是空白） · `ui/web` · **已核实 2026-10-09（已有覆盖；但**判据措辞与设计不是一回事**，按事实记）**：这条的措辞假设「加载态该画点什么」，而真实设计是**没量过就不画环** —— `ContextRing.tsx` 在 `used_tokens`/`used_percent` 为 null 时直接 `return null`，注释写明理由「画一个 0% 的空环等于说『还有一大半没用』，而真实情况是『完全没量过』」。**那块地方也不是空白**：调用方 `ChatPage.tsx:697-710` 只在有数据时才画小环，而旁边那个 `.chat-usage-label` **总是渲染**（带上下文上限/阈值说明）。**有测试**：`ContextRing.test.tsx` 的 `没实测值时一个环都不画` 钉住了这一支。→ 结论：不是缺陷，是刻意的；若真要「加载态可见的占位」，那是新设计（要在小环位置放骨架），不是本条
 - [x] Q070 · 用量页的数字来自真实累加（不是最后一轮） · `ui/web/src/usage` · **已核实 2026-10-09（已有覆盖，且正中「不是最后一轮」这句）**：`crates/quill-server/tests/session_metrics_http.rs` 三条 —— `turns_steps_tokens_and_speed_are_aggregated_from_real_rows`（两轮 1000+500 入参累加）、`usage_totals_equal_the_sum_of_the_rows`（合计 = 各行之和）、**`a_turn_with_tool_rounds_is_charged_for_every_round_not_only_the_last`**（走完工具往返的入参是两轮之和、不是最后一轮）。实跑 `cargo test --workspace` → **1468 passed / 0 failed**
 - [x] Q071 · 没有「点了必失败」的按钮：逐入口核一遍 · `ui/web` · **已完成 2026-10-09**：入口清单与三态判据见 Q067（同一套机制）。本轮补上一个**真缺口**：`ui/web/src/automations/` **只有组件、一个测试都没有**，而它正是最典型的那一页（`/api/cron*` 在后端零命中，最容易长出「能填能提交、点了必 404」的表单）。新增 `ui/web/src/automations/Automations.test.tsx` 4 条：cron 未登记 → 不画「新建自动化」且不发写请求；如实说「没这个能力」而不是「还没有任务」；500（不是能力缺失）→ 按钮留着；路由接通后列表照常渲染。**反向验证真做**：把 `cronUnavailable` 短路成 `false` → 前两条变红、后两条仍绿（证明各自独立），还原后 4/4 绿。另修掉三处**过期注释**：`AdminBackup.tsx` 与 `AdminBackup.test.tsx` 还写着「升级那三条路由是 501 桩」—— Q038–Q040 早已真实现；现在写明那段守卫是**防御性**的、测试里的 501 是**模拟**。实测 `npx vitest run` → **33 文件 / 345 passed**
-- [ ] Q072 · `ui/web` 的 17 条路由逐条核有对应后端 · `ui/web/src/app` · 出对照表
+- [x] Q072 · `ui/web` 的 17 条路由逐条核有对应后端 · `ui/web/src/app` · **已完成 2026-10-09**：逐条核过 `App.tsx` 的 17 条非重定向路由（另 6 条是 `Navigate` 重定向，不需要后端）。**没有一条是「点了必失败」的假页面** —— 要么有真后端，要么页面自己如实说明未接通。
+  复现：`grep -rhno "'/api/[^']*'" ui/web/src --include=*.ts --include=*.tsx | sed "s/.*'\(\/api[^']*\)'.*/\1/" | sort -u`；路由表：`ui/web/src/app/App.tsx`。
+
+  | 前端路由 | 页 / api 模块 | 后端 | 状态 |
+  |---|---|---|---|
+  | `/login` | `auth/` | `POST /api/auth/login`、`GET/POST /api/setup/*`、`GET /api/auth/me` | ✓ 已登记 |
+  | `/chat`、`/chat/:sessionId` | `chat/chatApi.ts` | `GET/POST /api/sessions`、`…/{id}/messages[/stream]`、`…/{id}/metrics`、`…/{id}/context` | ✓ |
+  | `/experts` | `experts/api.ts`、`skills/hubApi.ts` | `/api/experts`、`/api/experts/market`、`/api/teams`、`/api/extensions/{skills,skill-hub}` | ✓ |
+  | `/workspace`、`/workspace/:workspaceRef` | `workspace/WorkspacePage.tsx` | **无调用** | ⚠️ 页面只渲染「`/api/workspace/*` 未接通」的说明，**不发任何请求**（诚实；要不要做这套接口见 Q059 的说明） |
+  | `/memory` | `memory/api.ts` | `GET /api/wiki/{pages,pages/{path},index,log}` + `PUT`/`DELETE pages/{path}` | ✓（写入本轮接通） |
+  | `/usage` | `usage/contextApi.ts` | `GET /api/usage`、`…/{id}/context` | ✓ |
+  | `/devices` | `devices/api.ts` | `/api/extensions/mcp` | ✓（设备名册本身不存在，页面已改成只讲 MCP） |
+  | `/skills` | `skills/skillsApi.ts`、`hubApi.ts` | `/api/extensions/{skills,skill-hub}` | ✓ |
+  | `/automations` | `automations/{api,dreamApi}.ts` | `/api/cron*`、`/api/dream*` | ⚠️ **后端零命中**；页面靠 `routeMissing()` 如实报「未接通」并禁用表单（Q042 跟踪） |
+  | `/channels` | `channels/api.ts` | `/api/channels`、`/api/channels/weixin/qrcode/{generate,poll}` | ✓ |
+  | `/personalization` | `mbti/api.ts` | `/api/mbti/{types,questions,test,history,apply}` | ✓ |
+  | `/account` | `account/api.ts`、`auth/api.ts` | `GET /api/auth/me`、`GET /api/version`、`POST /api/auth/logout` | ✓（`PATCH/DELETE /api/me` 未登记，页面如实说「不可写」） |
+  | `/admin/models` | `models/api.ts` | `/api/admin/{providers,models,config}` | ✓ |
+  | `/admin/instance` | `admin/api.ts` | `/api/admin/config` | ✓ |
+  | `/admin/backup` | `admin/backupApi.ts` | `/api/backup/*`、`/api/upgrade/*` | ✓ |
+  | `/admin/users` | `admin/api.ts` | `/api/users` | ✓ |
+  | 6 条重定向 | `App.tsx` 的 `Navigate` | — | 不需要后端 |
+
+  **逐条核出来的两个发现**：① `ui/web/src/account/api.ts` 的注释写着「`POST /api/auth/logout` 在 quill 里尚未实现」—— **假的**：端点已登记（`routes.rs:288`），而且页面**真的在调**（`Account.tsx` 的 `endSession()` → `auth/api.ts` → 该端点），`forgetLocalToken()` 只是抹本机令牌那一步。注释已同批改掉。② 另有一条 `/api/me` 出现在 `api/client.test.ts` 里 —— 那是**测试夹具的 URL**，不是真调用（真调用是 `/api/auth/me`），不必改。
 - [x] Q073 · 前端 typecheck/lint/vitest/build 全进 CI（现状部分已进）· CI · **已核实 2026-10-09**：四项都在 `.github/workflows/gates.yml` 里（`npm run typecheck` / `npm run lint` / `npx vitest run` / `npm run build`，均 `working-directory: ui/web`），且 Q107 修绿后的 CI 实跑通过（run 37784552571 各步骤无 failure）
 - [x] Q074 · i18n 门禁覆盖所有面向用户的字符串 · `.i18n-check.mjs` · **已完成 2026-10-08，并修掉一个真缺陷**：该脚本里**一个 `process.exit` 都没有** —— 它把问题打印得很详细（「### 死参数 (1)」），却**永远退出 0**，而 CI 跑的就是 `node .i18n-check.mjs`：所谓「漏翻译会报红」是空头承诺。实测（修前）：把 zh 的 `{{count}}` 改成 `{count}` → 如实报出问题但退出码 **0**；修后同一次注入退出 **1**（带 FAIL + 下一步），无问题与还原后都是 **0**。**覆盖面如实标注**：它核「`t()` 调用点 ↔ zh 语言包」（实测 zh 884 key / t() 用到 738 / 0 问题），**不**查「不经 t() 的硬编码中文」—— 那一半标**未验证**；`--self-test` 仍缺（逻辑是内联流程，要加得先抽函数），留作后续（提交见下）
 - [x] Q075 · 移动端/桌面端的入口如实标注可用性 · `ui/web` · **已核实 2026-10-09（已有覆盖：界面里根本没有这类入口）**：「不画假入口」这条成立，因为**没有画**。复现：`grep -rn "下载\|安装包\|客户端\|桌面版\|desktop" ui/web/src --include=*.tsx --include=*.ts`（去掉 test 与注释）零命中 —— 只有微信扫码那句「用手机扫一次码」，那是**通道**功能，不是「移动端 App 入口」。桌面壳与打包是 Q098（未做）；届时若真加了入口，本条要重开
