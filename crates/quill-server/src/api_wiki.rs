@@ -1,13 +1,17 @@
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::{json, Value};
 
+use quill_adapters::KnowledgePage;
 use quill_wiki::page::render_page;
-use quill_wiki::{IndexEntry, WikiIndex, WikiStore};
+use quill_wiki::{page_from_wire, Date, IndexEntry, LogEntry, LogOp, WikiIndex, WikiStore};
 
 use crate::auth::AuthUser;
 use crate::body::JsonBody;
 use crate::error::ApiError;
+use crate::jsonx::opt_str;
 use crate::state::AppState;
 
 fn store_for(state: &AppState, user: &AuthUser) -> WikiStore {
@@ -67,6 +71,11 @@ pub async fn get_page(
     let mut body = Json(json!({
         "path": page.path,
         "content": render_page(&page),
+        // 乐观并发用的版本号：**磁盘上那份原文**的 sha256。PUT 时要把它带回来。
+        "version": store
+            .read_page_text(&path)
+            .map_err(map_wiki)?
+            .map(|t| page_version(&t)),
     }));
     if let Some(t) = &page.frontmatter.title {
         body.0["title"] = json!(t);
@@ -105,6 +114,203 @@ pub async fn read_log(
     Ok(Json(json!({
         "log": log,
         "present": log.is_some(),
+    })))
+}
+
+// ---------------------------------------------------------------- 写入（Q058）
+
+/// 乐观并发版本号：**磁盘上那份原文**的 sha256。
+///
+/// 用原文而不是 `render_page(parse_page(..))` 的结果：后者会把 frontmatter 重排、
+/// 吃掉结尾空行，于是「用户手上那一版」与「库里那一版」算出来的版本对不上，
+/// CAS 会误判冲突（`WikiStore::read_page_text` 的文档里也记了这条）。
+fn page_version(text: &str) -> String {
+    quill_backup::sha256_bytes(text.as_bytes())
+}
+
+const PUT_WHERE: &str = "PUT /api/wiki/pages/{path}";
+
+const DELETE_WHERE: &str = "DELETE /api/wiki/pages/{path}";
+
+/// 写完之后重建 `index.md`，返回条目数。
+fn rebuild_index(store: &WikiStore) -> Result<usize, ApiError> {
+    let pages = store.load_all_pages().map_err(map_wiki)?;
+    let idx = quill_wiki::ingest::build_index(&pages);
+    store.write_index(&idx.render()).map_err(map_wiki)?;
+    Ok(idx.len())
+}
+
+/// 版本对不上时统一走这条：**把当前版本原样回给用户**，否则他没法重试
+/// （不知道现在是什么版本，重试只会再撞一次）。
+fn version_conflict(path: &str, current: &str, why: &'static str) -> ApiError {
+    ApiError::conflict(
+        format!(
+            "资料库页面 {path:?} 的版本对不上：{why}。当前版本是 {current:?}。\
+             下一步：重新 GET /api/wiki/pages/{path} 拿到最新 content 与 version，\
+             在最新内容上重做改动，再把新的 version 带回来。"
+        ),
+        "先取最新版本再重试；不要在旧版本上强行覆盖",
+    )
+}
+
+/// `PUT /api/wiki/pages/{path}` —— 新建或覆盖一页，带乐观并发。
+///
+/// 契约（前端 `ui/web/src/memory/api.ts` 的 `WIKI_WRITE_ROUTE` 指的就是它）：
+/// - `expected_version` **缺省或 null** = 「这一页必须还不存在」（新建）。已存在 → 409。
+/// - `expected_version` 给了值 = 「我看到的就是这一版」（覆盖）。对不上 → 409；
+///   页面已被删掉同样算对不上（回 409 而不是「那就新建一份」，否则一次并发删除
+///   会悄悄变成一次重建）。
+/// - `content` 必须**能解析成合法页面**（`page_from_wire`），否则 400。不校验的话，
+///   写坏一次就能让 `index.md` 多出一条读不回来的页，而下次 ingest 会把它当既有页。
+/// - 成功：写文件 → 重建 `index.md` → 追加一条变更日志 →
+///   `{path, version, index_entries, created}`（新建 201、覆盖 200）。
+pub async fn put_page(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(path): Path<String>,
+    JsonBody(body): JsonBody,
+) -> Result<Response, ApiError> {
+    let store = store_for(&state, &user);
+    crate::api_experts::only_keys(&body, &["content", "expected_version"], PUT_WHERE)?;
+
+    let Some(content) = opt_str(&body, "content", PUT_WHERE)? else {
+        return Err(ApiError::bad_request(format!(
+            "缺少必填字段 {PUT_WHERE}.content。\
+             下一步：{{\"content\":\"---\\ntitle: 页\\ntype: concept\\ncreated: 2026-10-04\\nupdated: 2026-10-04\\n---\\n\\n正文。\",\"expected_version\":null}}"
+        )));
+    };
+    let expected = opt_str(&body, "expected_version", PUT_WHERE)?;
+
+    // 先校验内容再谈并发：一份根本写不进去的内容，报 409 没有意义。
+    page_from_wire(&KnowledgePage {
+        rel_path: path.clone(),
+        content: content.clone(),
+    })
+    .map_err(|e| {
+        ApiError::bad_request(format!(
+            "这一页写不进去：{e}。\
+             下一步：按资料库 schema 写（第一行必须是 `---`，frontmatter 必须闭合），\
+             参考 GET /api/wiki/pages/index.md 的现有形状。"
+        ))
+    })?;
+
+    let current = store.read_page_text(&path).map_err(map_wiki)?;
+    let current_version = current.as_deref().map(page_version);
+    match (&expected, &current_version) {
+        (None, Some(have)) => {
+            return Err(version_conflict(
+                &path,
+                have,
+                "它已经存在，而这次请求说「应当还没有」",
+            ))
+        }
+        (Some(want), Some(have)) if want != have => {
+            return Err(version_conflict(&path, have, "你手上那一版已经过期"))
+        }
+        (Some(_), None) => {
+            return Err(version_conflict(
+                &path,
+                "",
+                "它已经被删掉了，而这次请求说「应当还有」",
+            ))
+        }
+        _ => {}
+    }
+    let created = current_version.is_none();
+
+    store.write_page(&path, &content).map_err(map_wiki)?;
+    let index_entries = rebuild_index(&store)?;
+    let verb = if created { "新建" } else { "覆盖" };
+    store
+        .append_log(
+            &LogEntry::new(
+                Date::today(),
+                // 手写页面也走 `Ingest` 这一类：变更日志目前只有 ingest / query / lint
+                // 三种，而这是一次「内容进了资料库」，不是一次查询。正文里写清了
+                // 它是通过 HTTP 手写的，所以读日志的人不会把它当成模型摄入。
+                LogOp::Ingest,
+                path.clone(),
+                format!("通过 HTTP {verb}页面 `{path}`。index.md 共 {index_entries} 条。"),
+            )
+            .render(),
+        )
+        .map_err(map_wiki)?;
+
+    let status = if created {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok((
+        status,
+        Json(json!({
+            "path": path,
+            "version": page_version(&content),
+            "index_entries": index_entries,
+            "created": created,
+        })),
+    )
+        .into_response())
+}
+
+/// `DELETE /api/wiki/pages/{path}?expected_version=...` 的查询参数。
+#[derive(Debug, serde::Deserialize)]
+pub struct DeleteQuery {
+    pub expected_version: Option<String>,
+}
+
+/// `DELETE /api/wiki/pages/{path}?expected_version=...` —— 删一页，同样带乐观并发。
+///
+/// 删除**必须**带 `expected_version`：删除不可逆，而不带版本号的删除在两个人
+/// 同时编辑时会删掉别人刚写的那一版。缺这个参数 → 400，**不是**「那就直接删」。
+pub async fn delete_page(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(path): Path<String>,
+    Query(q): Query<DeleteQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let store = store_for(&state, &user);
+    let Some(want) = q
+        .expected_version
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    else {
+        return Err(ApiError::bad_request(format!(
+            "缺少查询参数 {DELETE_WHERE}?expected_version=...。删除不可逆，\
+             必须带上你看到的那一版，否则会删掉别人刚写的内容。\
+             下一步：先 GET /api/wiki/pages/{path} 拿到 version，再带着它删。"
+        )));
+    };
+
+    let Some(text) = store.read_page_text(&path).map_err(map_wiki)? else {
+        return Err(ApiError::entity_not_found(format!(
+            "资料库里没有 {path:?} 这一页，没有可删的东西。"
+        )));
+    };
+    let have = page_version(&text);
+    if want != have {
+        return Err(version_conflict(&path, &have, "你手上那一版已经过期"));
+    }
+
+    store.remove_page(&path).map_err(map_wiki)?;
+    let index_entries = rebuild_index(&store)?;
+    store
+        .append_log(
+            &LogEntry::new(
+                Date::today(),
+                LogOp::Ingest,
+                path.clone(),
+                format!("通过 HTTP 删除页面 `{path}`。index.md 共 {index_entries} 条。"),
+            )
+            .render(),
+        )
+        .map_err(map_wiki)?;
+
+    Ok(Json(json!({
+        "path": path,
+        "deleted": true,
+        "index_entries": index_entries,
     })))
 }
 

@@ -208,6 +208,35 @@ impl WikiStore {
         Ok(parse_page(rel, &text))
     }
 
+    /// 读 wiki 层文件的**原样文本**（不经过 `parse_page`）。
+    ///
+    /// 为什么单独要一个：写入接口的乐观并发版本号必须是「磁盘上那份内容」的指纹。
+    /// 若改用 `read_page` + `render_page`，算出来的是**解析并归一化之后**的形状
+    /// （frontmatter 重排、空白处理），用户手上那份与库里那份的版本就会对不上，
+    /// CAS 会误判成冲突。缺页返回 `Ok(None)` —— 「没有这一页」是正常状态，
+    /// 不是 `read_page` 那种 `NotFound` 错误。
+    pub fn read_page_text(&self, rel: &str) -> Result<Option<String>, WikiError> {
+        let p = self.resolve(DIR_WIKI, rel)?;
+        match read_utf8(&p) {
+            Ok(t) => Ok(Some(t)),
+            Err(WikiError::Io { source, .. }) if source.kind() == io::ErrorKind::NotFound => {
+                Ok(None)
+            }
+            Err(other) => Err(other),
+        }
+    }
+
+    /// 删掉 wiki 层的一页。返回 `false` 表示这一页本来就不存在（**不是错误**：
+    /// 调用方要拿它区分「删掉了」与「本来就没有」，好如实回话）。
+    pub fn remove_page(&self, rel: &str) -> Result<bool, WikiError> {
+        let p = self.resolve(DIR_WIKI, rel)?;
+        match std::fs::remove_file(&p) {
+            Ok(()) => Ok(true),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(source) => Err(WikiError::Io { path: p, source }),
+        }
+    }
+
     pub fn write_page(&self, rel: &str, content: &str) -> Result<(), WikiError> {
         let p = self.resolve(DIR_WIKI, rel)?;
         if let Some(parent) = p.parent() {
@@ -412,6 +441,51 @@ mod tests {
         let s = WikiStore::new("/base", user(1));
         let p = s.resolve(DIR_WIKI, "concepts/a/b.md").expect("应放行");
         assert!(p.ends_with("concepts/a/b.md"));
+    }
+
+    #[test]
+    fn page_text_is_the_bytes_on_disk_and_missing_is_none() {
+        let root = tmp_root("page-text");
+        let s = WikiStore::new(&root, user(1));
+        s.ensure_layout().expect("建三层");
+        // 刻意用「解析会归一化」的内容：结尾多一个空行、frontmatter 键序乱。
+        let raw = "---\ntype: concept\ntitle: 页\ncreated: 2026-10-04\nupdated: 2026-10-04\n---\n\n正文。\n\n";
+        s.write_page("concepts/页.md", raw).expect("写页");
+        assert_eq!(
+            s.read_page_text("concepts/页.md")
+                .expect("读原文")
+                .as_deref(),
+            Some(raw),
+            "读到的必须是磁盘上那份原文；若走了 parse_page/render_page，结尾空行会被吃掉，\
+             版本号就会跟着漂"
+        );
+        assert_eq!(
+            s.read_page_text("concepts/没有这页.md")
+                .expect("缺页不是错误"),
+            None,
+            "缺页要回 None，不能报错 —— 调用方拿它判「这一页还不存在」"
+        );
+    }
+
+    #[test]
+    fn remove_page_reports_whether_it_existed() {
+        let root = tmp_root("remove-page");
+        let s = WikiStore::new(&root, user(1));
+        s.ensure_layout().expect("建三层");
+        s.write_page(
+            "a.md",
+            "---\ntitle: 甲\ntype: concept\ncreated: 2026-10-04\nupdated: 2026-10-04\n---\n\n甲\n",
+        )
+        .expect("写页");
+        assert!(
+            s.remove_page("a.md").expect("删应成功"),
+            "存在的一页要报 true"
+        );
+        assert!(
+            !s.remove_page("a.md").expect("再删不是错误"),
+            "本来就没有要报 false"
+        );
+        assert_eq!(s.read_page_text("a.md").expect("读"), None);
     }
 
     #[test]

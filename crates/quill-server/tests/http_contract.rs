@@ -413,7 +413,7 @@ async fn created_session_id_is_byte_identical_to_the_listed_one() {
 async fn every_contract_route_responds_and_is_never_a_false_success() {
     // 「已实现」清单必须跟着实现一起长，否则新接通的路由会因为不再返回 501
     // 而被判成「假成功」——这正是本测试要抓的东西，所以清单不能手懒。
-    const IMPLEMENTED: [(&str, &str); 64] = [
+    const IMPLEMENTED: [(&str, &str); 66] = [
         ("GET", "/api/version"),
         ("GET", "/api/auth/me"),
         ("GET", "/api/healthz"),
@@ -482,8 +482,14 @@ async fn every_contract_route_responds_and_is_never_a_false_success() {
         ("POST", "/api/sessions/{id}/messages"),
         ("GET", "/api/wiki/pages"),
         ("GET", "/api/wiki/pages/{path}"),
-        // 只读索引的检索（Q035/Q036 那一批，2026-10-08 接通）：写入与问答
-        // （ingest / query）仍是 501 桩，所以只登记 search 这一条。
+        // 页面的**手写增删改**（Q058，2026-10-09 接通）。两条都要求 `expected_version`
+        // （PUT 从 body、DELETE 从 query），所以本测试发空请求拿到的是 400 —— 只要
+        // **不是 501** 就说明真实现了，这正是这里要钉的。
+        ("PUT", "/api/wiki/pages/{path}"),
+        ("DELETE", "/api/wiki/pages/{path}"),
+        // 只读索引的检索（Q035/Q036 那一批，2026-10-08 接通）。仍要模型配合的
+        // ingest（读源文产出页面）与 query（读页面作答）是 501 桩，属 Q057 ——
+        // 所以这两条**不在这份清单里**（不在 = 本测试要求它们返回 501）。
         ("POST", "/api/wiki/search"),
         ("GET", "/api/wiki/index"),
         ("GET", "/api/wiki/log"),

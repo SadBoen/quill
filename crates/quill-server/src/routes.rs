@@ -121,10 +121,18 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/usage", get(api_chat::usage));
 
     // 只读端点与「只读索引」的检索已接通（不需要模型）：pages / pages/{path} /
-    // search / index / log。写入与问答（ingest / query）要模型配合，仍是 501 桩。
+    // search / index / log。**页面的手写增删改也接通了**（PUT/DELETE pages/{path}，
+    // 带 expected_version 乐观并发，同样不需要模型，见 Q058）。
+    // 仍然要模型配合的只有 ingest（读源文产出页面）与 query（读页面作答）—— 那两条
+    // 是 501 桩，属 Q057。
     let wiki = Router::new()
         .route("/api/wiki/pages", get(crate::api_wiki::list_pages))
-        .route("/api/wiki/pages/{*path}", get(crate::api_wiki::get_page))
+        .route(
+            "/api/wiki/pages/{*path}",
+            get(crate::api_wiki::get_page)
+                .put(crate::api_wiki::put_page)
+                .delete(crate::api_wiki::delete_page),
+        )
         .route(
             "/api/wiki/ingest",
             post(|_u: crate::auth::AuthUser| async { not_implemented("POST", "/api/wiki/ingest") }),
@@ -444,6 +452,11 @@ pub const CONTRACT_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/usage"),
     ("GET", "/api/wiki/pages"),
     ("GET", "/api/wiki/pages/{path}"),
+    // 手写页面的增删改（Q058）。前端 `ui/web/src/memory/api.ts` 的
+    // `WIKI_WRITE_ROUTE` 就是 `PUT /api/wiki/pages/{path}` —— 这条契约先在前端定下，
+    // 后端这次把它接上。两条都带 `expected_version` 乐观并发。
+    ("PUT", "/api/wiki/pages/{path}"),
+    ("DELETE", "/api/wiki/pages/{path}"),
     ("POST", "/api/wiki/ingest"),
     ("POST", "/api/wiki/query"),
     ("POST", "/api/wiki/search"),

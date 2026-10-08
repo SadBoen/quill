@@ -119,6 +119,41 @@ impl Date {
     pub fn day(&self) -> u8 {
         self.day
     }
+
+    /// 从「1970-01-01 起的天数」算出日期（Howard Hinnant 的 `civil_from_days`）。
+    ///
+    /// 为什么单独抽一层：`today()` 依赖系统时钟，闰年/跨月这类边界**测不了**；
+    /// 这一层喂进去的是固定天数，可以逐条钉住。
+    pub fn from_unix_days(days: i64) -> Result<Self, DateError> {
+        // 纪元先挪到 0000-03-01，让闰日落在「年」的末尾，闰年规则就只剩一条。
+        let z = days + 719_468;
+        let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+        let doe = z - era * 146_097; // [0, 146096]
+        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+        let y = yoe + era * 400;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+        let mp = (5 * doy + 2) / 153; // [0, 11]，3 月起算
+        let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+        let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+        let year = if m <= 2 { y + 1 } else { y };
+        Self::new(year as u16, m as u8, d as u8)
+    }
+
+    /// 今天（UTC）。资料库变更日志的日期用的就是它。
+    ///
+    /// 系统时钟不可用（理论上不会）时退到纪元日，而不是 panic ——
+    /// 一条日志的日期不该让整次写入失败。
+    pub fn today() -> Self {
+        let days = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| (d.as_secs() / 86_400) as i64)
+            .unwrap_or(0);
+        Self::from_unix_days(days).unwrap_or(Self {
+            year: 1970,
+            month: 1,
+            day: 1,
+        })
+    }
 }
 
 impl fmt::Display for Date {
@@ -188,5 +223,50 @@ mod tests {
 
         assert!(Date::parse("2024-02-29").is_ok());
         assert!(Date::parse("2026-02-29").is_err());
+    }
+
+    #[test]
+    fn unix_days_land_on_the_right_civil_date() {
+        // 纪元当天、以及闰年/跨月/跨年这几处最容易算错的地方。
+        assert_eq!(Date::from_unix_days(0).unwrap().to_string(), "1970-01-01");
+        assert_eq!(
+            Date::from_unix_days(19_723).unwrap().to_string(),
+            "2024-01-01"
+        );
+        assert_eq!(
+            Date::from_unix_days(19_782).unwrap().to_string(),
+            "2024-02-29"
+        );
+        assert_eq!(
+            Date::from_unix_days(19_783).unwrap().to_string(),
+            "2024-03-01"
+        );
+        // 负天数（1970 之前）也要对，别在 0 附近取整取歪。
+        assert_eq!(Date::from_unix_days(-1).unwrap().to_string(), "1969-12-31");
+        assert_eq!(
+            Date::from_unix_days(-365).unwrap().to_string(),
+            "1969-01-01"
+        );
+        // 世纪闰年：2000-02-29 存在（1900 不是闰年，这一条正好跨过去）。
+        assert_eq!(
+            Date::from_unix_days(11_016).unwrap().to_string(),
+            "2000-02-29"
+        );
+    }
+
+    #[test]
+    fn today_is_a_usable_date_and_matches_the_clock_day() {
+        // 不钉具体日期（会随运行时间漂），只钉「是个合法日期、且与系统时钟同一天」。
+        let today = Date::today();
+        let days = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("测试机时钟应在 1970 之后")
+            .as_secs() as i64
+            / 86_400;
+        assert_eq!(today, Date::from_unix_days(days).expect("当天必须可表示"));
+        assert!(
+            Date::parse(&today.to_string()).is_ok(),
+            "today 必须能原样解析回来"
+        );
     }
 }
