@@ -226,6 +226,111 @@ pub fn soft_delete_session(
     })
 }
 
+// ---------------------------------------------------------------- 消息（messages）
+
+/// 按 `seq` 升序列出某会话的全部消息。
+pub const MESSAGES_SQL: &str = "SELECT hex(id) AS id, seq, role, status, content, reasoning, \
+     input_tokens, output_tokens, turn_ms, error_code, created_at \
+     FROM messages WHERE user_id = ? AND session_id = ? ORDER BY seq";
+
+/// 最后一条 **assistant** 且 `input_tokens > 0` 的入参大小 —— 上下文占用用它。
+/// 取不到就是 `None`（还没跟模型说过话），**不是 0**。
+pub const LAST_INPUT_TOKENS_SQL: &str = "SELECT input_tokens FROM messages \
+     WHERE user_id = ? AND session_id = ? AND role = 'assistant' \
+     AND input_tokens > 0 ORDER BY seq DESC LIMIT 1";
+
+/// 对话段的正文（只取 user/assistant，工具与系统消息不算「对话」）。
+pub const DIALOG_CONTENTS_SQL: &str = "SELECT content FROM messages \
+     WHERE user_id = ? AND session_id = ? AND role IN ('user','assistant')";
+
+/// 一条消息。字段与 `MESSAGES_SQL` 的列一一对应。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageRow {
+    pub id: String,
+    pub seq: i64,
+    pub role: String,
+    pub status: String,
+    pub content: String,
+    pub reasoning: String,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub turn_ms: i64,
+    pub error_code: String,
+    pub created_at: i64,
+}
+
+/// 列某会话的全部消息。
+pub fn list_messages(
+    db: &DbBridge,
+    uid: UserId,
+    sid: [u8; 16],
+) -> Result<Vec<MessageRow>, AgentError> {
+    db.call(move |pool, _rt| {
+        Box::pin(async move {
+            let out = sqlx::query(MESSAGES_SQL)
+                .bind(uid.as_bytes().to_vec())
+                .bind(sid.to_vec())
+                .fetch_all(&pool)
+                .await
+                .map_err(|e| storage_error("列消息", e))?;
+            Ok(out
+                .iter()
+                .map(|r| MessageRow {
+                    id: col_str(r, "id"),
+                    seq: col_i64(r, "seq"),
+                    role: col_str(r, "role"),
+                    status: col_str(r, "status"),
+                    content: col_str(r, "content"),
+                    reasoning: col_str(r, "reasoning"),
+                    input_tokens: col_i64(r, "input_tokens"),
+                    output_tokens: col_i64(r, "output_tokens"),
+                    turn_ms: col_i64(r, "turn_ms"),
+                    error_code: col_str(r, "error_code"),
+                    created_at: col_i64(r, "created_at"),
+                })
+                .collect())
+        })
+    })
+}
+
+/// 上下文占用的实测值：最后一条 assistant 的 `input_tokens`。
+pub fn last_assistant_input_tokens(
+    db: &DbBridge,
+    uid: UserId,
+    sid: [u8; 16],
+) -> Result<Option<i64>, AgentError> {
+    db.call(move |pool, _rt| {
+        Box::pin(async move {
+            sqlx::query_scalar(LAST_INPUT_TOKENS_SQL)
+                .bind(uid.as_bytes().to_vec())
+                .bind(sid.to_vec())
+                .fetch_optional(&pool)
+                .await
+                .map_err(|e| storage_error("读上下文占用", e))
+        })
+    })
+}
+
+/// 对话段（user/assistant）的字符总数。**是字符数不是 token 数** —— quill 没有
+/// 分词器，把字符说成 token 就是凭空造数字（见 `session_metrics`）。
+pub fn dialog_content_chars(
+    db: &DbBridge,
+    uid: UserId,
+    sid: [u8; 16],
+) -> Result<usize, AgentError> {
+    db.call(move |pool, _rt| {
+        Box::pin(async move {
+            let texts: Vec<String> = sqlx::query_scalar(DIALOG_CONTENTS_SQL)
+                .bind(uid.as_bytes().to_vec())
+                .bind(sid.to_vec())
+                .fetch_all(&pool)
+                .await
+                .map_err(|e| storage_error("读对话字符数", e))?;
+            Ok(texts.iter().map(|t| t.chars().count()).sum())
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,5 +357,33 @@ mod tests {
     fn insert_and_set_expert_are_two_statements() {
         assert!(INSERT_SQL.starts_with("INSERT INTO sessions"));
         assert!(SET_EXPERT_SQL.starts_with("UPDATE sessions SET expert_id"));
+    }
+
+    #[test]
+    fn messages_are_scoped_by_user_and_session_and_ordered() {
+        assert!(MESSAGES_SQL.contains("user_id = ?"), "必须按用户隔离");
+        assert!(MESSAGES_SQL.contains("session_id = ?"), "必须按会话隔离");
+        assert!(
+            MESSAGES_SQL.contains("ORDER BY seq"),
+            "顺序由 seq 决定，不能靠插入顺序"
+        );
+    }
+
+    #[test]
+    fn context_usage_takes_the_last_reported_assistant_input() {
+        // 三条一起构成「实测值」的定义，少一条就会算错上下文占用：
+        // 只看 assistant（用户那条没有入参）、只要 > 0（0 是没报，不是真的 0）、
+        // 取最后一条（seq DESC LIMIT 1）。
+        assert!(LAST_INPUT_TOKENS_SQL.contains("role = 'assistant'"));
+        assert!(LAST_INPUT_TOKENS_SQL.contains("input_tokens > 0"));
+        assert!(LAST_INPUT_TOKENS_SQL.contains("ORDER BY seq DESC LIMIT 1"));
+    }
+
+    #[test]
+    fn dialog_chars_only_count_user_and_assistant() {
+        assert!(
+            DIALOG_CONTENTS_SQL.contains("role IN ('user','assistant')"),
+            "工具/系统消息不算「对话段」，算进去会让上下文分段虚高"
+        );
     }
 }

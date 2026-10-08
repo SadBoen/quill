@@ -350,44 +350,25 @@ pub async fn list_messages(
     let uid = user.0.user_id;
     let sid = parse_id(&id)?;
     ensure_session(db, uid, sid).await?;
-    let rows = db
-        .call(move |pool, _rt| {
-            Box::pin(async move {
-                let r: Result<Vec<Value>, quill_agent::AgentError> = async {
-                    let out = sqlx::query(
-                        "SELECT hex(id) AS id, seq, role, status, content, reasoning, \
-                         input_tokens, output_tokens, turn_ms, error_code, created_at \
-                         FROM messages WHERE user_id = ? AND session_id = ? ORDER BY seq",
-                    )
-                    .bind(uid.as_bytes().to_vec())
-                    .bind(sid.to_vec())
-                    .fetch_all(&pool)
-                    .await
-                    .map_err(|e| crate::db::storage_error("列消息", e))?;
-                    Ok(out
-                        .into_iter()
-                        .map(|row| {
-                            json!({
-                                "id": s(&row, "id"),
-                                "seq": n(&row, "seq"),
-                                "role": s(&row, "role"),
-                                "status": s(&row, "status"),
-                                "content": s(&row, "content"),
-                                "reasoning": s(&row, "reasoning"),
-                                "input_tokens": n(&row, "input_tokens"),
-                                "output_tokens": n(&row, "output_tokens"),
-                                "turn_ms": n(&row, "turn_ms"),
-                                "error_code": s(&row, "error_code"),
-                                "created_at": n(&row, "created_at"),
-                            })
-                        })
-                        .collect())
-                }
-                .await;
-                r
+    let rows = crate::chat_repo::list_messages(db, uid, sid).map_err(storage)?;
+    let rows: Vec<Value> = rows
+        .iter()
+        .map(|m| {
+            json!({
+                "id": m.id,
+                "seq": m.seq,
+                "role": m.role,
+                "status": m.status,
+                "content": m.content,
+                "reasoning": m.reasoning,
+                "input_tokens": m.input_tokens,
+                "output_tokens": m.output_tokens,
+                "turn_ms": m.turn_ms,
+                "error_code": m.error_code,
+                "created_at": m.created_at,
             })
         })
-        .map_err(storage)?;
+        .collect();
 
     Ok(Json(json!({ "messages": rows })).into_response())
 }
@@ -411,27 +392,8 @@ pub async fn context(
     ensure_session(db, uid, sid).await?;
 
     // 实测入参：最后一条 assistant 消息的 input_tokens。
-    let used_tokens: Option<i64> = db
-        .call(move |pool, _rt| {
-            Box::pin(async move {
-                let r: Result<Option<i64>, quill_agent::AgentError> = async {
-                    let v: Option<i64> = sqlx::query_scalar(
-                        "SELECT input_tokens FROM messages \
-                         WHERE user_id = ? AND session_id = ? AND role = 'assistant' \
-                         AND input_tokens > 0 ORDER BY seq DESC LIMIT 1",
-                    )
-                    .bind(uid.as_bytes().to_vec())
-                    .bind(sid.to_vec())
-                    .fetch_optional(&pool)
-                    .await
-                    .map_err(|e| crate::db::storage_error("读上下文占用", e))?;
-                    Ok(v)
-                }
-                .await;
-                r
-            })
-        })
-        .map_err(storage)?;
+    let used_tokens =
+        crate::chat_repo::last_assistant_input_tokens(db, uid, sid).map_err(storage)?;
 
     // 构成：按与聊天路径**完全相同**的方式重建一遍工具表，然后按增量切片。
     // 复用真实的 builder 而不是另写一份统计 —— 另写一份必然与实际发送的请求漂移。
@@ -513,25 +475,7 @@ async fn load_history_chars(
     uid: quill_domain::UserId,
     sid: [u8; 16],
 ) -> Result<usize, ApiError> {
-    db.call(move |pool, _rt| {
-        Box::pin(async move {
-            let r: Result<usize, quill_agent::AgentError> = async {
-                let texts: Vec<String> = sqlx::query_scalar(
-                    "SELECT content FROM messages \
-                     WHERE user_id = ? AND session_id = ? AND role IN ('user','assistant')",
-                )
-                .bind(uid.as_bytes().to_vec())
-                .bind(sid.to_vec())
-                .fetch_all(&pool)
-                .await
-                .map_err(|e| crate::db::storage_error("读对话字符数", e))?;
-                Ok(texts.iter().map(|t| t.chars().count()).sum())
-            }
-            .await;
-            r
-        })
-    })
-    .map_err(storage)
+    crate::chat_repo::dialog_content_chars(db, uid, sid).map_err(storage)
 }
 
 /// 会话级 Token 统计。界面那排指标 chip 的数据源。
