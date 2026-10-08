@@ -62,7 +62,8 @@ typecheck·lint·vitest·build / 四道文本门禁。
 判据只能人工：失败只在真点下去之后才存在。每个入口要么真通，要么明确写成未接通。
 
 ### B1-2 会话改名返 405，界面要如实提示
-`PATCH /api/sessions/{id}` 未注册（`routes.rs` 只挂 get + delete）。界面按实情提示。
+**已修（2026-10-08，Q051）**：`PATCH /api/sessions/{id}` 已注册（`routes.rs` 的 `.patch(api_chat::rename)`），
+改名有真出口；这条原来记的「只挂 get + delete」已不成立（2026-10-09 复核时更正）。
 
 ### B1-3 未注册 ≠ 501，界面要分清三种
 `capabilityGaps.ts` 要区分：已实现 / 已登记但 501 / 路由压根不存在（404）。
