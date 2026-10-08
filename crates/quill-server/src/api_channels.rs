@@ -31,6 +31,7 @@ use crate::body::JsonBody;
 use crate::channels::store::{self, ChannelRow};
 use crate::channels::weixin::{self, QrStatus, Session};
 use crate::error::ApiError;
+use crate::jsonx::{need_str, opt_str};
 use crate::state::AppState;
 
 // ------------------------------------------------------------------ REST 线
@@ -67,18 +68,18 @@ pub async fn upsert(
         "POST /api/channels",
     )?;
 
-    let kind = req_str(&body, "kind")?;
+    let kind = need_str(&body, "kind", "通道请求")?;
     if !store::is_supported(&kind) {
         return Err(ApiError::bad_request(format!(
             "不支持的通道类型 {kind}。本实例支持：{}。",
             store::SUPPORTED.join("、")
         )));
     }
-    let name = opt_str(&body, "name")?.unwrap_or_else(|| default_name(&kind));
+    let name = opt_str(&body, "name", "通道请求")?.unwrap_or_else(|| default_name(&kind));
     let enabled = opt_bool(&body, "enabled")?.unwrap_or(false);
 
     // 通道 id：客户端可以指定（改既有那条），不指定就按类型生成。
-    let channel_id = match opt_str(&body, "channel_id")? {
+    let channel_id = match opt_str(&body, "channel_id", "通道请求")? {
         Some(s) if !s.trim().is_empty() => s.trim().to_string(),
         _ => format!("{kind}-main"),
     };
@@ -179,8 +180,9 @@ pub async fn weixin_qr_poll(
         &["qrcode_token", "channel_id"],
         "POST /api/channels/weixin/qrcode/poll",
     )?;
-    let token = req_str(&body, "qrcode_token")?;
-    let channel_id = opt_str(&body, "channel_id")?.unwrap_or_else(|| "weixin-main".into());
+    let token = need_str(&body, "qrcode_token", "通道请求")?;
+    let channel_id =
+        opt_str(&body, "channel_id", "通道请求")?.unwrap_or_else(|| "weixin-main".into());
     validate_channel_id(&channel_id)?;
 
     let db = state.db()?;
@@ -655,32 +657,6 @@ fn default_name(kind: &str) -> String {
     match kind {
         "weixin" => "我的微信".to_string(),
         _ => kind.to_string(),
-    }
-}
-
-fn req_str(body: &Value, key: &str) -> Result<String, ApiError> {
-    match body.get(key) {
-        Some(Value::String(s)) if !s.trim().is_empty() => Ok(s.trim().to_string()),
-        Some(Value::String(_)) => Err(ApiError::bad_request(format!("{key} 不能是空串。"))),
-        Some(other) => Err(ApiError::bad_request(format!(
-            "{key} 必须是字符串，收到 {}。",
-            match other {
-                Value::Null => "null",
-                Value::Bool(_) => "布尔",
-                Value::Number(_) => "数字",
-                Value::Array(_) => "数组",
-                _ => "对象",
-            }
-        ))),
-        None => Err(ApiError::bad_request(format!("缺少必填字段 {key}。"))),
-    }
-}
-
-fn opt_str(body: &Value, key: &str) -> Result<Option<String>, ApiError> {
-    match body.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(s)) => Ok(Some(s.clone())),
-        Some(_) => Err(ApiError::bad_request(format!("{key} 必须是字符串。"))),
     }
 }
 

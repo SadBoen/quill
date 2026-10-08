@@ -34,6 +34,7 @@ use crate::auth::AuthUser;
 use crate::body::JsonBody;
 use crate::error::ApiError;
 use crate::experts_repo::SqlxExpertRepository;
+use crate::jsonx::{need_str, opt_str, type_name};
 use crate::state::AppState;
 use crate::teams_repo::{self, NewTeamRow, TeamRow};
 
@@ -57,10 +58,10 @@ pub async fn create(
         "POST /api/teams",
     )?;
 
-    let team_id = parse_team_id(&need_str(&body, "team_id")?, "team_id")?;
-    let name = need_str(&body, "name")?;
-    let description = opt_str(&body, "description")?;
-    let leader = parse_expert(&need_str(&body, "leader_id")?, "leader_id")?;
+    let team_id = parse_team_id(&need_str(&body, "team_id", "建团请求")?, "team_id")?;
+    let name = need_str(&body, "name", "建团请求")?;
+    let description = opt_str(&body, "description", "建团请求")?;
+    let leader = parse_expert(&need_str(&body, "leader_id", "建团请求")?, "leader_id")?;
     let members = parse_member_ids(&body)?;
     let roster = roster_of(&state, user.0.user_id)?;
 
@@ -171,17 +172,17 @@ pub async fn patch(
     )?
     .ok_or_else(|| team_not_found(team_id.as_str()))?;
 
-    let name = match opt_str(&body, "name")? {
+    let name = match opt_str(&body, "name", "改团请求")? {
         Some(n) => n,
         None => current.name.clone(),
     };
     // description 的省略 / null 语义与 model 字段一致：省略 = 沿用，null = 清除。
     let description = if body.get("description").is_some() {
-        opt_str(&body, "description")?
+        opt_str(&body, "description", "改团请求")?
     } else {
         current.description.clone()
     };
-    let leader = match opt_str(&body, "leader_id")? {
+    let leader = match opt_str(&body, "leader_id", "改团请求")? {
         Some(raw) => parse_expert(&raw, "leader_id")?,
         None => parse_expert(&current.leader_id, "leader_id")?,
     };
@@ -423,30 +424,6 @@ fn parse_expert(raw: &str, field: &str) -> Result<ExpertId, ApiError> {
         ))
     })
 }
-
-fn need_str(body: &Value, key: &str) -> Result<String, ApiError> {
-    match body.get(key) {
-        Some(Value::String(s)) => Ok(s.clone()),
-        Some(other) => Err(ApiError::bad_request(format!(
-            "字段 {key} 必须是字符串，实际收到 {}。",
-            type_name(other)
-        ))),
-        None => Err(ApiError::bad_request(format!("缺少必填字段 {key}。"))),
-    }
-}
-
-fn opt_str(body: &Value, key: &str) -> Result<Option<String>, ApiError> {
-    match body.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(s)) => Ok(Some(s.clone())),
-        Some(other) => Err(ApiError::bad_request(format!(
-            "字段 {key} 必须是字符串或 null，实际收到 {}。",
-            type_name(other)
-        ))),
-    }
-}
-
-use crate::jsonx::type_name;
 
 fn new_uuid() -> Result<[u8; 16], ApiError> {
     let mut b = [0u8; 16];

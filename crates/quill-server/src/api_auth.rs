@@ -38,6 +38,7 @@ use serde_json::{json, Value};
 use crate::body::JsonBody;
 use crate::db::DbBridge;
 use crate::error::ApiError;
+use crate::jsonx::need_str;
 use crate::state::AppState;
 
 use quill_control::{ControlError, ControlPlane, RegistrationRequest, SystemClock};
@@ -256,8 +257,8 @@ fn created_admin_json(p: &quill_control::UserProfile) -> Value {
 }
 
 fn registration_request(body: &Value) -> Result<RegistrationRequest, ApiError> {
-    let username = need_str(body, "username")?;
-    let password = need_str(body, "password")?;
+    let username = need_str(body, "username", "注册请求")?;
+    let password = need_str(body, "password", "注册请求")?;
     // display_name 省略时用用户名，跟 Octop 的 `display_name?` 可选语义一致。
     let display = match body.get("display_name") {
         Some(Value::String(s)) if !s.trim().is_empty() => s.trim().to_string(),
@@ -287,8 +288,8 @@ pub async fn login(
     JsonBody(body): JsonBody,
 ) -> Result<Response, ApiError> {
     crate::api_experts::only_keys(&body, &["username", "password"], "POST /api/auth/login")?;
-    let username = need_str(&body, "username")?;
-    let password = need_str(&body, "password")?;
+    let username = need_str(&body, "username", "登录请求")?;
+    let password = need_str(&body, "password", "登录请求")?;
 
     let now = crate::ratelimit::now_ms();
     let peer_segment =
@@ -508,20 +509,6 @@ fn bearer(headers: &HeaderMap) -> Result<String, ApiError> {
         .map(str::to_string)
         .ok_or_else(ApiError::unauthorized)
 }
-
-fn need_str(body: &Value, key: &str) -> Result<String, ApiError> {
-    match body.get(key) {
-        Some(Value::String(s)) if !s.trim().is_empty() => Ok(s.trim().to_string()),
-        Some(Value::String(_)) => Err(ApiError::bad_request(format!("字段 {key} 不能是空串。"))),
-        Some(other) => Err(ApiError::bad_request(format!(
-            "字段 {key} 必须是字符串，实际收到 {}。",
-            type_name(other)
-        ))),
-        None => Err(ApiError::bad_request(format!("缺少必填字段 {key}。"))),
-    }
-}
-
-use crate::jsonx::type_name;
 
 #[cfg(test)]
 mod tests {

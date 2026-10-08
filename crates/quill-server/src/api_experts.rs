@@ -9,6 +9,7 @@ use crate::auth::AuthUser;
 use crate::body::JsonBody;
 use crate::error::ApiError;
 use crate::experts_repo::SqlxExpertRepository;
+use crate::jsonx::{need_str, opt_str, type_name};
 use crate::state::AppState;
 
 /// 工具层用：按同一套可见性规则列出专家。
@@ -53,13 +54,13 @@ pub async fn create(
         "POST /api/experts",
     )?;
     let new = NewExpert {
-        id: expert_id(&body, "id")?,
-        display_name: need_str(&body, "display_name")?,
-        description: need_str(&body, "description")?,
-        instructions: opt_str(&body, "instructions")?.unwrap_or_default(),
-        model: opt_str(&body, "model")?,
+        id: expert_id(&body, "id", "专家请求")?,
+        display_name: need_str(&body, "display_name", "专家请求")?,
+        description: need_str(&body, "description", "专家请求")?,
+        instructions: opt_str(&body, "instructions", "专家请求")?.unwrap_or_default(),
+        model: opt_str(&body, "model", "专家请求")?,
         // 不做存在性校验：模板库是前端静态 vendor 进来的，后端没有模板表可查。
-        source_template: opt_str(&body, "source_template")?,
+        source_template: opt_str(&body, "source_template", "专家请求")?,
     };
     let registry = registry(&state)?;
 
@@ -101,18 +102,18 @@ pub async fn patch(
     let registry = registry(&state)?;
 
     let mut touched = false;
-    if let Some(name) = opt_str(&body, "display_name")? {
+    if let Some(name) = opt_str(&body, "display_name", "专家请求")? {
         map_agent_error("改专家名", registry.rename(&owner, &id, name).map(|_| ()))?;
         touched = true;
     }
-    if let Some(desc) = opt_str(&body, "description")? {
+    if let Some(desc) = opt_str(&body, "description", "专家请求")? {
         map_agent_error(
             "改专家描述",
             registry.redescribe(&owner, &id, desc).map(|_| ()),
         )?;
         touched = true;
     }
-    if let Some(text) = opt_str(&body, "instructions")? {
+    if let Some(text) = opt_str(&body, "instructions", "专家请求")? {
         map_agent_error(
             "改专家人格正文",
             registry.set_instructions(&owner, &id, text).map(|_| ()),
@@ -232,32 +233,8 @@ fn parse_slug(raw: &str) -> Result<ExpertId, ApiError> {
     })
 }
 
-fn expert_id(body: &Value, key: &str) -> Result<ExpertId, ApiError> {
-    parse_slug(&need_str(body, key)?)
-}
-
-fn need_str(body: &Value, key: &str) -> Result<String, ApiError> {
-    match body.get(key) {
-        Some(Value::String(s)) => Ok(s.clone()),
-        Some(other) => Err(ApiError::bad_request(format!(
-            "字段 {key} 必须是字符串，实际收到 {}。",
-            type_name(other)
-        ))),
-        None => Err(ApiError::bad_request(format!(
-            "缺少必填字段 {key}。请求体示例：{{\"id\":\"cost-analyst\",\"display_name\":\"成本分析师\",\"description\":\"…\"}}"
-        ))),
-    }
-}
-
-fn opt_str(body: &Value, key: &str) -> Result<Option<String>, ApiError> {
-    match body.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(s)) => Ok(Some(s.clone())),
-        Some(other) => Err(ApiError::bad_request(format!(
-            "字段 {key} 必须是字符串，实际收到 {}。",
-            type_name(other)
-        ))),
-    }
+fn expert_id(body: &Value, key: &str, where_: &str) -> Result<ExpertId, ApiError> {
+    parse_slug(&need_str(body, key, where_)?)
 }
 
 fn opt_bool(body: &Value, key: &str) -> Result<Option<bool>, ApiError> {
@@ -302,8 +279,6 @@ pub(crate) fn only_keys_at(body: &Value, allowed: &[&str], label: &str) -> Resul
         )))
     }
 }
-
-use crate::jsonx::type_name;
 
 pub fn map_agent_error<T>(op: &str, r: Result<T, AgentError>) -> Result<T, ApiError> {
     r.map_err(|e| agent_error_to_api(op, e))

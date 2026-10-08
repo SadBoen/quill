@@ -15,6 +15,7 @@ use crate::auth::AuthUser;
 use crate::body::JsonBody;
 use crate::dispatch_ledger::{DispatchScope, SqlxDispatchLedger};
 use crate::error::ApiError;
+use crate::jsonx::need_str;
 use crate::state::AppState;
 
 pub async fn list_round(
@@ -89,13 +90,14 @@ pub async fn book(
              下一步：先用 GET /api/teams 确认这个 id 还在，再往它派工。"
         )));
     }
-    let room_id = need_str(&body, "room_id")?;
+    let room_id = need_str(&body, "room_id", "派工请求")?;
     let round = need_round(&body)?;
-    let leader = SessionId::parse(&need_str(&body, "leader_session_id")?).map_err(|e| {
-        ApiError::bad_request(format!(
-            "leader_session_id 非法（{e}）：应为 32 位十六进制。"
-        ))
-    })?;
+    let leader =
+        SessionId::parse(&need_str(&body, "leader_session_id", "派工请求")?).map_err(|e| {
+            ApiError::bad_request(format!(
+                "leader_session_id 非法（{e}）：应为 32 位十六进制。"
+            ))
+        })?;
 
     let members = body
         .get("members")
@@ -115,10 +117,11 @@ pub async fn book(
 
     let mut member_sessions: BTreeMap<ExpertId, SessionId> = BTreeMap::new();
     for (i, m) in members.iter().enumerate() {
+        let where_ = format!("members[{i}]");
         only_keys(m, &["expert", "member", "member_session_id"], "members[]")?;
-        let expert = ExpertId::parse(&need_str(m, "expert")?)
+        let expert = ExpertId::parse(&need_str(m, "expert", &where_)?)
             .map_err(|e| ApiError::bad_request(format!("members[{i}].expert 非法（{e}）。")))?;
-        let member = MemberId::parse(&need_str(m, "member")?)
+        let member = MemberId::parse(&need_str(m, "member", &where_)?)
             .map_err(|e| ApiError::bad_request(format!("members[{i}].member 非法（{e}）。")))?;
 
         if !member.as_str().starts_with(&format!("{expert}-")) {
@@ -127,7 +130,7 @@ pub async fn book(
                 member.as_str()
             )));
         }
-        let sid = SessionId::parse(&need_str(m, "member_session_id")?).map_err(|e| {
+        let sid = SessionId::parse(&need_str(m, "member_session_id", &where_)?).map_err(|e| {
             ApiError::bad_request(format!("members[{i}].member_session_id 非法（{e}）。"))
         })?;
         if member_sessions.insert(expert.clone(), sid).is_some() {
@@ -144,9 +147,10 @@ pub async fn book(
 
     let mut items = Vec::new();
     for (i, m) in members.iter().enumerate() {
-        let expert = ExpertId::parse(&need_str(m, "expert")?)
+        let where_ = format!("members[{i}]");
+        let expert = ExpertId::parse(&need_str(m, "expert", &where_)?)
             .map_err(|e| ApiError::bad_request(format!("members[{i}].expert 非法（{e}）。")))?;
-        let member = MemberId::parse(&need_str(m, "member")?)
+        let member = MemberId::parse(&need_str(m, "member", &where_)?)
             .map_err(|e| ApiError::bad_request(format!("members[{i}].member 非法（{e}）。")))?;
         let key = DispatchKey::new(user.0.user_id, room_id.clone(), round, expert.clone())
             .map_err(|e| agent_error_to_api("组装派工键", e))?;
@@ -218,13 +222,14 @@ pub async fn run(
             ))
         })?;
 
-    let room_id = need_str(&body, "room_id")?;
+    let room_id = need_str(&body, "room_id", "派工请求")?;
     let round = need_round(&body)?;
-    let leader = SessionId::parse(&need_str(&body, "leader_session_id")?).map_err(|e| {
-        ApiError::bad_request(format!(
-            "leader_session_id 非法（{e}）：应为 32 位十六进制。"
-        ))
-    })?;
+    let leader =
+        SessionId::parse(&need_str(&body, "leader_session_id", "派工请求")?).map_err(|e| {
+            ApiError::bad_request(format!(
+                "leader_session_id 非法（{e}）：应为 32 位十六进制。"
+            ))
+        })?;
 
     let members = body
         .get("members")
@@ -258,9 +263,10 @@ pub async fn run(
             ],
             "members[]",
         )?;
-        let expert = ExpertId::parse(&need_str(m, "expert")?)
+        let where_ = format!("members[{i}]");
+        let expert = ExpertId::parse(&need_str(m, "expert", &where_)?)
             .map_err(|e| ApiError::bad_request(format!("members[{i}].expert 非法（{e}）。")))?;
-        let member = MemberId::parse(&need_str(m, "member")?)
+        let member = MemberId::parse(&need_str(m, "member", &where_)?)
             .map_err(|e| ApiError::bad_request(format!("members[{i}].member 非法（{e}）。")))?;
         if !member.as_str().starts_with(&format!("{expert}-")) {
             return Err(ApiError::bad_request(format!(
@@ -269,9 +275,9 @@ pub async fn run(
             )));
         }
         // 与 `book` 的区别就在这两行：真执行要知道「这一项叫什么、要它做什么」。
-        let title = need_str(m, "title")?;
-        let instructions = need_str(m, "instructions")?;
-        let sid = SessionId::parse(&need_str(m, "member_session_id")?).map_err(|e| {
+        let title = need_str(m, "title", &where_)?;
+        let instructions = need_str(m, "instructions", &where_)?;
+        let sid = SessionId::parse(&need_str(m, "member_session_id", &where_)?).map_err(|e| {
             ApiError::bad_request(format!("members[{i}].member_session_id 非法（{e}）。"))
         })?;
         if member_sessions.insert(expert.clone(), sid).is_some() {
@@ -458,15 +464,6 @@ fn parse_room_round(query: Option<&str>) -> Result<(String, u32), ApiError> {
     let round = round
         .ok_or_else(|| ApiError::bad_request("缺少查询参数 round（从 0 起）。".to_string()))?;
     Ok((room_id, round))
-}
-
-fn need_str(body: &Value, key: &str) -> Result<String, ApiError> {
-    match body.get(key) {
-        Some(Value::String(s)) if !s.trim().is_empty() => Ok(s.clone()),
-        Some(Value::String(_)) => Err(ApiError::bad_request(format!("字段 {key} 不能为空。"))),
-        Some(_) => Err(ApiError::bad_request(format!("字段 {key} 必须是字符串。"))),
-        None => Err(ApiError::bad_request(format!("缺少必填字段 {key}。"))),
-    }
 }
 
 fn need_round(body: &Value) -> Result<u32, ApiError> {

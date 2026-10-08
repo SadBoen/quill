@@ -23,6 +23,7 @@ use crate::api_experts::{agent_error_to_api, only_keys};
 use crate::auth::AuthUser;
 use crate::body::JsonBody;
 use crate::error::ApiError;
+use crate::jsonx::need_str;
 use crate::state::AppState;
 
 /// 清单格式版本。**不兼容时直接拒**，不要「尽力解析」—— 猜错的清单会写出半套配置，
@@ -263,19 +264,6 @@ pub async fn import(
         "note": "MCP 是全量替换：清单里没有的服务器已被软删。\
                  技能逐条 upsert。凭据（env / headers）不在清单里，需在本机重新填。",
     })))
-}
-
-fn need_str(v: &Value, key: &str, where_: &str) -> Result<String, ApiError> {
-    match v.get(key) {
-        Some(Value::String(s)) if !s.trim().is_empty() => Ok(s.clone()),
-        Some(Value::String(_)) => Err(ApiError::bad_request(format!("{where_}.{key} 不能为空。"))),
-        Some(_) => Err(ApiError::bad_request(format!(
-            "{where_}.{key} 必须是字符串。"
-        ))),
-        None => Err(ApiError::bad_request(format!(
-            "缺少必填字段 {where_}.{key}。"
-        ))),
-    }
 }
 
 fn str_list(v: &Value, key: &str) -> Vec<String> {
