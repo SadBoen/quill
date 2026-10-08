@@ -15,4 +15,5 @@
 pub mod compaction;
 pub mod mcp;
 pub mod mcp_client;
+pub mod retry;
 pub mod state_machine;
