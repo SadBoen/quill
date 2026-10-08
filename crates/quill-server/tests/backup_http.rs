@@ -504,11 +504,31 @@ async fn traversal_and_absolute_names_are_refused_and_write_nothing() {
     let h = Harness::new("traversal");
     let before = snapshot(&h.data_root());
 
+    // 先清掉**上一次**运行可能留下的同名垃圾。备份根是共享的（见 `name` 的说明），
+    // 而任何人在「绕过校验」的坏样子下跑过一次，都会在这里留下 `..\escape` 这类
+    // 目录 —— 那是上一次的账，不该把这一次判红（本测试要证明的是**这一次**的请求
+    // 没有落盘）。只清下面要点名的这几个名字，不碰共享根里的其它东西：
+    // 别的用例正往里写。
+    for leftover in [
+        h.backup_root().join("..\\escape"),
+        h.backup_root().join("C:\\Windows\\x"),
+        h.backup_root().join("C:x"),
+    ] {
+        let _ = std::fs::remove_dir_all(&leftover);
+    }
+
     for bad in [
         "../escape",
         "..\\escape",
         "C:\\Windows\\x",
+        // 盘符相对（没有反斜杠）：Windows 上 `C:x` 指的是「C 盘当前目录」，
+        // 同样是一个客户端不该决定的位置。
+        "C:x",
         "/etc/passwd",
+        // UNC：`\\server\share\x` 是别人机器上的位置，比本机绝对路径更该拒。
+        "\\\\server\\share\\x",
+        // 只有分隔符：任何一侧把它拼进路径都会得到根目录。
+        "/",
         "",
     ] {
         let resp = build_router(h.state())
