@@ -146,6 +146,29 @@ quill 这套资料库（raw/wiki/schema 三层 + `index.md` + 变更日志）来
 ③ `expected_version` 是**我们自己起的名字**（不是 `ETag`/`If-Match`），
 而工作区页（Q059）说的是「ETag 乐观并发」—— 两套说法，真做工作区时要统一。
 
+### B4. 资料库的模型侧协议（`POST /api/wiki/{ingest,query}`）：**自创的 JSON 形状**
+
+**上游怎么做**：xu-wiki（用户自己的项目，公开仓库）的架构是「**CLI 只做确定性的活、
+CLI 不调 LLM**，内容由 agent 决定」（`design-docs/06-query.md` 的 `[PRIN-QRY-3]`；
+`design-docs/05-ingest.md` 的 `[PRIN-ING-1]`「commit 是唯一写盘入口」）。那边**没有**
+「模型输出什么 JSON」这回事 —— agent 直接调 CLI 命令。
+
+**quill 怎么做**（`crates/quill-server/src/wiki_backend.rs`，2026-10-09 / Q057）：
+quill 里那个「agent」就是服务端自己，于是把上游的两段分工映射成
+**模型产出正文 / 答案 → 壳校验并写盘 → `quill-wiki` 重建索引、写日志**。
+为了让结果可判定，要求模型回 JSON：摄入 `{"pages":[{"path":…,"content":…}],"summary":…}`、
+问答 `{"answer":…,"citations":[…]}`。
+
+**为什么自创**：上游没有这个形状（它是 agent 驱动 CLI），而 quill 是常驻服务，
+必须自己把「模型输出」定成机器可判定的东西。
+
+**代价（如实记）**：① 这是**quill 的壳内约定**，换个模型就可能不遵守 —— 所以解析失败、
+页面不合法一律**报错**，绝不静默降级成「这次摄入什么都没做」（那是最坏的结果：
+用户以为存进去了）；② 与 xu-wiki 的**两阶段**（解析暂存 → commit）不同，quill 是一步
+（模型直接产出成品页），没有暂存层，因此上游那套「解析器插件 / SHA256 三路去重 /
+300 行切分」在 quill 侧**完全没有**（差集表见 Q056）；③ 源文必须先放进 raw 层，
+摄入端点只收**路径**不收正文 —— 否则「摄入」就成了无出处的写入。
+
 ---
 
 ## C. 工程侧（对两边都不抄）
