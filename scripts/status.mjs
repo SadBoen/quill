@@ -465,7 +465,11 @@ function countBy(list) {
 export function parseQueue(text) {
   const items = [];
   for (const line of text.split(/\r?\n/)) {
-    const m = /^- \[( |x)\] (Q\d+[a-z]?)\b/.exec(line.trim());
+    // `[~]` 是队列约定的第三种状态：**半成品**（做了前半、不许标 [x]，见 Q106）。
+    // 它必须算进总数且算「未完成」—— 原来只认 `[ ]` 与 `[x]`，于是半成品条目
+    // 被**静默从分母里删掉**（实测：`- [~] Q106` 在文件里，进度却报 68/109，
+    // 而 `grep -c '^- \['` 是 110）。分母少一条的进度比没有进度更容易骗人。
+    const m = /^- \[( |x|~)\] (Q\d+[a-z]?)\b/.exec(line.trim());
     if (m) items.push({ done: m[1] === 'x', id: m[2] });
   }
   const done = items.filter((i) => i.done).length;
