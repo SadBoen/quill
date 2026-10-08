@@ -53,8 +53,10 @@ function serverError(status: number, code: string, detail: string, nextStep: str
 }
 
 /**
- * 统一入口。fetch 按 URL 分派：export / verify 各自的成败由用例决定，
- * 升级那两条路由在本页仍是 501（所以回 501，与后端现状一致）。
+ * 统一入口。fetch 按 URL 分派：export / verify 各自的成败由用例决定。
+ *
+ * 没点名的路由回 501 —— 那是**模拟**，不是后端现状：升级那三条路由现在已经真实现
+ * （Q038–Q040）。这么模拟是为了钉住「桩上不画按钮」这条守卫本身（它平时不触发）。
  */
 function renderPage(handlers: Record<string, () => Promise<Response>>): {
   requests: Array<{ url: string; body: unknown }>
@@ -328,11 +330,11 @@ describe('还原：只有说明，没有按钮', () => {
 /**
  * 升级卡片：2026-10-08 逐页实点时抓到的**第二个**假按钮。
  *
- * `/api/upgrade/*` 在服务端是 501 桩（`crates/quill-server/src/routes.rs` 里
- * 那三个 `not_implemented`），但页面照样画了一个能点的「准备升级」。点下去
- * POST /api/upgrade/prepare 回 501，界面**一个字提示都没有**——
- * `prepare.error` 从来没被端出来过：备份卡片那条 ErrorNotice 的错误链是
- * `backup.error ?? verify.error ?? upgrade.error ?? history.error`，里面没有它。
+ * 当时的现状：`/api/upgrade/*` 在服务端是 501 桩，页面却照样画了一个能点的「准备升级」；
+ * 点下去回 501，界面**一个字提示都没有**（`prepare.error` 从来没被端出来过）。
+ * **2026-10-09 起这两件事都变了**：路由真实现了（Q038–Q040），`prepare.error` 也进了
+ * 升级卡片自己的 `ErrorNotice`。所以下面这些用例改成**模拟** 501 响应来钉住那条守卫：
+ * 桩要是回来，按钮必须自动消失，而不是重新长出一个点了必失败还不报错的东西。
  */
 describe('升级：桩路由上不画能点的按钮', () => {
   it('三条路由都 501 → 不画「准备升级」，也不画「刷新」', async () => {

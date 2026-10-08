@@ -147,9 +147,11 @@ export function AdminBackupPage(): ReactNode {
   const exportUnreadable = backup.isSuccess && backup.data !== undefined && !exportResult
   const verifyUnreadable = verify.isSuccess && verify.data !== undefined && !verifyResult
 
-  // 这三条升级路由在服务端是 501 桩（routes.rs 里那三个 `not_implemented`）。
-  // 桩上画按钮 = 画一个点了必然失败、还不出错的按钮：实点时 POST /api/upgrade/prepare
-  // 回 501，界面零提示，用户以为升级在跑了。所以没实现就不画按钮。
+  // 升级那三条路由**现在已经真实现**（Q038–Q040：check / prepare / history 都有真
+  // handler，`routes.rs` 里不再是 `not_implemented` 桩），所以这段守卫平时不触发。
+  // 它留着是**防御性**的：当初的缺陷是「桩上画按钮」—— 实点时 POST /api/upgrade/prepare
+  // 回 501，界面零提示，用户以为升级在跑了。哪天这几条被改回桩，守卫要能自动把人挡住，
+  // 而不是重新长出一个点了必失败还不报错的按钮（测试用模拟 501 钉住这一支）。
   const upgradeUnavailable =
     routeNotImplemented(upgrade.error) ||
     routeNotImplemented(history.error) ||
