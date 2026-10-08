@@ -46,10 +46,10 @@ pub mod ratelimit;
 pub mod routes;
 pub mod server;
 pub mod session_metrics;
-/// 技能市场的上游客户端（SkillHub）。
+/// 技能市场的上游客户端（SkillHub）。实现在 `skillhub/` 子模块里。
 pub mod skillhub;
-/// SkillHub 技能包的解包与安全上限。
-pub mod skillhub_unpack;
+/// SkillHub 技能包的解包与安全上限（实现在 `skillhub::unpack`；这里保留旧路径）。
+pub use skillhub::unpack as skillhub_unpack;
 pub mod skills_repo;
 /// SSE 传输层：事件编码与「还没结束的响应体」。
 pub mod sse;
