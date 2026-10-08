@@ -12,5 +12,7 @@
 //! **每个模块的头部都要写明它移植自 `vendor/goose` 的哪个文件**（Q016）。
 //! 没写清楚出处的模块，等于把「照 goose 抄」这句话变成不可核对的口号。
 
+pub mod compaction;
 pub mod mcp;
 pub mod mcp_client;
+pub mod state_machine;
