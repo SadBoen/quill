@@ -127,3 +127,20 @@ for (const [k, list] of Object.entries(byKind)) {
   console.log('')
 }
 if (problems.length === 0) console.log('OK: 所有 t() 调用的占位符与 zh 语言包完全一致')
+
+// ---- 退出码：**有问题就必须非 0**（2026-10-08 修，queue Q074）------------------
+// 此前这个脚本里一个 `process.exit` 都没有：它把问题逐条打印得很清楚，然后**照样
+// 退出 0**。CI 里跑的是 `node .i18n-check.mjs`，于是「漏翻译会报红」是句空头承诺 ——
+// 打印得再详细，流水线也永远是绿的（最高指示第 5 条要的是「判据机器可跑」，
+// 一个永远退 0 的判据不是判据）。
+//
+// 实测（本次修的当天）：把一条 zh 文案的 `{{count}}` 改成 `{count}`，
+// 脚本如实报出「死参数 (1)」而退出码是 0；加上这两行之后同一次注入返回 1。
+if (problems.length > 0) {
+  console.error(
+    `\nFAIL: i18n 有 ${problems.length} 个问题（见上）。\n` +
+      '下一步：按每一行的 `文件:行 key 说明` 逐个改；' +
+      '若问题在语言包侧，改 `ui/web/src/i18n/resources.ts`。',
+  )
+  process.exit(1)
+}
