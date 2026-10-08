@@ -69,6 +69,11 @@ pub mod tool_sources;
 /// 渲染）照旧；`ToolRegistry::builtin*` / `with_skills` / `with_mcp_tools` 收的是
 /// `ToolSources` 端口，壳侧实现见 `crate::tool_sources::DbToolSources`。
 pub use quill_core::tools;
+pub mod api_cron;
+/// 定时任务的存储层（queue Q042）。
+pub mod cron_repo;
+/// 定时任务的调度器（queue Q042）：真会触发投递的那一半。
+pub mod cron_scheduler;
 pub mod ui;
 /// 资料库的**模型侧接线**（queue Q057）：`KnowledgeBackend` 的唯一真实现，
 /// 拿这一轮的 provider 调模型。`quill-wiki` 的 ingest / query 只依赖这个端口。

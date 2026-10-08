@@ -84,6 +84,7 @@ rmcp = { version = "3.5.1", default-features = false, features = [
     "client",
     "transport-child-process",
 ] }
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 

@@ -426,7 +426,7 @@ async fn created_session_id_is_byte_identical_to_the_listed_one() {
 async fn every_contract_route_responds_and_is_never_a_false_success() {
     // 「已实现」清单必须跟着实现一起长，否则新接通的路由会因为不再返回 501
     // 而被判成「假成功」——这正是本测试要抓的东西，所以清单不能手懒。
-    const IMPLEMENTED: [(&str, &str); 68] = [
+    const IMPLEMENTED: [(&str, &str); 73] = [
         ("GET", "/api/version"),
         ("GET", "/api/auth/me"),
         ("GET", "/api/healthz"),
@@ -508,6 +508,14 @@ async fn every_contract_route_responds_and_is_never_a_false_success() {
         ("POST", "/api/wiki/query"),
         ("GET", "/api/wiki/index"),
         ("GET", "/api/wiki/log"),
+        // 定时任务（Q042，2026-10-09 接通）：octop 有这套（`cron.py`），quill 去掉了
+        // agent 前缀。`GET/{id}` 打一个不存在的 id 会回 404（不是 501）—— 本测试只要
+        // 「不是 501」，所以这里发空/不存在 id 也算过。
+        ("GET", "/api/cron"),
+        ("POST", "/api/cron"),
+        ("GET", "/api/cron/{id}"),
+        ("PATCH", "/api/cron/{id}"),
+        ("DELETE", "/api/cron/{id}"),
         ("GET", "/api/admin/config"),
         ("PUT", "/api/admin/config"),
         ("GET", "/api/admin/providers"),

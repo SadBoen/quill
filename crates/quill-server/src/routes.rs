@@ -139,6 +139,23 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/wiki/index", get(crate::api_wiki::read_index))
         .route("/api/wiki/log", get(crate::api_wiki::read_log));
 
+    // 定时任务（Q042）。形状对齐 octop 的 `api/routers/cron.py:109-231`
+    // （list / create / get / patch / delete），字段与语义照前端
+    // `ui/web/src/automations/api.ts` 写死的那份契约。
+    // **注意**：octop 挂在 `/agents/{agent_id}/cron` 下，quill 挂在 `/api/cron` ——
+    // 与本项目的通道同一取舍：agent 就是登录用户自己，多一层 agent_id 只会多一个能填错的入口。
+    let cron = Router::new()
+        .route(
+            "/api/cron",
+            get(crate::api_cron::list).post(crate::api_cron::create),
+        )
+        .route(
+            "/api/cron/{id}",
+            get(crate::api_cron::get_one)
+                .patch(crate::api_cron::patch)
+                .delete(crate::api_cron::remove),
+        );
+
     let extensions = Router::new()
         .route(
             "/api/extensions/mcp",
@@ -303,6 +320,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(teams)
         .merge(sessions)
         .merge(wiki)
+        .merge(cron)
         .merge(extensions)
         .merge(backup)
         .merge(upgrade)
@@ -456,6 +474,13 @@ pub const CONTRACT_ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/wiki/search"),
     ("GET", "/api/wiki/index"),
     ("GET", "/api/wiki/log"),
+    // 定时任务（Q042，2026-10-09 接通）。octop 的形状是 `/agents/{agent_id}/cron`
+    // （`cron.py:109-231`），quill 去掉了 agent 前缀（同通道的取舍）。
+    ("GET", "/api/cron"),
+    ("POST", "/api/cron"),
+    ("GET", "/api/cron/{id}"),
+    ("PATCH", "/api/cron/{id}"),
+    ("DELETE", "/api/cron/{id}"),
     ("GET", "/api/extensions/mcp"),
     ("POST", "/api/extensions/mcp"),
     ("PATCH", "/api/extensions/mcp/{name}"),

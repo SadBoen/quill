@@ -32,7 +32,7 @@ const WORKER_THREAD_NAME: &str = "quill-db";
 /// 刻意**不**列 `wiki_index` 与 `plugins`：它们是迁移里存在的死表（Rust 侧零读写，
 /// 见 `docs/CODE-TRUTH.md` 缺陷 7c 与 queue Q104），缺了不影响任何路由。
 /// `schema_version` 也不列：它由迁移器自己维护。
-pub const REQUIRED_TABLES: [&str; 14] = [
+pub const REQUIRED_TABLES: [&str; 15] = [
     // 登录 / 账号（api_auth、middleware）
     "users",
     "sessions_auth",
@@ -53,6 +53,8 @@ pub const REQUIRED_TABLES: [&str; 14] = [
     // 通道与 MBTI（api_channels、api_mbti）
     "channels",
     "mbti_results",
+    // 定时任务（api_cron、cron_scheduler）—— 缺了它 `/api/cron` 与调度器都停摆。
+    "cron_jobs",
 ];
 
 type Job = Box<dyn FnOnce(SqlitePool, &mut Runtime) + Send + 'static>;

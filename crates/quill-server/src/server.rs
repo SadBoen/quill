@@ -284,6 +284,13 @@ pub async fn serve(state: AppState, addr: SocketAddr) -> Result<(), String> {
         println!("  ⚠ WARN {w}");
     }
 
+    // 定时任务的调度器（Q042）：**服务在跑它才在跑**。
+    // 只在有存储时起 —— 没有库就没有任务可投，起了也只是空转。
+    // 测试不经 `serve()`（它们直接用 `build_router`），所以后台循环不会污染用例。
+    if state.db.is_some() {
+        crate::cron_scheduler::spawn(state.clone());
+    }
+
     let app = build_router(state);
     let timeout = shutdown_timeout();
 
