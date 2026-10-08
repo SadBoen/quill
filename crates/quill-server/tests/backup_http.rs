@@ -737,3 +737,158 @@ async fn a_logged_in_non_admin_cannot_reach_any_backup_route() {
         );
     }
 }
+
+/// 用**有效但非 admin**的令牌打一条备份路由，返回 (状态码, 响应体)。
+///
+/// 与上面那条循环用例同一套装置（`state_as(false)`），抽出来是为了让下面三条
+/// 逐路由的用例共用同一份请求构造 —— 三份复制粘贴一旦漂移，钉住的就不是同一件事了。
+async fn non_admin_call(h: &Harness, path: &str, backup_name: &str) -> (StatusCode, String) {
+    let req = Request::builder()
+        .method("POST")
+        .uri(path)
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .header("content-type", "application/json")
+        .body(Body::from(format!("{{\"name\":{backup_name:?}}}")))
+        .expect("构造请求");
+
+    let resp = build_router(h.state_as(false))
+        .oneshot(req)
+        .await
+        .expect("请求失败");
+    let status = resp.status();
+    let text = body_text(resp).await;
+    (status, text)
+}
+
+/// 非 admin 的 403 共同断言。四件事缺一，这条用例都可能变成假绿：
+///
+/// 1. 状态码**逐字**是 403 —— 401 说明令牌根本没被接受（测的就不是 admin 边界），
+///    404/409 说明请求压根没走到鉴权；`is_client_error()` 这种松断言全都放得过去。
+/// 2. 错误码是 `forbidden`，走的是 admin 拒绝那条分支，不是别的路径碰巧也 403。
+/// 3. 响应里不许夹带备份内容或可照抄的还原命令（`db_sha256` / `restored` /
+///    `quill restore`），也不许回显请求里的备份名。
+/// 4. 必须给出可执行的下一步（钉住 403 是「有解释的拒绝」而不是空壳）。
+fn assert_non_admin_403(path: &str, backup_name: &str, status: StatusCode, text: &str) {
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "{path} 对非 admin 必须 403（不是 401/404/409）：{text}"
+    );
+    let envelope = json_of(text);
+    assert_eq!(
+        envelope["error"]["code"],
+        serde_json::json!("forbidden"),
+        "{path} 必须走 forbidden 分支：{text}"
+    );
+    for leak in ["db_sha256", "restored", "quill restore"] {
+        assert!(
+            !text.contains(leak),
+            "{path} 的 403 不许夹带备份内容或还原命令（{leak}）：{text}"
+        );
+    }
+    assert!(
+        !text.contains(backup_name),
+        "{path} 的 403 不许回显请求里的备份名：{text}"
+    );
+    let next = envelope["error"]["next_step"].as_str().unwrap_or_default();
+    assert!(
+        next.contains("admin"),
+        "{path} 的 403 必须说明这是 admin 限制并给出下一步：{text}"
+    );
+}
+
+/// 8b. 逐路由钉子之一：`POST /api/backup/export` 非 admin → 403。
+///
+/// 上一条 8 把三条一起钉；这一组把三条**各自**钉成独立用例 —— 将来只回退
+/// export 一条时，失败的是这一条用例，名字直接点名是哪条路由，不连坐另外两条。
+#[tokio::test]
+async fn export_route_refuses_a_non_admin_with_403() {
+    let h = Harness::new("nonadmin-export");
+    // 备份真的存在：若鉴权放行，这条请求会撞 409（目标非空）而不是 404，
+    // 于是「403 是不是因为备份不存在」这个疑问被彻底排除。
+    let real = name("nonadmin-export-target");
+    export_ok(&h, &real).await;
+
+    let (status, text) = non_admin_call(&h, "/api/backup/export", &real).await;
+    assert_non_admin_403("/api/backup/export", &real, status, &text);
+}
+
+/// 8c. 逐路由钉子之二：`POST /api/backup/verify` 非 admin → 403。
+#[tokio::test]
+async fn verify_route_refuses_a_non_admin_with_403() {
+    let h = Harness::new("nonadmin-verify");
+    let real = name("nonadmin-verify-target");
+    export_ok(&h, &real).await;
+
+    let (status, text) = non_admin_call(&h, "/api/backup/verify", &real).await;
+    assert_non_admin_403("/api/backup/verify", &real, status, &text);
+}
+
+/// 8d. 逐路由钉子之三：`POST /api/backup/restore` 非 admin → 403。
+#[tokio::test]
+async fn restore_route_refuses_a_non_admin_with_403() {
+    let h = Harness::new("nonadmin-restore");
+    let real = name("nonadmin-restore-target");
+    export_ok(&h, &real).await;
+
+    let (status, text) = non_admin_call(&h, "/api/backup/restore", &real).await;
+    assert_non_admin_403("/api/backup/restore", &real, status, &text);
+}
+
+/// 8e. 正向对照：admin 令牌三条都放行，而且真的走到 handler。
+///
+/// 没有这一条的话，一个把三条路由**一刀切 403**（或改成 401）的实现也能让
+/// 上面所有非 admin 用例绿 —— 功能被钉死了测试却毫无察觉。这里用临时目录 +
+/// 真库跑一次最小真往返：export 真落盘 → verify 读到它并回报 ok:true →
+/// restore 走到「诚实拒绝在线还原」的 200。
+#[tokio::test]
+async fn an_admin_token_is_admitted_on_all_three_backup_routes() {
+    let h = Harness::new("admin-admitted");
+    h.write_data("u1/notes.md", "管理员的笔记".as_bytes());
+
+    // export：201 且清单/快照真落盘，证明 admin 没被鉴权挡住。
+    let real = name("admin-target");
+    let (dir, _bk) = h.backup(&real);
+    let text = export_ok(&h, &real).await;
+    assert!(
+        dir.join("MANIFEST").is_file() && dir.join("db").join("quill.db").is_file(),
+        "admin 的导出必须真落盘：{}",
+        dir.display()
+    );
+    assert!(
+        json_of(&text)["db_sha256"].as_str().is_some(),
+        "admin 导出必须返回真实摘要：{text}"
+    );
+
+    // verify：200 + ok:true（admin 走到了校验收尾，不是 403/401）。
+    let resp = build_router(h.state())
+        .oneshot(post_path("/api/backup/verify", &real))
+        .await
+        .expect("校验请求失败");
+    let status = resp.status();
+    let text = body_text(resp).await;
+    assert_eq!(status, StatusCode::OK, "admin 校验应 200：{text}");
+    assert_eq!(
+        json_of(&text)["ok"],
+        serde_json::json!(true),
+        "admin 校验刚导出的备份必须通过：{text}"
+    );
+
+    // restore：200 + restored:false（admin 走到了那条诚实的「不在线还原」分支）。
+    let resp = build_router(h.state())
+        .oneshot(post_path("/api/backup/restore", &real))
+        .await
+        .expect("还原请求失败");
+    let status = resp.status();
+    let text = body_text(resp).await;
+    assert_eq!(status, StatusCode::OK, "admin 还原请求应 200：{text}");
+    let body = json_of(&text);
+    assert_eq!(body["restored"], serde_json::json!(false), "{text}");
+    assert!(
+        body["command"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("quill restore"),
+        "admin 必须拿到可执行的还原命令：{text}"
+    );
+}
