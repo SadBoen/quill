@@ -164,12 +164,17 @@ goose 的 `input_tokens` 已含 cache，缓存是子集，总量按减法算。�
 `plugins` / `wiki_index` / `skills.tool_allowlist` 与 `expert.skill_count`（恒写 0）
 在生产侧没有真消费者。**上报没有真来源的字段 = 骗人**，先摘掉上报、等真做了再挂回去。
 
+> **2026-10-09 更新（queue Q103）**：`experts.skill_count` 已**删除**（迁移
+> `0012_experts_drop_skill_count.sql`）—— 「算真值」不可行（`skills` 表没有 `expert_id`，
+> 也没有专家↔技能关系表），所以走删列；因为是表级 CHECK 引用的列，删它等于重建 `experts` 表。
+> 剩下的 `plugins` / `wiki_index` / `skills.tool_allowlist` 三处仍待定（Q102/Q104）。
+
 > **2026-10-08 更正（queue Q044，逐条核过）**：这句话的**前半句成立、后半句不成立**。
 > 四个名字里**没有一个在「上报」里是无来源的**（`plugins` 与 `wiki_index` 压根没有响应
 > 上报它们；`skill_count` 唯一的响应字段来自上游 SkillHub 载荷；`tool_allowlist` 来自
 > `skills` 表的真实列）。所以「先摘掉上报」这一步**已经不需要做**。真正还在的洞是
 > 三处**死结构**：`skills.tool_allowlist` 存而不用（7a）、`experts.skill_count` 恒 0
-> 且无人读（7b）、`plugins`/`wiki_index` 两张死表（7c）—— 已按 queue 取用规则第 4 条
+> 且无人读（7b，**2026-10-09 已由迁移 0012 删除，Q103**）、`plugins`/`wiki_index` 两张死表（7c）—— 已按 queue 取用规则第 4 条
 > 新开 Q102/Q103/Q104，证据见 `docs/CODE-TRUTH.md` 缺陷 7/7a/7b/7c。
 
 ---

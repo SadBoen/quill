@@ -205,7 +205,11 @@
   - `crates/quill-domain/tests/proptest_ids.rs`（5 条）：`TeamId::parse` 不 panic、合法 slug 往返、已接受的标识幂等、只含 slug 字符、全空白 → `Empty`。
   - `crates/quill-wiki/tests/proptest_wire.rs`（7 条）：日期解析不 panic（粗粒度 `any::<String>()` + **日期形状**两种生成器）、解析成功必须能原样写回、构造的日期往返、索引解析不 panic；另两条固定输入钉住多字节 10 字节串的切片边界与非规范数字字段。
   **属性测试当场抓到并修掉一个真缺陷**：`Date::parse` 的字段用 `raw.parse::<u32>()`，而它**接受前导 `+`** —— `"0009-+9-+9"`（proptest 自动缩小出的最小反例）被静默解析成 `0009-09-09`：收下的输入与 `Display` 写回的输入**不是一个串**。修法：逐字段要求纯 ASCII 数字（`crates/quill-wiki/src/date.rs`）。**反向验证真做两次**：① 去掉 `Date::parse` 里 `b[4]/b[7] == '-'` 的形态检查 → `date_parse_never_panics` 变红并报 `end byte index 4 is not a char boundary; it is inside '𝖘'`（真 panic），还原后绿；② 修之前那两条红（`a_parsed_date_renders_back_to_its_input` 最小反例 `0009-+9-+9`）本身就是缺陷证据。实测：`cargo test --workspace` → **1480 passed / 0 failed**（原 1468，+12）
-- [ ] Q090 · 用 `cargo-nextest` 或等价提速全量测试 · CI · 有数据 · **2026-10-09 实测：本轮没做，如实记** —— `command -v cargo-nextest` → **未安装**；装它要联网 + 几分钟编译（`cargo install cargo-nextest --locked`），本轮预算被探路占掉，没花在这上面。**下一轮**：先装、跑一次 `cargo nextest run` 与 `cargo test --workspace` 的耗时对比（现在的基线：`cargo test --workspace` 约 1505 passed、单轮分钟级），有数据再决定要不要进 CI（进 CI 要改 `.github/workflows/gates.yml` 的测试那一步，并注意 nextest 的输出格式与 `scripts/status.mjs` 里按 `test result` 行解析的那套**不兼容**）
+- [x] Q090 · 用 `cargo-nextest` 或等价提速全量测试 · CI · **已完成 2026-10-09（判据是「有数据」，数据到手）**：装了 `cargo-nextest v0.9.148`（`cargo install cargo-nextest --locked`，本机编译 **2m06s**），同一份工作区同一台机器实测：
+  - `cargo test --workspace` → **58.9s**（wall）
+  - `cargo nextest run` → **21.0s**（wall，其中测试执行本身 13.2s）；`1513 tests run: 1513 passed, 2 skipped`（那 2 条是 `#[ignore]` 的本机模型用例）
+  - 即**约 2.8×**，而且 nextest 每个用例独立进程，隔离比 `cargo test` 好。
+  - **刻意不把它接进 CI**（如实记理由）：① CI 里 `cargo test --workspace` 是**权威门禁**，换测试运行器不改变测的是什么，收益只是快 —— 而 CI 现在两个 job 合计 4~6 分钟，瓶颈不在测试那一步；② 换过去要同时改 `scripts/status.mjs`（按 `test result` 行求和）与 `.scripts/gates.sh` 的 `summarize_cargo`，**两处解析器都要认新格式**，否则「判据数字」会静默变成 0 —— 那正是本仓最忌讳的「门禁永远绿」形态。**结论：nextest 作为本地提速工具，权威门禁仍是 `cargo test`**；真要换，先给两个解析器加一版能读 nextest 输出的实现并各自补自测。
 
 ## J. 文档与事实
 
@@ -228,11 +232,17 @@
 ## L. 死结构清理（Q044 核实后新开，按取用规则第 4 条续号）
 
 - [ ] Q102 · `skills.tool_allowlist` 存而不用（ISSUE-008）：写得进、读得出、导得出，但**没有任何消费点** · `quill-core`/`api_extensions.rs` · 要么定清「技能的允许工具表在对话里怎么生效」并真消费，要么删列（需迁移）
-- [ ] Q103 · `experts.skill_count` **恒写 0 且无人读**（`experts_repo.rs` 的 `PUT_SQL` 里是字面量 0，专家接口也不上报它） · `experts_repo.rs` · 算出真值或删列（需迁移） · **2026-10-09 实测：删列不是「改一行」，是重建 `experts` 表 —— 本轮没做，把工作面量准了留给下一轮**：
+- [x] Q103 · `experts.skill_count` **恒写 0 且无人读** · `experts_repo.rs` · **已完成 2026-10-09（选了「删列」）**：`skills` 表只有 `user_id`、**没有 `expert_id`**，全仓也没有专家↔技能关系表 → 「这个专家有几个技能」在本 schema 里**没有答案**，所以「算出真值」不可行（上上次已核过）。新增迁移 **`0012_experts_drop_skill_count.sql`**：因为是**表级** `CHECK (skill_count >= 0)` 引用的列（`ALTER … DROP COLUMN` 会被 SQLite 直接拒），走的是**重建表** —— 建新表（列清单 = 0001 原始列 + 0004 的 `instructions`/`model` + 0005 的 `source_template`，CHECK 逐条照抄只去掉引用该列的那条）→ 整列复制 → `DROP` → `RENAME` → 重建 `ix_experts_visible`。
+  - **同批改掉 6 处写它的地方**：`experts_repo.rs` 的 `PUT_SQL`（列清单 + 字面量 0）、`member_executor.rs:363` 的 INSERT、`quill-store/src/lib.rs` 的两处探针 INSERT、`tests/common/mod.rs` 的夹具 INSERT。
+  - **别误删同名的那件事**：`api_expert_market.rs:87` 与 `ui/web/src/experts/api.ts:158` 的 `skill_count` 是**市场载荷**字段（`skillhub/models.rs:87`），活的、有用例覆盖 —— 本批一个字没动它。
+  - **判据实测**：新增 `migration_0012_drops_skill_count_and_keeps_every_row`（在**旧 schema** 上造一行带非零 `skill_count` 的真数据 → 跑 0012 → 断言列没了、每一列的值没变、其余 CHECK 仍生效（大写 id 被拒）、`ix_experts_visible` 仍在）→ `cargo test -p quill-store` **23 passed / 0 failed**（lib 部分）；`cargo test --workspace` → 见提交信息。
+  - **反向验证**：把 `INSERT … SELECT` 的 `created_at/updated_at` 对调（模拟「列清单抄错一位」这个重建表唯一的真实风险）→ 该测试按预期变红并报「时间戳这类数据不许在重建里被改动」；已还原。
+  - 同批更新被它证伪的文档：`docs/CODE-TRUTH.md` 缺陷 7b 标已删并换上新的复现命令、`BACKLOG.md` B5-3 与 Q044 更正段里的 7b 一并标注。
+  - 下面保留上上次的实测（仍然有效，作为「为什么是重建表」的依据）：
   - **为什么必须重建而不是 `ALTER TABLE … DROP COLUMN`**：`0001_init.sql:125` 有**表级** `CHECK (skill_count >= 0)`，而 SQLite 的 DROP COLUMN 明确拒绝「被 CHECK 引用的列」→ 只能「建新表（去掉该列）→ 整列复制 → DROP 旧表 → RENAME → 重建索引 `ix_experts_visible`」。
   - **改动面实测 6 处**（`grep -rn skill_count crates/`）：`crates/quill-store/migrations/0001_init.sql:111,125`（列 + CHECK）、`crates/quill-server/src/experts_repo.rs:106`（`PUT_SQL` 的列清单里那个字面量 0）、`crates/quill-server/src/member_executor.rs:363`（另一条 INSERT）、`crates/quill-store/src/lib.rs:1141,1221`、`crates/quill-server/tests/common/mod.rs:223`（测试铺数据）。**注意别误删同名的另一件事**：`api_expert_market.rs:87` 与 `ui/web/src/experts/api.ts:158` 的 `skill_count` 是**市场载荷**里的字段（`skillhub/models.rs:87`），那是活的、有用例覆盖，**与 `experts` 表这一列无关**。
   - **「算真值」不可行（已核）**：`skills` 表只有 `user_id`，**没有 `expert_id`**，全仓也没有专家↔技能的关系表 → 「这个专家有几个技能」在本 schema 里没有答案。所以只剩删列一条路。
-  - **风险**：`experts` 是最核心的表（专家 API / 聊天人格 / 团队 / 市场都读它），重建写错就是大面积坏。好消息是覆盖厚（`expert_http` / `schema_constraints` / `expert_repo_sqlite` 等），迁移也能靠 `quill-store` 的漂移检测兜住。**下一轮做的话：先写迁移 + 一个「老库有数据 → 迁完数据逐行还在、列没了」的测试**，再动 SQL 清单
+  - **风险**：`experts` 是最核心的表（专家 API / 聊天人格 / 团队 / 市场都读它），重建写错就是大面积坏。好消息是覆盖厚（`expert_http` / `schema_constraints` / `expert_repo_sqlite` 等），迁移也能靠 `quill-store` 的漂移检测兜住。**已按这条纪律做了**：先写迁移 + 那个「老库有数据 → 迁完逐列还在、列没了」的测试，再动 SQL 清单
 - [ ] Q104 · `plugins` / `wiki_index` 两张**死表**（迁移里存在，Rust 侧零读写；wiki 检索读的是 `index.md`） · `quill-store`/`quill-server` · 接真读者或删表（需迁移） · **2026-10-09 实测：条目的「Rust 侧零读写」这句不成立 —— 它们不是「没人知道的死表」，删表会打断三处**：
   - `crates/quill-cli/src/cmd_doctor.rs:57` 把 **`wiki_index` 列进 `need`** —— 删表会让 `quill doctor` 开始报缺表（那是**真实读者**，只不过读的是「表在不在」）。
   - `crates/quill-store/tests/schema_constraints.rs` 对两张表都有**成体系的用例**：`wiki_index` 的约束、`g2_wiki_index_is_without_rowid`（断言它是 WITHOUT ROWID，注释写明「倒排表多了一层无用的 B-tree」）、往返查询等；`plugins` 也在那张表清单里。**这些用例本身是设计意图的载体**（0001_init 里两张表都带完整约束）。
