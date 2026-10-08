@@ -236,12 +236,14 @@ async fn spawn_manifest_server(body: String) -> (String, tokio::task::JoinHandle
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn all_three_upgrade_routes_refuse_a_non_admin_with_403() {
+async fn every_upgrade_route_refuses_a_non_admin_with_403() {
     let h = Harness::new("upgrade-nonadmin");
 
     for (method, path) in [
         ("GET", "/api/upgrade/check"),
         ("POST", "/api/upgrade/prepare"),
+        // Q063 加的那条也在列 —— 它同样只允许 admin（下载产物是实例级动作）。
+        ("POST", "/api/upgrade/apply"),
         ("GET", "/api/upgrade/history"),
     ] {
         let (status, text) = call(&h, method, path, false).await;
@@ -698,4 +700,117 @@ async fn history_separates_unreadable_from_empty() {
         "{text}"
     );
     assert!(body["note"].is_null(), "{text}");
+}
+
+// ---------------------------------------------------------------------------
+// Q063 · POST /api/upgrade/apply —— 下载 + 校验 + 暂存（替换交给人）
+// ---------------------------------------------------------------------------
+
+/// 清单里没有 `sha256` → **拒绝下载**。不校验就落盘，等于把任意文件写进数据目录。
+#[tokio::test]
+async fn apply_refuses_a_manifest_without_sha256() {
+    let _lock = ENV_LOCK.lock().await;
+    let (url, server) = spawn_manifest_server(
+        r#"{"version":"99.9.9","url":"http://example.invalid/q"}"#.to_string(),
+    )
+    .await;
+    let _env = EnvVar::set(UPGRADE_ENV, &url);
+    let h = Harness::new("upgrade-apply-no-sha");
+
+    let (status, text) = call(&h, "POST", "/api/upgrade/apply", true).await;
+    server.abort();
+    assert_eq!(status, StatusCode::CONFLICT, "{text}");
+    let body = json_of(&text);
+    assert!(
+        body["error"]["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("sha256"),
+        "拒绝的理由必须点名 sha256：{text}"
+    );
+    assert!(
+        !h.data_root().join("upgrade-staging").exists(),
+        "拒绝时不该建任何目录"
+    );
+}
+
+/// 摘要对不上 → 422，点名两个摘要，而且**一个字节都不落盘**。
+#[tokio::test]
+async fn apply_refuses_a_digest_mismatch_and_stages_nothing() {
+    let _lock = ENV_LOCK.lock().await;
+    let (art_url, art_server) = spawn_manifest_server("not-the-real-bytes".to_string()).await;
+    let wrong = "0".repeat(64);
+    let (url, server) = spawn_manifest_server(format!(
+        r#"{{"version":"99.9.9","url":"{art_url}","sha256":"{wrong}"}}"#
+    ))
+    .await;
+    let _env = EnvVar::set(UPGRADE_ENV, &url);
+    let h = Harness::new("upgrade-apply-bad-digest");
+
+    let (status, text) = call(&h, "POST", "/api/upgrade/apply", true).await;
+    server.abort();
+    art_server.abort();
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{text}");
+    let body = json_of(&text);
+    let detail = body["error"]["detail"].as_str().unwrap_or_default();
+    assert!(detail.contains(&wrong), "要点名清单里那个摘要：{text}");
+    assert!(
+        !h.data_root().join("upgrade-staging").exists(),
+        "校验不过时一个字节都不该落盘"
+    );
+}
+
+/// 正路：摘要对得上 → 暂存下来，并交出**真命令**；`upgraded` 恒为 false。
+#[tokio::test]
+async fn apply_stages_a_verified_artifact_and_hands_out_real_commands() {
+    let _lock = ENV_LOCK.lock().await;
+    let bytes = "fake-quill-server-binary-v99".to_string();
+    let digest = quill_backup::sha256_bytes(bytes.as_bytes());
+    let (art_url, art_server) = spawn_manifest_server(bytes.clone()).await;
+    let (url, server) = spawn_manifest_server(format!(
+        r#"{{"version":"99.9.9","url":"{art_url}","sha256":"{digest}"}}"#
+    ))
+    .await;
+    let _env = EnvVar::set(UPGRADE_ENV, &url);
+    let h = Harness::new("upgrade-apply-ok");
+
+    let (status, text) = call(&h, "POST", "/api/upgrade/apply", true).await;
+    server.abort();
+    art_server.abort();
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let body = json_of(&text);
+    assert_eq!(
+        body["upgraded"],
+        serde_json::json!(false),
+        "这个进程没有升级自己，必须如实说：{text}"
+    );
+    assert_eq!(body["sha256"], serde_json::json!(digest), "{text}");
+    assert_eq!(body["bytes"], serde_json::json!(bytes.len()), "{text}");
+
+    // 暂存文件真在盘上，字节一致，且落在数据根下。
+    let staged = PathBuf::from(body["staged_file"].as_str().expect("要有暂存路径"));
+    assert_eq!(
+        std::fs::read(&staged).expect("暂存文件必须真落盘"),
+        bytes.as_bytes(),
+        "暂存的必须是下载到的那些字节"
+    );
+    assert!(
+        staged.starts_with(h.data_root().join("upgrade-staging")),
+        "暂存要落在数据根下：{}",
+        staged.display()
+    );
+
+    // 命令里要点名**暂存路径**（否则用户不知道换哪个文件）。
+    let steps = body["next_steps"]
+        .as_array()
+        .expect("要有下一步")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        steps.contains(&staged.display().to_string()),
+        "命令里要有暂存路径：{steps}"
+    );
+    assert!(steps.contains("mv "), "命令要是能照着做的：{steps}");
 }

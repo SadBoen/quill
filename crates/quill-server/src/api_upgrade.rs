@@ -66,7 +66,11 @@ use crate::state::AppState;
 /// 与 `routes.rs` 里 `GET /api/version` 用的是同一个 `CARGO_PKG_VERSION`。
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// 更新源配置项：一个返回 `{"version": ..., "url"?: ..., "notes"?: ...}` 的 JSON 清单 URL。
+/// 更新源配置项：一个返回 `{"version": ..., "url"?: ..., "notes"?: ..., "sha256"?: ...}` 的
+/// JSON 清单 URL。
+///
+/// `sha256` 是 `POST /api/upgrade/apply` 的**硬要求**（没有它就拒绝下载），
+/// `GET /api/upgrade/check` 不读它。
 ///
 /// 每次请求现读环境变量（与 `skillhub::http::host` 读 `QUILL_SKILLHUB_HOST` 同构）：
 /// 换源不用重启，测试也不必为了注入来源去改 `Config` 的结构。
@@ -119,7 +123,8 @@ pub async fn check(_admin: RequireAdmin) -> Json<Value> {
                  服务端没有任何可以问到「最新版本」的地方 —— \
                  所以 has_update / latest_version 都是 null，这是「不知道」，\
                  不是「已是最新」。下一步：若要启用检查，把 {MANIFEST_URL_ENV} 设成\
-                 一个 JSON 清单的 URL（形状：{{\"version\":\"0.2.0\",\"url\":\"…\",\"notes\":\"…\"}}），\
+                 一个 JSON 清单的 URL（形状：{{\"version\":\"0.2.0\",\"url\":\"…\",\"notes\":\"…\",\"sha256\":\"…\"}}；\
+                 `sha256` 只有 `POST /api/upgrade/apply` 用得到），\
                  再刷新本接口；没有清单源时，请以发布说明为准，不要把 null 当绿灯。"
             );
         }
@@ -201,6 +206,12 @@ struct RemoteManifest {
     version: String,
     url: Option<String>,
     notes: Option<String>,
+    /// 产物文件的 sha256（64 位十六进制，大小写不敏感）。
+    ///
+    /// **`POST /api/upgrade/apply` 只认带它的清单**：没有它就拒绝下载 ——
+    /// 「不校验就落盘」等于把任意文件写进数据目录，那比不升级坏得多。
+    /// `GET /api/upgrade/check` 不需要它（只是查版本），所以它是可选的。
+    sha256: Option<String>,
 }
 
 /// 真去取清单。失败原因整句返回（写进响应的 `source_error`），
@@ -225,7 +236,7 @@ async fn fetch_manifest(url: &str) -> Result<RemoteManifest, String> {
             status.as_u16()
         ));
     }
-    let bytes = read_capped(resp).await?;
+    let bytes = read_capped(resp, MAX_MANIFEST_BYTES, "更新清单").await?;
     let v: Value = serde_json::from_slice(&bytes)
         .map_err(|e| format!("更新清单不是合法 JSON（读了 {} 字节）：{e}", bytes.len()))?;
     let version = v
@@ -234,7 +245,7 @@ async fn fetch_manifest(url: &str) -> Result<RemoteManifest, String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .ok_or_else(|| {
-            "更新清单缺少非空的字符串字段 version（形状应为 {\"version\": \"0.2.0\", \"url\"?: \"…\", \"notes\"?: \"…\"}）"
+            "更新清单缺少非空的字符串字段 version（形状应为 {\"version\": \"0.2.0\", \"url\"?: \"…\", \"notes\"?: \"…\", \"sha256\"?: \"…\"}；`sha256` 是 `POST /api/upgrade/apply` 才需要的，`GET /api/upgrade/check` 不需要它）"
                 .to_string()
         })?
         .to_string();
@@ -242,22 +253,26 @@ async fn fetch_manifest(url: &str) -> Result<RemoteManifest, String> {
         version,
         url: v.get("url").and_then(Value::as_str).map(str::to_string),
         notes: v.get("notes").and_then(Value::as_str).map(str::to_string),
+        sha256: v
+            .get("sha256")
+            .and_then(Value::as_str)
+            .map(|s| s.trim().to_ascii_lowercase())
+            .filter(|s| !s.is_empty()),
     })
 }
 
 /// 边读边限量：越界那一刻就停，不把整个响应先吃进内存。
-async fn read_capped(resp: reqwest::Response) -> Result<Vec<u8>, String> {
+async fn read_capped(resp: reqwest::Response, cap: usize, what: &str) -> Result<Vec<u8>, String> {
     let mut resp = resp;
     let mut buf: Vec<u8> = Vec::new();
     while let Some(chunk) = resp
         .chunk()
         .await
-        .map_err(|e| format!("读取更新清单失败：{e}"))?
+        .map_err(|e| format!("读取{what}失败：{e}"))?
     {
-        if buf.len() + chunk.len() > MAX_MANIFEST_BYTES {
+        if buf.len() + chunk.len() > cap {
             return Err(format!(
-                "更新清单超过 {MAX_MANIFEST_BYTES} 字节上限，已停止读取 —— \
-                 清单只该有几个字段，这么大的响应按配置错误处理"
+                "{what}超过 {cap} 字节上限，已停止读取 —— 这么大的响应按配置错误处理"
             ));
         }
         buf.extend_from_slice(&chunk);
@@ -297,6 +312,238 @@ fn parse_version(text: &str) -> Option<Vec<u64>> {
         parts.push(seg.parse::<u64>().ok()?);
     }
     Some(parts)
+}
+
+// ---------------------------------------------------------------------------
+// Q063 · POST /api/upgrade/apply —— 下载 + 校验 + 暂存，替换动作交给人
+// ---------------------------------------------------------------------------
+
+/// 产物文件的下载上限（256 MiB）。与清单同一个道理：没有上限就会先被读进内存。
+const MAX_ARTIFACT_BYTES: usize = 256 * 1024 * 1024;
+
+/// 下载产物的超时。比取清单（10s）宽松得多 —— 产物可能几十 MB。
+const DOWNLOAD_TIMEOUT_SECS: u64 = 300;
+
+/// 暂存根目录名。放在数据根下，与 `backups/` 同级。
+const STAGING_DIR: &str = "upgrade-staging";
+
+fn is_sha256_hex(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// 只留安全字符。**版本号与文件名都来自外部清单**，不能直接当路径用。
+fn sanitize(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(64)
+        .collect()
+}
+
+/// 产物文件名：取 URL 路径的最后一段（**去掉查询串**）；取不到或只剩点就用固定名。
+fn file_name_from(url: &str) -> String {
+    let path = url.split(['?', '#']).next().unwrap_or(url);
+    let last = path.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+    let cleaned = sanitize(last);
+    if cleaned.is_empty() || cleaned.chars().all(|c| c == '.') {
+        "quill-artifact".to_string()
+    } else {
+        cleaned
+    }
+}
+
+/// `POST /api/upgrade/apply` —— 把新版本**下载并校验后暂存**，真正的替换动作交给人
+/// （连同现成的命令）。
+///
+/// ## 为什么不是「进程内把自己换掉」
+///
+/// 正在跑的二进制在 Windows 上**被锁着**（换不掉），在 Unix 上换掉之后内存里跑的仍是旧
+/// 代码 —— 所以在线升级的真实形态只能是：**下载 → 校验 → 暂存 → 停服 → 换文件 → 起服**。
+/// 这个端点做前三步，后三步交出去（与 `POST /api/backup/restore` 同一个口径：
+/// 进程内做不到的就把真命令交出来，而不是假装做到了）。响应里 `upgraded` **恒为 false**。
+///
+/// ## 三条硬规矩（每条都当场给出可照着做的下一步）
+///
+/// 1. **清单必须带 `sha256`**，否则拒绝下载（409）—— 不校验就落盘等于把任意文件写进
+///    数据目录，比不升级坏得多。
+/// 2. **清单版本必须真的比当前新**（按 [`VERSION_RULE`] 比较）；相等 / 更低 / 不可比较
+///    都拒绝（409）—— 不可比较时**不许**当成「有新版本」。
+/// 3. **校验不过就什么都不留**（422，点名两个摘要）：暂存目录只在**校验通过之后**才建。
+pub async fn apply(
+    State(state): State<AppState>,
+    _admin: RequireAdmin,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let current = APP_VERSION;
+    let Some(source) = manifest_url() else {
+        return Err(ApiError::conflict(
+            format!("没有配更新源（{MANIFEST_URL_ENV}），没有可下载的东西。当前版本 {current}。"),
+            "先配好更新源，再用 GET /api/upgrade/check 确认能取到清单",
+        ));
+    };
+    let m = fetch_manifest(&source).await.map_err(|e| {
+        ApiError::upstream_unavailable(
+            format!("取更新清单失败：{e}（来源 {source}）"),
+            "确认更新源可达、返回 2xx 且是 {\"version\":…,\"url\":…,\"sha256\":…} 形状后重试",
+        )
+    })?;
+
+    let Some(artifact_url) = m.url.clone().filter(|u| !u.trim().is_empty()) else {
+        return Err(ApiError::conflict(
+            format!(
+                "更新清单里没有 `url`：只知道最新版本是 {}，没有可下载的产物。",
+                m.version
+            ),
+            "让更新源在清单里补上 url（指向产物文件）",
+        ));
+    };
+    let Some(expected) = m.sha256.clone() else {
+        return Err(ApiError::conflict(
+            format!(
+                "更新清单里没有 `sha256`，**拒绝下载**：不校验摘要就落盘，等于把任意文件\
+                 写进数据目录 —— 那比不升级坏得多。（清单里的版本是 {}。）",
+                m.version
+            ),
+            "让更新源在清单里补上产物的 sha256（64 位十六进制）",
+        ));
+    };
+    if !is_sha256_hex(&expected) {
+        return Err(ApiError::conflict(
+            format!("更新清单里的 sha256 {expected:?} 不是 64 位十六进制，没法用它校验。"),
+            "按 64 位十六进制写 sha256（大小写都接受）",
+        ));
+    }
+    // 注意方向：`compare_versions(current, latest)` 比的是**当前**与清单的顺序，
+    // 所以「有新版」= 当前 **小于** 清单版本（`Less`）。写反了会把「没有新版」
+    // 当成「有新版」—— 本轮就是被新测试当场抓住的。
+    match compare_versions(current, &m.version) {
+        Some(Ordering::Less) => {}
+        Some(Ordering::Equal) | Some(Ordering::Greater) => {
+            return Err(ApiError::conflict(
+                format!(
+                    "清单版本 {} 不高于当前版本 {current}（相等或更低），没有可升级的新版。",
+                    m.version
+                ),
+                "不必升级；要强制重装请手工替换二进制",
+            ))
+        }
+        None => {
+            return Err(ApiError::conflict(
+                format!(
+                    "清单里的 version「{}」按比较规则不可比较，不敢据此下载。规则：{VERSION_RULE}",
+                    m.version
+                ),
+                "让更新源给出可比较的版本号",
+            ))
+        }
+    }
+
+    // 下载：与取清单同一套防护（超时 / 重定向上限 / 边读边限量）。
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(DOWNLOAD_TIMEOUT_SECS))
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .user_agent(USER_AGENT)
+        .build()
+        .map_err(|e| ApiError::internal(format!("构造下载客户端失败：{e}")))?;
+    let resp = client.get(&artifact_url).send().await.map_err(|e| {
+        ApiError::upstream_unavailable(
+            format!("下载产物失败（{artifact_url}）：{e}"),
+            "确认产物 URL 可达后重试",
+        )
+    })?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(ApiError::upstream_unavailable(
+            format!("下载产物返回 HTTP {}（只有 2xx 才算拿到）", status.as_u16()),
+            "确认产物 URL 返回 2xx",
+        ));
+    }
+    let bytes = read_capped(resp, MAX_ARTIFACT_BYTES, "产物文件")
+        .await
+        .map_err(|e| ApiError::upstream_unavailable(e, "确认产物大小与更新源配置"))?;
+
+    // **校验在落盘之前**：不过就什么都不留。
+    let actual = quill_backup::sha256_bytes(&bytes);
+    if actual != expected {
+        return Err(ApiError::unprocessable(
+            format!(
+                "产物摘要对不上：清单说 {expected}，实测 {actual}（{} 字节，来源 {artifact_url}）。\
+                 **一个字节都没落盘。**",
+                bytes.len()
+            ),
+            "让更新源重新生成 sha256（或换一个产物源）再重试",
+        ));
+    }
+
+    // 校验通过才建暂存目录。`create_dir` 是原子的：同秒重复提交只会有一个成功
+    // （与 `reserve_backup_dir` 同款，避免两次提交共用一个目录名）。
+    let staging_root = api_backup::data_root(&state).join(STAGING_DIR);
+    let name = format!("{}-{}", sanitize(&m.version), now_unix());
+    let dir = staging_root.join(&name);
+    std::fs::create_dir_all(&staging_root).map_err(|e| {
+        ApiError::internal(format!("建暂存根 {} 失败：{e}", staging_root.display()))
+    })?;
+    match std::fs::create_dir(&dir) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(ApiError::conflict(
+                format!("暂存目录 {} 已存在（同一秒重复提交？）", dir.display()),
+                "隔一秒重试",
+            ))
+        }
+        Err(e) => {
+            return Err(ApiError::internal(format!(
+                "建暂存目录 {} 失败：{e}",
+                dir.display()
+            )))
+        }
+    }
+    let staged = dir.join(file_name_from(&artifact_url));
+    std::fs::write(&staged, &bytes)
+        .map_err(|e| ApiError::internal(format!("写暂存文件 {} 失败：{e}", staged.display())))?;
+    // 暂存目录里留一份「这是什么」的小清单：排障时不必去猜那个文件是哪来的。
+    let meta = json!({
+        "version": m.version,
+        "sha256": actual,
+        "source_url": artifact_url,
+        "staged_at_unix": now_unix(),
+        "bytes": bytes.len(),
+        "notes": m.notes,
+    });
+    let _ = std::fs::write(
+        dir.join("manifest.json"),
+        serde_json::to_vec_pretty(&meta).unwrap_or_default(),
+    );
+
+    let exe = std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "<运行中的 quill-server 路径>".to_string());
+    let steps = json!([
+        "1. 停掉正在跑的服务（按你的启动方式：systemd `systemctl stop …` / 前台 Ctrl-C / 计划任务）",
+        format!("2. 先备份旧的那份：mv {exe} {exe}.old"),
+        format!("3. 换上新的：mv {} {exe}", staged.display()),
+        "4. 重新启动服务，再 `curl /api/version` 确认版本号已变；有问题就把 .old 换回来",
+    ]);
+
+    Ok((
+        StatusCode::OK,
+        Json(json!({
+            "upgraded": false,
+            "current_version": current,
+            "latest_version": m.version,
+            "sha256": actual,
+            "expected_sha256": expected,
+            "bytes": bytes.len(),
+            "staged_file": staged.display().to_string(),
+            "staged_dir": dir.display().to_string(),
+            "next_steps": steps,
+            "note": "这个进程**没有**升级自己：正在跑的二进制在 Windows 上被锁着、在 Unix 上换了内存里也仍是旧代码。所以这里只做「下载 → 校验 → 暂存」，替换与重启按 next_steps 做。",
+        })),
+    ))
 }
 
 // ---------------------------------------------------------------------------

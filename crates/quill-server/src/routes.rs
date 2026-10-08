@@ -240,6 +240,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/version", get(version))
         .route("/api/upgrade/check", get(api_upgrade::check))
         .route("/api/upgrade/prepare", post(api_upgrade::prepare))
+        // Q063：下载 + 校验 + 暂存，替换与重启交给人（响应里 upgraded 恒为 false）。
+        .route("/api/upgrade/apply", post(api_upgrade::apply))
         .route("/api/upgrade/history", get(api_upgrade::history));
 
     let admin = Router::new()
@@ -505,6 +507,8 @@ pub const CONTRACT_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/version"),
     ("GET", "/api/upgrade/check"),
     ("POST", "/api/upgrade/prepare"),
+    // Q063：下载 + 校验 + 暂存（替换交给人）。
+    ("POST", "/api/upgrade/apply"),
     ("GET", "/api/upgrade/history"),
     ("GET", "/api/admin/config"),
     ("PUT", "/api/admin/config"),

@@ -146,8 +146,13 @@ goose 的 `input_tokens` 已含 cache，缓存是子集，总量按减法算。�
 
 ### B4-2 在线升级
 `crates/quill-upgrade/src/lib.rs` 只有 **120 行**，内容是 `PreUpgradeGuard` +
-`take_pre_upgrade_backup`。`quill-cli` 声明了依赖却**零调用**。
-真正的在线更新机制**不存在**。
+`take_pre_upgrade_backup`。（`quill-cli` 那条零调用的依赖已在 2026-10-08 删掉。）
+
+> **2026-10-09 更新（queue Q063）**：产物管线落地了 —— `POST /api/upgrade/apply`
+> 真下载产物、**必须**按清单里的 `sha256` 校验、通过后暂存到 `<数据根>/upgrade-staging/`，
+> 并把「停服 → 换文件 → 起服」的真命令交出去（响应 `upgraded` **恒为 false**）。
+> **仍然不做的是「进程内把自己换掉」**：Windows 上运行中的二进制被文件锁住、Unix 上换完
+> 内存里跑的仍是旧代码 —— 那是设计上的不可能，不是没做。
 
 ---
 

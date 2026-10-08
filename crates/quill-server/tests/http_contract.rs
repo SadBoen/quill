@@ -426,7 +426,7 @@ async fn created_session_id_is_byte_identical_to_the_listed_one() {
 async fn every_contract_route_responds_and_is_never_a_false_success() {
     // 「已实现」清单必须跟着实现一起长，否则新接通的路由会因为不再返回 501
     // 而被判成「假成功」——这正是本测试要抓的东西，所以清单不能手懒。
-    const IMPLEMENTED: [(&str, &str); 73] = [
+    const IMPLEMENTED: [(&str, &str); 74] = [
         ("GET", "/api/version"),
         ("GET", "/api/auth/me"),
         ("GET", "/api/healthz"),
@@ -539,6 +539,9 @@ async fn every_contract_route_responds_and_is_never_a_false_success() {
         // 四条边界的往返证据在 `upgrade_http.rs` 里逐条钉死。
         ("GET", "/api/upgrade/check"),
         ("POST", "/api/upgrade/prepare"),
+        // Q063：下载 + 校验 + 暂存。**没配更新源**时它回 409（不是 501）—— 本测试只要
+        // 「不是 501」，所以「已实现」这一档成立。
+        ("POST", "/api/upgrade/apply"),
         ("GET", "/api/upgrade/history"),
         // 用户管理：只列名册与启停两条是真实现（2026-10-06）。
         // `POST`/`DELETE` **继续 501，而且是有意的** —— 账号只来自部署配置，
