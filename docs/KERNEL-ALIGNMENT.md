@@ -561,3 +561,322 @@ wire.rs
 $ grep -c "sqlx::query" crates/quill-server/src/llm_providers.rs
 9
 ```
+
+---
+
+## Q027 权限模型
+
+### 一句话结论
+
+**两边的权限根本不是同一件事**：goose 的 `permission` 是**单用户 agent 对「工具调用」的许可系统**
+（模式级 / 工具级 / 单次调用级 / 扩展级四类许可，外加「LLM 判读只读」「工具注解」两条软化路径）；
+quill 的权限是 `quill-control` 的**多租户 API 角色鉴权**（`owner`/`member` 两种角色，只决定
+能不能调 `/api/admin/*` 这类实例级接口）。**逐条比对后：goose 的 9 类许可（§1 表）在 quill 一个对应物都没有**；
+任务里的待命题「quill 现在没有任何工具级/命令级许可」**属实**，§4 用三条命令证明。
+
+### 1. goose 侧：许可在哪、几类
+
+```bash
+$ ls vendor/goose/crates/goose/src/permission/
+mod.rs
+permission_inspector.rs
+permission_judge.rs
+permission_store.rs
+
+$ wc -l vendor/goose/crates/goose/src/permission/*.rs
+   10 vendor/goose/crates/goose/src/permission/mod.rs
+  395 vendor/goose/crates/goose/src/permission/permission_inspector.rs
+  271 vendor/goose/crates/goose/src/permission/permission_judge.rs
+  144 vendor/goose/crates/goose/src/permission/permission_store.rs
+  820 total
+```
+
+```bash
+$ grep -rn "PermissionLevel\|Permission::" vendor/goose/crates/ --include=*.rs | wc -l
+224
+```
+
+许可词汇遍布 goose 主 crate、ACP 服务器与 CLI（`goose-cli/src/commands/configure.rs:1485`
+有 `tool_permission` 配置项），不只 `permission/` 那 820 行。
+
+逐类（`file:line` 均相对仓库根）：
+
+| # | 许可类型 | 定义处（`file:line`） | 判定/落点 | 粒度 |
+|---|---|---|---|---|
+| 1 | 模式级 | `vendor/goose/crates/goose-provider-types/src/goose_mode.rs:22-32`：`Auto / Approve / SmartApprove / Chat` | 按模式分派：`permission/permission_inspector.rs:159-195`；模式随会话落库 `session/session_manager.rs:1054`（`goose_mode TEXT NOT NULL DEFAULT 'auto'`）、字段 `:90`；另有全局 `GOOSE_MODE`（`config/base.rs:1263`） | 会话 |
+| 2 | 工具级（用户显式） | `config/permission.rs:21-25` `PermissionLevel{AlwaysAllow,AskBefore,NeverAllow}`；`:29-33` `PermissionConfig`；`:43-44` 两个类别 `user`/`smart_approve` | 查询 `:77-79` `get_user_permission`；落 `permission.yaml`（带文件锁 `:196-222`）；优先级 NeverAllow > AlwaysAllow > AskBefore（`:139-155`）；对外 ACP `acp/server/tools.rs:148` `on_set_tool_permissions` | 工具名 |
+| 3 | 单次调用级（工具 + 参数哈希） | `permission/permission_store.rs:79-90` `check_permission`；`:117-127` `hash_tool_context`（blake3 哈希 arguments）；`:12-19` `ToolPermissionRecord{allowed,expiry,readable_context}` | 落 `permissions/tool_permissions.json`；过期清理 `:129-140` | 工具名 + **参数哈希** |
+| 4 | 单次确认的即时决定 | `goose-provider-types/src/permission.rs:5-11` `Permission{AlwaysAllow,AllowOnce,Cancel,DenyOnce,AlwaysDeny}`；`:14-17` `PrincipalType{Extension,Tool}`；`:20-23` `PermissionConfirmation` | 路由 `agents/tool_confirmation_router.rs:19-56`；判到 `executable` `agents/state_machine/ops_tool_approval.rs:64,285-287`；`AlwaysAllow/AlwaysDeny` 回写工具级 `:67-76` | 本次请求；「总是」升格为工具级 |
+| 5 | LLM 判读只读 | `permission/permission_judge.rs:145-185` `detect_read_only_requests`；判读工具 `:41-89` `platform__tool_by_tool_permission` | 候选收集在 `permission_inspector.rs:229-266`，出 Allow / RequireApproval | 单个请求（按 request id） |
+| 6 | 工具注解 | `permission_inspector.rs:52-64` `apply_tool_annotations`（`read_only_hint`）；`config/permission.rs:91-107` 把 `read_only_hint=false` 记入 smart_approve | SmartApprove 下只读注解直接 Allow（`permission_inspector.rs:173-176`） | 工具名 |
+| 7 | 扩展级 | `permission_inspector.rs:178-181`：`MANAGE_EXTENSIONS_TOOL_NAME_COMPLETE` 一律要求审批；`config/permission.rs:280-294` `remove_extension`（按 `扩展名__` 前缀清）`:300-305` | — | 扩展（命名空间前缀） |
+| 8 | 安全检查叠加 | `tool_inspection.rs:170-261` `apply_inspection_results_to_permissions`：非 permission inspector（security / egress / adversary）可把 Allow/RequireApproval 覆盖成 Deny | `permission_inspector.rs:116-128` | 单个请求 |
+| 9 | 审批的用户形态 | `agents/state_machine/ops_tool_approval.rs:125-133` `Message::assistant().with_action_required(...).user_only()`；决定写回 `agents/state_machine/tool_confirmation.rs:75-117` | 落库，交给客户端 | 单个请求 |
+
+关于「命令级 / 路径级」的核实：goose **没有独立的命令规则或路径规则表**。命令级/路径级粒度是
+靠第 3 类的「工具名 + 参数哈希」顺带得到的 —— 同一 shell 工具、不同命令串是不同的键，
+文件工具的不同路径也是不同的键。但对这一类要加一句实测限制：
+
+```bash
+$ grep -rn "record_permission\|check_permission\|ToolPermissionStore" vendor/goose/ --include=*.rs | grep -v "permission_store.rs"
+vendor/goose/crates/goose/src/permission/mod.rs:10:pub use permission_store::ToolPermissionStore;
+```
+
+→ `ToolPermissionStore` 的读写方法在 `vendor/goose` 整棵树里**只被 re-export，没有任何调用点**。
+即第 3 类在当前 vendored 版本里是**有实现、没接线**（是否被 vendor 之外的程序使用，未验证 ——
+vendor 里没有证据）。
+
+### 2. quill 侧：有什么（是角色鉴权，不是许可）
+
+| quill 构件 | `file:line` | 作用 |
+|---|---|---|
+| 角色 `UserRole{Owner,Member}` | `crates/quill-control/src/user.rs:11-16`；schema `CHECK (role IN ('owner','member'))` `crates/quill-store/migrations/0001_init.sql:36` | 全系统只有两种角色 |
+| 状态 `UserStatus{Active,Disabled}` | `crates/quill-control/src/user.rs:41-46`；`0001_init.sql:37` | 停用即令牌失效 |
+| 鉴权上下文 `AuthContext{user_id,is_admin}` | `crates/quill-server/src/auth.rs:11-16` | `is_admin` 由角色推导 |
+| `is_admin = role == Owner` | `crates/quill-server/src/auth.rs:235`（会话令牌）、`:347`（环境变量令牌回库核对） | 两条令牌源统一口径 |
+| `RequireAdmin` extractor | `crates/quill-server/src/auth.rs:442-468` | 非 admin 一律 403；用于 `/api/admin/*`、provider 管理、备份 |
+| owner 才能做的账户操作 | `crates/quill-control/src/service.rs:668-677` `require_owner`；调用点 `:274` 建用户、`:541` 撤销他人会话、`:558/:563` 看他人资料/列用户、`:574` 启停、`:587/:626/:637` 邀请码 | 角色鉴权的全部判据 |
+| **不是鉴权**的中间件 | `crates/quill-server/src/middleware.rs:18-68` | 只做 panic 兜底 + 请求 ID 回填，不判身份 |
+| 用户管理 HTTP | `crates/quill-server/src/api_users.rs:103-128`（list）、`:134-198`（set_status）；`:201-211` POST 501、`:214-224` DELETE 501 | 建号/删号有意不做 |
+
+三个「像许可、其实不是许可」的字段，单独点名：
+
+```bash
+$ grep -rn "approval_mode" crates/ ui/web/src/ --include=*.rs --include=*.ts --include=*.tsx
+crates/quill-server/src/api_auth.rs:382:            "approval_mode": "manual",
+crates/quill-server/src/api_auth.rs:406:            "approval_mode": "manual",
+crates/quill-server/src/api_auth.rs:419:                "approval_mode": "manual",
+crates/quill-server/tests/http_contract.rs:169:        text.contains("\"approval_mode\":\"manual\""),
+ui/web/src/api/types.ts:17:  approval_mode: string
+ui/web/src/account/Account.tsx:86:                <dd>{user.approval_mode}</dd>
+```
+
+- `approval_mode` 是 `/api/auth/me` 里**写死的常量 `"manual"`**（`api_auth.rs:382/406/419`），
+  前端只在 `ui/web/src/account/Account.tsx:86` 当一个词条展示。**它背后没有任何审批实现**：
+  全仓库没有代码读它来决定行为，唯一的「消费者」是契约测试 `http_contract.rs:169` 与 UI 展示。
+- `plugins.permissions_json`（`crates/quill-store/migrations/0001_init.sql:199`）**零读写**：
+  `grep -rn "permissions_json" crates/ ui/ --include=*.rs --include=*.ts --include=*.tsx` 无输出；
+  对应路由 `/api/extensions/plugins` 是 501（`crates/quill-server/src/routes.rs:203-205`）。
+- `skills.tool_allowlist` 存得下、读得出（`crates/quill-server/src/skills_repo.rs:64,133,268-286`），
+  但**工具挂载/执行完全不查它** —— `crates/quill-server/src/tools.rs:365` 自己的注释把这类问题
+  叫「`tool_allowlist` 只存不用」；`with_skills`（`:299-338`）与 `call`（`:108-124`）都没有引用。
+- MCP 服务器 `enabled`（`tools.rs:629-632`）与 SKILL `enabled`（`tools.rs:635-643`）是**按用户的
+  功能开关**，不是许可：关掉=不挂，开着就无条件给模型调。
+
+### 3. 逐条对齐：goose 的每一类 ↔ quill 有没有对应物
+
+| goose 许可（§1 编号） | quill 对应物 | 判定 | 值不值得补 | 补的话落点 |
+|---|---|---|---|---|
+| 1 模式级 `GooseMode` | 无；`grep -rniE "goose_mode\|GooseMode" crates/` → 0 行 | **没有** | 值 | 会话加一列（照 `0001_init.sql:245-287` 风格迁移）+ 判定入口对齐 `permission_inspector.rs:159-195` 的分派 |
+| 2 工具级 `PermissionLevel` | 无；`grep -rniE "always_allow\|ask_before\|never_allow\|PermissionLevel\|smart_approve" crates/ ui/web/src/` → 0 行 | **没有** | 值 | 新表 `user_id + tool_name + level`；过滤点 `tools.rs:79-103`（注册）与 `:108-124`（执行）；UI 落 `/api/extensions` |
+| 3 单次调用级（工具+参数哈希） | 无 | **没有**（goose 自身也无调用点，见 §1 尾注） | 较值 | 与 #4 一起做；真正危险的是 MCP 工具（`tools.rs:348-412`），先做 MCP 白名单更划算 |
+| 4 单次确认 `Permission{AllowOnce,DenyOnce,…}` | 无 | **没有** | 值 | 需要「暂停-请示-恢复」通道：quill 是同步 HTTP/SSE（`api_chat.rs:750-757`、`api_chat_stream.rs`），没有 goose `ActionRequired` 的落库-恢复机制（`ops_tool_approval.rs:125-133`）；补它要先有会话态（见 Q030 §3 #7）与前端确认条 |
+| 5 LLM 判读只读 | 无 | **没有** | 中（可后置） | 依赖 #1/#2 先有；落点 `quill-core/src/state_machine.rs:169` 已有的 `AwaitingApproval` 模型 + 新审批 op |
+| 6 工具注解 `read_only_hint` | 无（`ToolSpec` 只有 name/description/parameters） | **没有** | 中 | MCP `tools/list` 带回 annotations 时在 `tools.rs:571-587` `mcp_tool_spec` 保留；是 #5 的前置 |
+| 7 扩展级审批 | 无 | **没有** | 中低 | 已有 skills/MCP 启停（`skills_repo.rs:204`、`mcp_repo.rs`），缺的是「装/删/改配置要 owner 确认」；可先复用 `RequireAdmin`（`auth.rs:446`） |
+| 8 安全检查叠加 | 无 | **没有** | 中低 | 需先有 #2/#4 的判定链，否则没有可叠加的对象 |
+| 9 审批的用户形态 | 无（响应里只有 `tool_calls` 轨迹，`api_chat.rs:1252`） | **没有** | 随 #4 | 同上 |
+| — | quill 的角色鉴权（owner/member + `RequireAdmin`） | goose **没有对应物**（无多租户） | 不补（quill 产品面，来自 octop） | 保持 |
+
+一句话读表：**「goose 的许可 → quill 的鉴权」不能一一映射**；两边只在「谁能不能调这个管理接口」
+这一层重叠，而 goose 最核心的一层（agent 能否执行某个工具调用、以什么参数、要不要问用户）
+在 quill 是**空的**。
+
+### 4. 「quill 没有任何工具级/命令级许可」核实
+
+```bash
+$ grep -rniE "approval|permission" crates/ | wc -l
+50
+
+$ grep -rniE "approval|permission" crates/ | grep -vE "quill-backup[\\/]src[\\/]error.rs|quill-core[\\/]src[\\/]state_machine.rs"
+crates/quill-server/src/api_auth.rs:382:            "approval_mode": "manual",
+crates/quill-server/src/api_auth.rs:406:            "approval_mode": "manual",
+crates/quill-server/src/api_auth.rs:419:                "approval_mode": "manual",
+crates/quill-server/tests/http_contract.rs:169:        text.contains("\"approval_mode\":\"manual\""),
+crates/quill-store/migrations/0001_init.sql:199:  permissions_json TEXT NOT NULL DEFAULT '[]',
+```
+
+分类（全量 50 行）：
+
+- **21 行**是 `quill-backup/src/error.rs` 的 `io::ErrorKind::PermissionDenied`（文件系统错误码，不是许可）。
+- **其余 24 行**全部落在 `quill-core/src/state_machine.rs` —— 那是**没有 I/O、没有 provider、
+  没有工具、没有会话存储**的纯状态模型（文件头 `:1-5` 自述），里面 `AwaitingApproval` /
+  `ApprovalRequested` 等只是把 goose 审批语义**画进状态机图**，没有任何判定实现。
+- 去噪后只剩上面 5 行：3 条写死的 `approval_mode: "manual"` + 1 条契约断言 + 1 个零读写的
+  `plugins.permissions_json` 列。
+
+再证「工具执行路径无门禁」：
+
+```bash
+$ grep -rniE "always_allow|ask_before|never_allow|PermissionLevel|AllowOnce|DenyOnce|AlwaysDeny|AlwaysAllow|smart_approve|tool_permissions" crates/ ui/web/src/ --include=*.rs --include=*.ts --include=*.tsx
+（无输出；grep exit=1）
+
+$ grep -rn "prep.registry.call\|registry.call" crates/quill-server/src/api_chat.rs
+1049:            let result = prep.registry.call(call);
+```
+
+`ToolRegistry::call`（`crates/quill-server/src/tools.rs:108-124`）只做一件事：查 handler，
+查到就执行。它前面没有 `permission`/`approval`/`executable` 任何判定，执行前也没有询问用户
+的分支；`api_chat.rs:1049` 是全仓库唯一的工具执行调用点。**所以「quill 现在没有任何工具级/
+命令级许可」属实。**
+
+### 5. 未验证清单（Q027）
+
+| # | 未验证项 | 原因 |
+|---|---|---|
+| 1 | goose 审批链的端到端运行行为（`ActionRequired` 在客户端如何呈现、`AlwaysAllow` 何时落 `permission.yaml`） | 本仓只 vendored 源码，无 goose 可执行体与配置，无法真跑；本轮只核到实现与接线位置 |
+| 2 | `ToolPermissionStore` 无调用点的原因 | 代码只能证明「vendor 整棵树里没有调用点」；「是不是废弃/待接线」属于历史与规划，不是代码事实 |
+| 3 | `permission.yaml` 多进程并发下的一致性 | 有文件锁实现（`config/permission.rs:196-222`），未实跑并发场景 |
+| 4 | `plugins.permissions_json` / `skills.tool_allowlist` 是否被仓库外的消费者使用 | 只核了本仓库；Octop 前端等外部消费者未查 |
+| 5 | goose security/egress/adversary 三类 inspector 的判定细节与叠加顺序 | 本轮只核到「能覆盖 permission 结论」的机制（`tool_inspection.rs:170-261`），未逐条读 `security/*.rs` 的规则 |
+
+---
+
+## Q030 会话模型
+
+### 一句话结论
+
+goose 的 `session` 是**「会话 = 一段可重放的完整 message 流 + 会话级元数据」**（消息按
+`(created_timestamp,id)` 排序、工具往返也是消息、可见性写在消息 metadata 里、对话状态由消息
+尾部推导）；quill 的会话是**「会话 = 一张表 + 一问一答两条消息」**（工具往返不落库、无可见性、
+`state` 列写了 `'IDLE'` 后再没动过）。**12 条维度里，等价 0 条、部分 5 条、缺失/语义相反 7 条**，
+见 §3。
+
+### 1. goose 侧
+
+```bash
+$ ls vendor/goose/crates/goose/src/session/
+chat_history_search.rs
+diagnostics.rs
+export_markdown.rs
+extension_data.rs
+import_formats/
+last_message_snippet.rs
+legacy.rs
+mod.rs
+nostr_share.rs
+session_manager.rs
+session_naming.rs
+
+$ grep -rn "fn " vendor/goose/crates/goose/src/session/mod.rs | head -20
+（无输出；grep exit=1 —— mod.rs 只有 26 行，全部是模块声明与 re-export，没有函数）
+
+$ sed -n '23,26p' vendor/goose/crates/goose/src/session/mod.rs
+pub use session_manager::{
+    Session, SessionInsights, SessionManager, SessionNameUpdate, SessionType, SessionUpdateBuilder,
+};
+```
+
+关键事实（`file:line` 均相对仓库根）：
+
+| 维度 | goose 出处 |
+|---|---|
+| `Session` 结构（24 个字段） | `vendor/goose/crates/goose/src/session/session_manager.rs:63-99`（`id` / `working_dir` / `name` / `user_set_name` / `session_type` / `created_at` / `updated_at` / `extension_data` / `usage` / `accumulated_usage` / `accumulated_cost` / `schedule_id` / `recipe` / `user_recipe_values` / `conversation` / `message_count` / `last_message_at` / `provider_name` / `model_config` / `goose_mode` / `archived_at` / `project_id` / `parent_session_id` / `last_message_snippet`） |
+| 会话类型 | `:48-57` `SessionType{User,Scheduled,SubAgent,Hidden,Terminal,Gateway,Acp}`（全仓 117 处引用） |
+| 建会话 / id 生成 | `:1620-1647` `INSERT INTO sessions (id, …) VALUES (? || '_' || MAX(SUBSTR(id,10))+1, …)`，即 `YYYYMMDD_N` |
+| 存储 schema | `:1028-1058` `CREATE TABLE sessions`、`:1066-1080` `CREATE TABLE messages(role, content_json, created_timestamp, metadata_json)`、`:1084-1101` `usage_ledger`；索引 `:1103-1124` |
+| 消息写入口 | `:1922-1964` `add_message`（写入前把 `created` 钳到 `MAX(created_timestamp)` 之后，注释 `:1927-1936` 说明「消息按 `(created_timestamp,id)` 读回」） |
+| 整段替换（压缩用） | `:1967-2005` `replace_conversation_inner`；上层 `:460-472` |
+| 读回（含消息） | `:433-435` `get_session(id, include_messages)`；`:1665-1690` |
+| 软删 / 归档 | `:92` `archived_at`；`:1055` 列；写 `:301-303`；ACP `acp/server/manage_sessions.rs:273,291`；**列表不过滤** `:2085-2097` |
+| 硬删 | `:2288-2318` `delete_session` 真删 messages → usage_ledger → sessions |
+| 消息可见性 | `goose-provider-types/src/conversation/message.rs:829-833` `MessageMetadata{user_visible, agent_visible}`；`user_only()` `:894-898`；`with_visibility` `:1292`；列表按 `json_extract(metadata_json,'$.userVisible')` 计数 `session_manager.rs:743-745` |
+| tool 往返在消息里 | `goose-provider-types/src/conversation/message.rs:318` `MessageContentBlock` 枚举；构造器 `tool_request :485`、`tool_response :526` |
+| 跨会话记忆 | `session/chat_history_search.rs:50-90` `ChatHistorySearch::{new,execute}`（关键词 + 日期 + `exclude_session_id` + `session_types`） |
+| 自动命名 | `:596-…` `maybe_update_name`；`session_naming.rs:10` `MSG_COUNT_FOR_SESSION_NAME_GENERATION = 3` |
+
+### 2. quill 侧
+
+```bash
+$ grep -rn "CREATE TABLE sessions\|CREATE TABLE messages" crates/quill-store/
+crates/quill-store/\migrations\0001_init.sql:46:CREATE TABLE sessions_auth (
+crates/quill-store/\migrations\0001_init.sql:245:CREATE TABLE sessions (
+crates/quill-store/\migrations\0001_init.sql:335:CREATE TABLE messages (
+crates/quill-store/\migrations\0008_token_metrics.sql:43:CREATE TABLE messages_new (
+```
+
+`sessions` 列（`crates/quill-store/migrations/0001_init.sql:245-287`）：`user_id, id, kind, room_id,
+team_id, parent_session_id, title, expert_id, provider_id, model, state, error_state, last_error,
+replan_count, next_seq, summary, summary_upto_seq, compacted_count, checkpoint_key, checkpoint_path,
+workspace_path, message_count, input_tokens, output_tokens, created_at, updated_at, last_active_at,
+deleted_at`；`CHECK (kind IN ('solo','team_leader','team_member'))` `:276`；
+`CHECK (state IN ('IDLE','PLANNING','DISPATCHING','COLLECTING','DELIVERING','ABORTED','idle','running','cancelling'))` `:277`。
+
+`messages` 当前形状（以重建后的 `crates/quill-store/migrations/0008_token_metrics.sql:43-77` 为准）：
+`user_id, id, session_id, seq, role, status, content, reasoning, expert_id, dispatch_id, tool_call_id,
+tool_name, citations_json, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+turn_ms, error_code, created_at`；`CHECK (role IN ('user','assistant','system','tool_call','tool_result'))` `:68`；
+`UNIQUE INDEX ux_messages_seq ON messages (user_id, session_id, seq)` `:97`。
+
+读写口径全在 `crates/quill-server/src/chat_repo.rs`（SQL 常量 + 类型化行）；工具往返只在内存里，
+最终只有正文落库（见 §3 #4）。
+
+### 3. 逐条对齐（会话标识 / 消息模型 / seq / 状态 / 软删 / 上下文 / 专家绑定 / 跨会话记忆）
+
+| # | 维度 | goose（`file:line`） | quill（`file:line`） | 判定 |
+|---|---|---|---|---|
+| 1 | 会话标识 | `Session.id: String` `session_manager.rs:64`；`YYYYMMDD_N`（`:1630-1647`）；`id TEXT PRIMARY KEY` `:1029` | `id BLOB` + `PRIMARY KEY(user_id,id)` + `CHECK(length(id)=16)` `0001_init.sql:247,274-275`；HTTP 层大写 32 位 hex（`chat_repo.rs:21` `hex(id)`；`api_chat.rs:210`） | **部分**（goose 人类可读全局唯一；quill 随机 16 字节按用户分区） |
+| 2 | 租户归属 | 无 user 概念（`sessions` 无 user 列，`:1028-1058`） | `user_id BLOB NOT NULL`，所有读路径带 `user_id` 谓词（`chat_repo.rs:21-22,28-29,35-36`） | quill 多出（产品面差异，非缺口） |
+| 3 | 消息角色 | `messages.role TEXT` `:1070`；`Message.role: Role` `message.rs:964`；工具在 content block（枚举 `:318`） | `role CHECK IN ('user','assistant','system','tool_call','tool_result')` `0008:68`；生产**只写** user/assistant（`api_chat.rs:820`、`:1206` 是全仓仅有两处 `role:` 写入） | **部分**（表预留 tool 角色，写入侧不用） |
+| 4 | 工具往返 | 每次 tool request/result 独立入库（`:1943-1956`，content_json 存 block）；读回恢复（`:1665-1690`、`:1967-2005`） | 只在内存 `msgs`（`api_chat.rs:1035-1060`）；轨迹只进 HTTP 响应 `"tool_calls": tool_trace`（`api_chat.rs:1252`）；下一轮历史 `HISTORY_SQL` 只取 user/assistant（`chat_repo.rs:504-506`），`HISTORY_LIMIT = 40`（`api_chat.rs:21`） | **缺失** |
+| 5 | 消息可见性 | `MessageMetadata{user_visible, agent_visible}` `message.rs:829-833`（`user_only :894`、`with_visibility :1292`）；列表按 `$.userVisible` 计数 `session_manager.rs:743-745` | 无可见性列；`status`（streaming/complete/interrupted/failed `0008:69`）是流式状态，不是可见性 | **缺失** |
+| 6 | 排序 / `seq` | 无 seq 列；顺序 = `(created_timestamp,id)`（索引 `:1112-1116`；写时钳位 `:1927-1936`） | `seq` + `UNIQUE(user_id,session_id,seq)` `0008:97`；`sessions.next_seq` `0001:260`；写前 `MAX(seq)+1`（`chat_repo.rs:536-551`）；`touch_session` 推进到 `seq_assistant+1`、`message_count+2`（`:611-613`） | **等价物存在，语义不同**（显式序号 vs 时间戳序） |
+| 7 | 状态 | 会话无状态列（`goose_mode` 是模式，不是状态，`:1054`）；对话状态从消息尾部**推导**（`goose-agent/src/machine.rs`；推导规则已被 `quill-core/src/state_machine.rs:24-70` 抄录） | `state` 9 值 CHECK `0001:277`，但**只在插入时写死 `'IDLE'`**（`chat_repo.rs:140`），此后全仓没有一条 UPDATE 改它；`error_state`/`replan_count` 在 Rust 侧零读写（`grep` 计数 0/0），`last_error` 唯一 1 处命中是测试函数名；`summary`/`summary_upto_seq`/`compacted_count`/`checkpoint_key`/`checkpoint_path` 同样零读写 | **缺失（列在、逻辑不在）** |
+| 8 | 软删 | `archived_at`（`:92,1055`，写 `:301-303`，ACP `manage_sessions.rs:273,291`），但列表 WHERE 不含 archived（`:2085-2097`）；`delete_session` 是**硬删**（`:2288-2318`） | `deleted_at` 软删：读路径 `deleted_at IS NULL`（`chat_repo.rs:22,29`）；`SOFT_DELETE_SQL` 幂等（`:35-38`）；`api_chat.rs:291-335` 注释明说「消息记录保留」，无硬删入口 | **语义相反** |
+| 9 | 上下文占用口径 | `Session.usage`/`accumulated_usage`（`:76-79`）+ `usage_ledger`（`:1084-1101`）+ 压缩（`goose-context-management` 整 crate；`save_compacted_conversation :464-472`） | 实测值 = 最后一条 assistant 的 `input_tokens`（`chat_repo.rs:238-241`）；`/api/sessions/{id}/context` = 实测值 + **字符数**分段（`api_chat.rs:377-470`、`session_metrics.rs:188-240`）；`compaction_threshold_tokens` 只存不判（`api_admin.rs:165` 校验；纯逻辑在 `quill-core/src/compaction.rs`，未接线） | **部分** |
+| 10 | 会话与「专家」绑定 | 无专家概念；有 `recipe` / `provider_name` / `model_config` / `extension_data`（`:80-88`）、`session_type`（`:48-57`）、子会话 `parent_session_id`（`:96`；创建 `orchestrator.rs:791-796`） | `expert_id`（`0001:253`；`SET_EXPERT_SQL chat_repo.rs:44`）、`kind`(solo/team_leader/team_member)、`team_id`、`parent_session_id`、`room_id`；专家=system 提示注入（`api_chat.rs:1284-1330`）；建会话默认挂通用专家（`api_chat.rs:184-188`） | **quill 多出 team/room（自研，goose 无多智能体）；goose 的 recipe/model_config/extension_data 在 quill 缺失** |
+| 11 | 跨会话记忆 | `chat_history_search.rs:50-90` | 无：`grep -rn "chat_history_search\|search_chat_history" crates/ --include=*.rs` 无输出 | **缺失** |
+| 12 | 会话命名 | `maybe_update_name`（`:596`）+ `session_naming.rs:10`（3 条消息后自动命名）+ `user_set_name`（`:69`） | `title` 建会话时由请求给、截 64 字符（`api_chat.rs:188-195`、`:643`），无自动命名、无 `user_set_name` | **部分** |
+
+计数：**部分 5 条**（#1、#3、#9、#10、#12）＋ **缺失 5 条**（#4、#5、#7、#11 及 #2 的反向）＋
+**语义相反 1 条**（#8）＋ **语义不同 1 条**（#6）；没有任何一条判「等价」。
+
+### 4. `docs/ARCHITECTURE.md` §1.3 「会话模型是 `api_chat` 自研」具体差在哪
+
+`docs/ARCHITECTURE.md:106` 那一行记的是：
+
+```
+| session | `goose/session` | `api_chat.rs` 自研 | 部分 |
+```
+
+对照 §1/§3，这里的「自研」与由此产生的「部分」，具体差在五处：
+
+1. **最关键的差 —— 消息流不是 goose 意义上的完整会话**：工具往返**不入库**（§3 #4），
+   于是「重放一段会话就能重建当时模型看到的全部上下文」在 quill 不成立；`messages` 表里
+   只有一问一答。goose 的会话之所以能被压缩、导出、检索、审批回放，前提就是消息流完整。
+2. **`seq` 是自研的显式序号**（goose 没有），且只按「一问一答 +2」推进（`chat_repo.rs:611-613`）
+   —— 一旦要把工具消息入库，这个步进口径必须先改，否则 `UNIQUE(user_id,session_id,seq)`
+   （`0008:97`）会挡住第二条 tool 消息。
+3. **状态列是「照形状留的坑位」**：`state`/`error_state`/`replan_count`/`last_error`/
+   `summary_upto_seq`/`compacted_count`/`checkpoint_*` 在 Rust 侧零读写（§3 #7），
+   `quill-core/src/state_machine.rs` 只是一张**纯逻辑状态机模型**（文件头自述「没有 I/O、
+   没有 provider、没有工具、没有会话存储」），没有接进 `api_chat`。
+4. **没有消息可见性**（§3 #5）：quill 表达不了 goose 的 `user_only` / `agent_visible`，
+   所以导出、回放、以及 Q027 §3 #4 的「审批只给用户看」都缺一个数据位。
+5. **没有跨会话检索与压缩**（§3 #9/#11）：会话增长只能靠 `HISTORY_LIMIT = 40`
+   （`api_chat.rs:21`）截断，压缩阈值配置只在库里躺着。
+
+**第一步该动什么（按依赖顺序，只给第一步）：先让工具往返入 `messages`。**
+
+理由：它是其余各项的数据基础，且 schema 已经预留好 —— `role` CHECK 已含 `'tool_call'`/
+`'tool_result'`（`0001_init.sql:356`）、`tool_call_id`/`tool_name` 列已在（`:346-347`）。
+具体三处：
+
+- 写入：`crates/quill-server/src/api_chat.rs:1040-1060`（工具循环里在 `registry.call` 前后各落一条）；
+- 读回：`crates/quill-server/src/chat_repo.rs:504-506`（`HISTORY_SQL` 的
+  `role IN ('user','assistant')` 扩到含 tool 两类，并按 goose 的 content-block 形状拼回 `msgs`）；
+- 序号：`crates/quill-server/src/chat_repo.rs:611-613`（`message_count + 2` 与
+  `next_seq = seq_assistant + 1` 改成按实际落库条数推进）。
+
+不先做这一步，后面无论压缩（压缩的对象就是完整消息流）还是可见性（可见性长在消息 metadata 上）
+都没有可挂载的对象。
+
+### 5. 未验证清单（Q030）
+
+| # | 未验证项 | 原因 |
+|---|---|---|
+| 1 | goose `SessionManager` 的运行时行为（建会话 / 读回 / 压缩的真实表现） | 只 vendored 源码，无 goose 可执行体；本轮只核实现与接线位置 |
+| 2 | goose `archived_at` 在 ACP/UI 上是否被更上层过滤 | 代码里 `list_sessions_matching`（`session_manager.rs:2085-2097`）不过滤 archived；「上层有没有再过滤」未逐层追完 |
+| 3 | quill `state` 列是否被本仓库之外的进程写（Octop 前端、运维脚本） | 只核本仓库 Rust/SQL/TS；外部写入未验证 |
+| 4 | goose 压缩（`goose-context-management`）与 `quill-core/src/compaction.rs` 的行为等价性 | Q030 只核「有/没有/部分」，等价性未比对（性质同 Q029 未验证 #5） |
+| 5 | goose 子会话（`SessionType::SubAgent`）与 quill `team_member` 会话的语义是否可比 | 两边都只核到字段与创建点，未跑真实派工/子会话流程 |
