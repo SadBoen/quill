@@ -70,8 +70,6 @@ jobs:
         with:
           toolchain: ${{ steps.tc.outputs.channel }}
           components: rustfmt, clippy
-        with:
-          components: rustfmt, clippy
 
       # 缓存 cargo 产物与 npm 的下载缓存（**不是** node_modules）：
       # 下面跑的是 `npm ci`，它会先删掉 node_modules 再按 lock 重装 ——
