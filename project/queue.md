@@ -86,7 +86,11 @@
 ## E. 知识库 / 资料库（需求里的 xu-wiki）
 
 - [ ] Q056 · 核 `quill-wiki` 与用户 GitHub 上 xu-wiki 的能力差 · `docs/` · 出一张差集表
-- [ ] Q057 · wiki 的 `ingest_context` / `query_context` 接上真 LLM 后端 · `quill-wiki` · 端到端可跑
+- [ ] Q057 · wiki 的 `ingest_context` / `query_context` 接上真 LLM 后端 · `quill-wiki` · 端到端可跑 · **2026-10-09 实测复核（本轮未做，但把范围量准了 —— 别再照旧说法估工）**：
+  - **wiki 侧其实已经写完了**：`quill-wiki::ingest::ingest()` 与 `query::query()` 都是**完整的泛型实现**（读 raw/索引/schema/日志 → 拼上下文 → 调后端 → 校验落盘页可读回 → 重建索引 → 写日志），只依赖 `quill_adapters::KnowledgeBackend`（`crates/quill-adapters/src/knowledge.rs:74`，三个方法：`plan_ingest` / `answer_query` / `lint_semantics`）。**全仓唯一的实现是测试里的 `FakeBackend`**（`crates/quill-wiki/tests/flow.rs:85`）。
+  - 所以 Q057 的真身 = ① 在壳侧写一个 `KnowledgeBackend` 实现（拿这一轮的 provider 调模型，照 Q018 的 `chat_compaction::ProviderSummarizer` 那个壳侧注入模式）+ ② 把 `routes.rs:130/134` 那两条 501 桩换成真 handler（`POST /api/wiki/{ingest,query}`）。
+  - **需要先拍板的一件事（别默默自创）**：`plan_ingest` 拿到的只是一个 `IngestContext`（源文 + 索引 + schema + 日志 + 相关页），**没有「让模型输出什么」的协议** —— 写页是模型干的，所以得定「提示词 + 模型回什么形状（页路径与正文怎么给）+ 怎么解析成 `IndexReceipt`」。`.octop-ref/octop` 的 `api/routers/knowledge_bases.py` 是 **embedding/RAG** 那套（961 行：上传/OCR/向量），**不是**这套 LLM-WIKI 流程；xu-wiki 也没在本地（`vendor/` 只有 goose 与 openoctopus-frontend）。→ 这个协议要么按 xu-wiki 的设计（需先取回该项目，见 Q056），要么明确标注「自创」（Q077 的纪律）。**先定这一条再动手**，否则就是凭记忆发明。
+  - 落点文件：`crates/quill-server/src/api_wiki.rs`（已有 `store_for()` 与 `map_wiki()` 可复用）、`crates/quill-server/src/routes.rs:130-135`。
 - [ ] Q058 · wiki 索引的增删改查 HTTP 面接通（见 Q033–Q035） · `api_wiki.rs` · 前端能真用
 - [ ] Q059 · 资料库页面（`ui/web/src/workspace`）接真接口 · `ui/web` · 没有假按钮
 - [x] Q060 · wiki 文件路径安全（`pathsafe`）的边界测试 · `quill-wiki` · **已完成 2026-10-09**：`store.rs` 新增两条 + 一条 Windows-only。`resolve_never_lands_outside_the_root` —— 21 个边界输入（`C:x` 盘符相对、`c:/…` 盘符绝对、`dir/C:x.md` 非首段冒号、`/`、`//`、`a/../../b`、`..`、`../..`、`sub/../..`、`a//b.md`、`./a.md`、`\etc\passwd`、`..\other\secret.md` 等）跑**两条互补判据**：① 放行的必须规范化后仍在**层目录**内（基准是 `layer()` 不是 `root()` —— 拿 root 比会宽出一层，判据当场被这条抓出来并改正）；② 点名的 12 个必须直接拒。另外钉住 `concepts/..` **必须放行**（归零后仍在根内，拒掉属过度拦截）。`write_apis_refuse_escapes_and_write_nothing` —— 判据落在**真没落盘**（`write_page`/`write_raw` 会 `create_dir_all(parent)`，放行一次就越权建目录），且合法路径仍能写（否则「拒」可能只是 API 坏了）。`#[cfg(windows)] windows_treats_backslash_traversal_as_escape` **本机跑不到、未验证**（与 `pathsafe.rs` 既有几条同一纪律）。实测 `cargo test -p quill-wiki` → 72 passed / 0 failed（原 69）
