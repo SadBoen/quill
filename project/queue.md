@@ -61,9 +61,9 @@
 - [x] Q035 · `POST /api/wiki/search` 真实现（只读索引，可不依赖 LLM） · `api_wiki.rs` · **已完成 2026-10-08**：真读 `index.md`（`WikiStore::read_index`），复用现成的 `WikiIndex::lookup` 计分（标题 +2 / 摘要 +1，同分按标题升序，有测试钉住不漂）；返回带**命中依据**（`matched_fields` + 每词命中处前后 24 字符摘录）、`total_hits` 与 `truncated`（真数、不隐藏）；**不返回 `path` 与 `page_type`** —— 索引里没有路径列、解析出的类型恒为 `Summary`，给出来就是假数据（注释与测试都写明）；索引不存在时 `index_present:false` 且说明「零命中 ≠ 资料库没有」。8 条单测（含「删光页面文件仍命中」证明只读索引）+ 反向验证（去掉摘要命中 → 2 条红）。路由已接：`post(crate::api_wiki::search)`
 - [x] Q036 · `PATCH /api/extensions/mcp/{name}` 真实现 · `api_extensions.rs` · **已完成 2026-10-08**：改名走 `UPDATE`（保留 `created_at` 与行身份，有测试钉住），不是 delete+insert；**缺省字段 = 不变、显式 `null` = 清空**（`enabled_capabilities: null` = 全禁，是取值不是「不变」）；与 POST 共用同一份传输交叉校验；用户隔离（别人的行 404，同名按用户各一份）；撞名（含软删行占名）409 且不静默合并；`updated_at` 只在名字或指纹真变时才写。`mcp_repo` 加 `get`/`apply_patch`（`PatchOutcome` 四态）+ 8 条测试，`tests/extensions_http.rs` 9 条真库往返；反向验证（改名当没改 / `truncated` 恒 false / 去掉 `user_id` 谓词）实测变红。路由已接：`patch(api_extensions::patch_mcp)`
 - [x] Q037 · `GET /api/extensions/plugins` —— **刻意保持 501**：前端 `capabilityGaps.ts` 已把它登记为「已登记路由、处理函数未实现」并如实显示给用户；删掉会让那句「已登记」变假话（退化成 404）。已在路由处加注释说明 · `routes.rs`
-- [ ] Q038 · `GET /api/upgrade/check` 真实现 · `api_upgrade` · 能报出当前版本与是否有新版
-- [ ] Q039 · `POST /api/upgrade/prepare` 真实现（含升级前备份守卫） · 同上 · 真落备份
-- [ ] Q040 · `GET /api/upgrade/history` 真实现 · 同上 · 能列出历史
+- [x] Q038 · `GET /api/upgrade/check` 真实现 · `api_upgrade` · **已完成 2026-10-08**（admin-only）：当前版本取本 crate 的 `env!("CARGO_PKG_VERSION")`（与 `GET /api/version` 同源）；「是否有新版」只认**真来源** `QUILL_UPGRADE_MANIFEST_URL`（`{version,url?,notes?}` JSON，10s 超时 / 重定向≤5 / 响应体 256 KiB 封顶）。**没配来源、取不到、JSON 坏 → 一律 `has_update: null` + note 说明「这是不知道，不是已是最新」**；`false` 只在真取到清单且真比出不高于当前版本时出现。版本比较规则（允许一个前导 v、按段纯十进制、缺段补 0、非数字/溢出→不可比较→null）原样写进响应 `VERSION_RULE`
+- [x] Q039 · `POST /api/upgrade/prepare` 真实现（含升级前备份守卫） · 同上 · **已完成 2026-10-08**（admin-only，201）：真调用 `quill_upgrade::take_pre_upgrade_backup`（Q064 记的「零调用方」就此结束），备份落在与备份路由**同一个** `实例根/backups`，所以这份升级前备份能被 `/api/backup/verify` 校验、被 `quill restore` 回滚。**修掉一个真 bug**：原来的「先 exists 再 join」有 TOCTOU，同毫秒两次 prepare 会共用一个目录名（实测第二个 `VACUUM INTO` 报 `table schema_version already exists`，备份内容不可信）；现在用 `create_dir` 原子预留名字。响应含备份目录/摘要（`db_sha256`/文件数/字节数）/真实回滚命令/`upgraded:false`（明说没升级）；失败 503/409/500 + 既有中文阻断文案，**绝不返回成功**
+- [x] Q040 · `GET /api/upgrade/history` 真实现 · 同上 · **已完成 2026-10-08**（admin-only）：读 `<数据根>/upgrade-history.jsonl`（每次 prepare 成功追加一行：时间/版本/备份目录/摘要）。**文件不存在 → 200 + 空列表 + note「还没有升级记录……不是读失败」**；文件在但读不出或某行坏 → **500 并点名文件与行号**（静默跳过等于造一份少一条记录的假历史）
 - [x] Q041 · `GET /api/ws` 真实现或如实删掉 —— **选了删**：核过前端 `ui/web/src` 与全部测试都**没人用**它，它是一条假接口（最高指示第 2/5 条：不画没有后端的入口）· `routes.rs`
 
 ## D. octop 外壳迁移（依最高指示第 2 条）
@@ -74,10 +74,10 @@
 - [ ] Q045 · 通道（channels）按 TencentCloud/Octop 重做 · `api_channels.rs` · 有 `file:line` 对齐
 - [ ] Q046 · 个性化页面按 octop 重做 · `ui/web/src/personalization` · 同上
 - [ ] Q047 · 专家市场（列表 + 安装）接通 · `api_expert_market.rs` · 真能装
-- [ ] Q048 · 备份三条路由只允许 admin 的**回归测试**钉住 · `crates/quill-server/tests/` · 非 admin 拿到 403
+- [x] Q048 · 备份三条路由只允许 admin 的**回归测试**钉住 · `crates/quill-server/tests/` · **已完成 2026-10-08**：核到三条路由（export/restore/verify）都走 `RequireAdmin`，非 admin + 有效令牌 → **403**（`forbidden`，无 401/403 差异）。新增 4 条：三条逐路由 403（各先造一份**真存在的备份**，确保 403 来自鉴权而不是「目录不存在」）+ 一条正向 admin 最小往返（export 201 真落盘 → verify 200 `ok:true` → restore 200）。**反向验证**：把 `auth.rs` 的 `if !ctx.is_admin` 临时改成 `if false` → 4 条全红（且红的方式是「回出了 db_sha256 与绝对路径」），还原后绿
 - [ ] Q049 · `POST /api/backup/restore` 在演练里真还原成功 · `api_backup.rs` · 端到端可验
 - [ ] Q050 · 客户端不能指定落盘位置（`../` 与盘符一律拒）的测试 · `api_backup.rs` · 已有则补反向验证
-- [ ] Q051 · 会话改名：`PATCH /api/sessions/{id}` 注册（现在 405） · `routes.rs`/`api_chat.rs` · 真改名
+- [x] Q051 · 会话改名：`PATCH /api/sessions/{id}` 注册（现在 405） · `routes.rs`/`api_chat.rs` · **已完成 2026-10-08**：新增 `api_chat::rename` + `chat_repo::rename_session`（`RENAME_SQL` 带 user_id/deleted_at 谓词、**刻意不碰 `last_active_at`** —— 改名不是「用过它」，刷新活跃时间会让会话在侧栏凭空跳到最上面）；标题上限抽成 `TITLE_MAX_CHARS`（建会话与改名**共用同一个 64**，此前 create 里是内联的 64）；空白标题 400（走 Q007 的规范取值助手）、超长按**字符**截断、未知字段 400、软删/别人的 → 404。6 条 HTTP 测试 + 1 条 SQL 测试；**反向验证**：把 rename 换成不落库的 no-op → 「改名必须真落库」实测变红，还原后 6/6 绿
 - [ ] Q052 · 建团队时静默多出的那个会话，不在侧栏露出来 · `api_teams.rs`/`ui/web` · 侧栏干净
 - [ ] Q053 · 换会话时不残留上一会话的话 · `ui/web/src/chat` · 有回归测试
 - [ ] Q054 · 前端审计的「为什么不修」逐条给出理由（若仍在） · `ui/web` · 清单可查
