@@ -98,13 +98,13 @@
 | 卡片无图标时的占位图标 | `ui/web/src/experts/icons.tsx:138-139` | `.octop-ref/octop/dashboard/src/pages/Agent/Skills/components/SkillHubTab.tsx` | 只读对齐 | 同款描边手写，不引 `lucide-react`；出处那页离线核不到 |
 | 卡片左下角的下载数 | `ui/web/src/experts/icons.tsx:148-149` | `.octop-ref/octop/dashboard/src/pages/Agent/Skills/components/SkillHubTab.tsx` | 只读对齐 | 同上 |
 | 技能落盘路径与上游同构 | `crates/quill-server/src/api_extensions.rs:1483` | `.octop-ref/octop/dashboard/src/api/types/skill.ts:3-5` | 只读对齐 | 我们落成 `<slug>.md` 单文件，它落成 `skills/{slug}/SKILL.md` 目录；语义同构，布局不同 |
-| SkillHub 客户端的安全上限 | `crates/quill-server/src/skillhub.rs:124-131` | `.octop-ref/octop/src/octop/infra/agents/experts/skillhub_market.py:34-40` | 已接入 | 四个数照抄它，**但常量的定义在 sparse 之外**（`src/octop/infra/skills/skillhub_common.py`），手边只有 import 处；数字本身离线无法复核 |
-| 上游地址可配置 | `crates/quill-server/src/skillhub.rs:113-121` | `.octop-ref/octop/src/octop/infra/agents/experts/skillhub_market.py:35` | 已接入 | 同样是「用同一个常量、但定义在 sparse 外」 |
-| 拉取超时与每页条数 | `crates/quill-server/src/skillhub.rs:123` | `.octop-ref/octop/src/octop/infra/agents/experts/skillhub_market.py:51-52` | 已接入 | 30 秒与 100 条，与它的 `_HTTP_TIMEOUT` / `_SKILLSET_PAGE_SIZE` 同值 |
-| 解 zip 的攻击面检查 | `crates/quill-server/src/skillhub_unpack.rs:1-8` | `.octop-ref/octop/src/octop/infra/agents/experts/skillhub_market.py:37-40` | 已接入 | 用 Rust 的 `zip` crate 解，不用自己写解压器；四个上限同值 |
+| SkillHub 客户端的安全上限 | `crates/quill-server/src/skillhub/http.rs:18-22` | `.octop-ref/octop/src/octop/infra/agents/experts/skillhub_market.py:34-40` | 已接入 | 四个数照抄它，**但常量的定义在 sparse 之外**（`src/octop/infra/skills/skillhub_common.py`），手边只有 import 处；数字本身离线无法复核 |
+| 上游地址可配置 | `crates/quill-server/src/skillhub/http.rs:10` | `.octop-ref/octop/src/octop/infra/agents/experts/skillhub_market.py:35` | 已接入 | 同样是「用同一个常量、但定义在 sparse 外」 |
+| 拉取超时与每页条数 | `crates/quill-server/src/skillhub/http.rs:18` | `.octop-ref/octop/src/octop/infra/agents/experts/skillhub_market.py:51-52` | 已接入 | 30 秒与 100 条，与它的 `_HTTP_TIMEOUT` / `_SKILLSET_PAGE_SIZE` 同值 |
+| 解 zip 的攻击面检查 | `crates/quill-server/src/skillhub/unpack/mod.rs:1-8` | `.octop-ref/octop/src/octop/infra/agents/experts/skillhub_market.py:37-40` | 已接入 | 用 Rust 的 `zip` crate 解，不用自己写解压器；四个上限同值 |
 | 专家市场的上游就是 SkillHub 的 skillsets | `crates/quill-server/src/api_expert_market.rs:57-110` | `.octop-ref/octop/dashboard/src/api/modules/expertMarket.ts:99-112` | 已接入 | 它的 `/experts/hub` 与它的 `/skill-packages/hub` 指向同一份 `/api/v1/skillsets`；**没有第二个上游客户端**，直接复用已有的 `skillhub` / `skillhub_unpack` |
-| 装市场专家时人格取 skillsets/<slug>.md → skillsets/ 下第一篇 → identify.md | `crates/quill-server/src/skillhub_unpack.rs:298-352` | `.octop-ref/octop/src/octop/infra/agents/experts/skillhub_market.py:611-621` | 已接入 | 顺序照抄。**不能直接用 `unpack`**：它按 `sanitize_name` 把条目拍平成 basename，于是编排提示与它引用的技能正文拍平后撞名，分不出哪篇才是人格 |
-| 装包前先取一次技能集详情 | `crates/quill-server/src/skillhub.rs:376-402` | `.octop-ref/octop/src/octop/infra/agents/experts/skillhub_market.py:389` | 已接入 | 它的 manifest 缺失兜底本来就靠这个端点；我们额外用它兜「包里没有可用 manifest」的情形 |
+| 装市场专家时人格取 skillsets/<slug>.md → skillsets/ 下第一篇 → identify.md | `crates/quill-server/src/skillhub/unpack/mod.rs:309-353` | `.octop-ref/octop/src/octop/infra/agents/experts/skillhub_market.py:611-621` | 已接入 | 顺序照抄。**不能直接用 `unpack`**：它按 `sanitize_name` 把条目拍平成 basename，于是编排提示与它引用的技能正文拍平后撞名，分不出哪篇才是人格 |
+| 装包前先取一次技能集详情 | `crates/quill-server/src/skillhub/endpoints.rs:53` | `.octop-ref/octop/src/octop/infra/agents/experts/skillhub_market.py:389` | 已接入 | 它的 manifest 缺失兜底本来就靠这个端点；我们额外用它兜「包里没有可用 manifest」的情形 |
 | 装进来的技能一律 `enabled=false` | `crates/quill-server/src/api_extensions.rs:1073` | `.octop-ref/octop/src/octop/infra/agents/experts/skillhub_market.py:388-418` | 已接入 | 与已有的技能包安装同一套决策（实测 13 个技能就能把 8192 上下文顶爆） |
 | 市场专家 id = `hub-<slug>` | `crates/quill-server/src/api_expert_market.rs:41-54` | `.octop-ref/octop/src/octop/infra/agents/experts/skillhub_market.py:50` | 我们的选择 | 它用 `skillhub-skillset-` 前缀；我们缩短成 `hub-` 且**超长直接报错不截断** —— 截断会造出撞名专家（见 `BACKLOG.md` 的 B1-6） |
 | 会话 hover 才出现操作按钮 | `ui/web/src/chat/chatShell.css:169` | `.octop-ref/octop/dashboard/src/pages/Chat/chatSidebar.partial.less:248` | 只读对齐 | `opacity` 行为对齐，按钮位置因侧栏宽度不同而不同 |
@@ -124,7 +124,7 @@
 | 技能卡片只显示 `name`，丢掉 slug 与版本 | `ui/web/src/skills/HubSkillList.tsx:205-212` 把 slug 与 version 都印出来 | 见上面「技能卡片显示 slug 与版本」那一行：实测 `name` 是占位串时会撞名 |
 | 成员名册解析到未知 id 就 `continue` | `ui/web/src/experts/TeamsTab.tsx:308-315` 跳过但把缺失条数单列 | `.octop-ref/octop/dashboard/src/pages/Experts/components/TeamCard.tsx:80-82`。静默丢弃会让「团队有 5 个人」变成界面上只显示 3 个徽标 |
 | 两个永远走不到的错误码 | `crates/quill-server/src/api_teams.rs:12-16` 明写「等真出现这两件事时再随功能一起加」 | quill 没有常驻 agent 进程、没有团队分享。写一个永远走不到的分支等于凭空造状态 |
-| 包内 manifest 当**必备**，缺了整单 `PACKAGE_INVALID` | `crates/quill-server/src/skillhub_unpack.rs:298` 允许它缺失，退回上游详情接口给的 `skillSlugs`，两者都没有就装「只有人格」的专家并如实回报 | `.octop-ref/octop/src/octop/infra/agents/experts/skillhub_market.py:608`。人格本身完整可用，为一个描述性字段把整单废掉比装上一个用户能看见也能改的专家更糟 |
+| 包内 manifest 当**必备**，缺了整单 `PACKAGE_INVALID` | `crates/quill-server/src/skillhub/unpack/mod.rs:350` 允许它缺失，退回上游详情接口给的 `skillSlugs`，两者都没有就装「只有人格」的专家并如实回报 | `.octop-ref/octop/src/octop/infra/agents/experts/skillhub_market.py:608`。人格本身完整可用，为一个描述性字段把整单废掉比装上一个用户能看见也能改的专家更糟 |
 
 ## Octop 核不到的地方（sparse 集合之外）
 
@@ -140,7 +140,7 @@
 | `dashboard/src/pages/Agent/Skills/components/SkillHubTab.tsx` | 不在 sparse 集合内。技能卡片的形态、`displaySkills`、`hubCardIconFallback`、`hubCardStat` 都在这里 —— 上面四条相关引用都因此核不到 |
 | `dashboard/src/pages/Agent/Skills/index.module.less` | 不在 sparse 集合内。技能市场页自己的网格样式；`ui/web/src/skills/hub.css:142-173` 抄的 320px 下限，我们在 sparse 内能找到同一个字面量（`dashboard/src/pages/Experts/index.module.less:27`），但那不是它被抄的那一页 |
 | `dashboard/src/pages/Control/**` | 不在 sparse 集合内。涉及这一处的任何对比都缺一半证据 |
-| `crates/quill-server/src/skillhub.rs:459-474` 声称照抄的榜单类型集合 | 定义处不在 sparse 集合内，稀疏集里搜不到这个符号 —— **无法核实**，见交付报告 |
+| `crates/quill-server/src/skillhub/endpoints.rs:95` 声称照抄的榜单类型集合 | 定义处不在 sparse 集合内，稀疏集里搜不到这个符号 —— **无法核实**，见交付报告 |
 | octop 的**服务端**鉴权实现（JWT 签发/校验、账号停用如何影响已签发的令牌） | src/octop/ 在 sparse 内只有 config.py、launch.py、__main__.py 与 infra/agents/experts/；没有任何 auth/user 模块。所以「停用某个账号后，他手里已签发的 JWT 还能不能用」这条**核不到出处**。这一轮据以下面三条前端事实定的方案：令牌只有一种（`.octop-ref/octop/dashboard/src/api/request.ts:251-254`）、401 一律清令牌（`.octop-ref/octop/dashboard/src/api/request.ts:333-341`）、不许关鉴权（`.octop-ref/octop/dashboard/src/api/modules/auth.ts:306-308`） |
 
 ---
