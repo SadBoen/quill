@@ -135,6 +135,7 @@ fn app(t: &TestDb, wiki: std::path::PathBuf, provider: Arc<ScriptedProvider>) ->
         llm_config: Arc::new(RwLock::new(Default::default())),
         providers: Arc::new(RwLock::new(Default::default())),
         login_limiter: Arc::new(Default::default()),
+        member_control: Default::default(),
         pbkdf2: quill_control::Pbkdf2Params::for_tests(),
     }
 }

@@ -86,6 +86,7 @@ impl Harness {
             llm_config: Arc::new(RwLock::new(Default::default())),
             providers: Arc::new(RwLock::new(Default::default())),
             login_limiter: Arc::new(RateLimiter::default()),
+            member_control: Default::default(),
             pbkdf2: quill_control::Pbkdf2Params::for_tests(),
         }
     }

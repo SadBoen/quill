@@ -150,6 +150,7 @@ pub fn build_state(config: Config) -> (AppState, Vec<crate::config::Warning>) {
         llm_config: llm_config_slot,
         providers: provider_slot,
         login_limiter: Arc::new(Default::default()),
+        member_control: Default::default(),
         pbkdf2: quill_control::Pbkdf2Params::production(),
     };
 

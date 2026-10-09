@@ -47,6 +47,7 @@ fn state(t: &TestDb) -> AppState {
         llm_config: Arc::new(std::sync::RwLock::new(Default::default())),
         providers: Arc::new(std::sync::RwLock::new(Default::default())),
         login_limiter: Arc::new(Default::default()),
+        member_control: Default::default(),
         pbkdf2: Pbkdf2Params::for_tests(),
     }
 }

@@ -173,8 +173,14 @@ roaming connection to the run owner」）与 `:103-115` 的 `agent_cancel_token`
    队列可以存在但没有消费者 —— 我们不接受「假装送达」，也不排队等下一次
    （那意味着一次调用可能永远不生效，而调用方以为自己成功送达了）。
 
-**尚未做**：**HTTP 出口**（`steer`/`abort` 现在只有持有同一执行器的调用方够得到，
-而生产里执行器是每请求现建的）—— 条目是 **Q113**。
+**HTTP 出口（Q113，2026-10-09 已接）**：`POST /api/dispatch/{member}/steer` 与
+`/abort` 两条路由对**另一个请求**里正在跑的成员生效 —— 注册表因此从「执行器私有」
+搬到 `AppState` 上共享（`api_dispatch::run` 建执行器时 `with_control` 接上；
+执行器仍是每请求现建，但注册表不再跟着每请求一份）。**上游没有对应形状**
+（goose 的 steer 走「roaming connection」那条道，见上面 `active_run.rs` 的字段注释），
+所以**路由形状（路径 / 请求体 / 错误码）是自创的**：没在跑的成员 → 404、
+已取消的成员 → 409、标识形状不对 → 400；`AbortScope` 只暴露 `StopRound`
+（`AbortRoom` 留在执行器层 —— 不给没有需求的参数）。
 
 ---
 

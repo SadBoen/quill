@@ -85,7 +85,11 @@ pub fn build_router(state: AppState) -> Router {
         // 真执行那一条。**与 book 分开**：`book` 只记账（响应明写 `executed:false`），
         // 这条才真的让每个成员各跑一次模型。见 api_dispatch::run 的文档注释。
         .route("/api/teams/{id}/dispatch/run", post(api_dispatch::run))
-        .route("/api/dispatch/inflight", get(api_dispatch::inflight));
+        .route("/api/dispatch/inflight", get(api_dispatch::inflight))
+        // 运行中成员的控制面（Q113）。**必须是独立请求**才有意义：注册表在
+        // AppState 上共享，这两条才能作用于另一个请求里正在跑的成员。
+        .route("/api/dispatch/{member}/steer", post(api_dispatch::steer))
+        .route("/api/dispatch/{member}/abort", post(api_dispatch::abort));
 
     let teams = Router::new()
         .route("/api/teams", get(api_teams::list).post(api_teams::create))
@@ -538,6 +542,11 @@ pub const EXTRA_ROUTES: &[(&str, &str)] = &[
     // 派工**真执行**。自加的路由（octop 的派工只登记不跑），所以进 EXTRA。
     ("POST", "/api/teams/{id}/dispatch/run"),
     ("GET", "/api/dispatch/inflight"),
+    // 运行中成员的控制面（Q113）。octop 没有对应形状（它的 steer 走
+    // 「roaming connection」那条道，不是一个 HTTP 路由对），是 quill 自加的出口，
+    // 所以进 EXTRA。
+    ("POST", "/api/dispatch/{member}/steer"),
+    ("POST", "/api/dispatch/{member}/abort"),
     // 设置包导出/导入（需求 4 多端同步）。**不是 octop 契约路由** ——
     // 上游 api/routers 与 dashboard 里都没有 bundle 这个形状，逐字查过。
     // 它是 quill 自加的，却长期登记在 CONTRACT 里，是分类错位，本轮移到 EXTRA。

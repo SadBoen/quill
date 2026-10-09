@@ -30,6 +30,13 @@ pub struct AppState {
     /// 这样每个测试实例有独立计数，不会互相污染。
     pub login_limiter: Arc<crate::ratelimit::RateLimiter>,
 
+    /// 运行中成员的控制面（Q113）。**必须挂在 state 上**：生产里派工执行器是
+    /// 每请求现建的（`api_dispatch::run`），注册表要是也跟着每请求一份，
+    /// `POST /api/dispatch/{member}/steer|abort` 这类**另一个请求**就够不到
+    /// 正在跑的成员。与 `login_limiter` 同一条理由不做全局 `OnceLock`
+    /// （测试实例各自独立，不互相污染）。
+    pub member_control: Arc<crate::member_control::MemberControl>,
+
     /// 口令哈希参数。生产走 `production()`（PBKDF2 60 万次，OWASP 当前推荐），
     /// 测试用 `for_tests()`。
     ///
@@ -192,6 +199,7 @@ mod tests {
             llm_config: Arc::new(RwLock::new(Default::default())),
             providers: Arc::new(RwLock::new(Default::default())),
             login_limiter: Arc::new(Default::default()),
+            member_control: Default::default(),
             pbkdf2: quill_control::Pbkdf2Params::for_tests(),
         };
         let d = format!("{s:?}");
@@ -209,6 +217,7 @@ mod tests {
             llm_config: Arc::new(RwLock::new(Default::default())),
             providers: Arc::new(RwLock::new(Default::default())),
             login_limiter: Arc::new(Default::default()),
+            member_control: Default::default(),
             pbkdf2: quill_control::Pbkdf2Params::for_tests(),
         };
         let err = s.db().expect_err("存储缺失必须报错");
@@ -228,6 +237,7 @@ mod tests {
             llm_config: Arc::new(RwLock::new(Default::default())),
             providers: Arc::new(RwLock::new(Default::default())),
             login_limiter: Arc::new(Default::default()),
+            member_control: Default::default(),
             pbkdf2: quill_control::Pbkdf2Params::for_tests(),
         };
         let err = s.llm().expect_err("没有模型服务必须报错");
@@ -258,6 +268,7 @@ mod tests {
             })),
             providers: Arc::new(RwLock::new(Default::default())),
             login_limiter: Arc::new(Default::default()),
+            member_control: Default::default(),
             pbkdf2: quill_control::Pbkdf2Params::for_tests(),
         };
         let new_cfg = crate::llm::LlmConfig {

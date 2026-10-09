@@ -269,6 +269,22 @@ export const ITEMS = [
     },
     blocks: ['M2'],
   },
+  {
+    id: 'B2-6',
+    milestone: 'M2',
+    title: '运行中成员可控：steer / abort 的 HTTP 出口（Q113）',
+    // Q023/Q024 把机制做在执行器层，但生产里执行器是**每请求现建**的 ——
+    // 没有共享注册表时「另一条请求」够不到正在跑的成员（Q113 的卡点，第 20 轮已解：
+    // 注册表搬到 AppState 上共享，run 用 with_control 接上）。
+    //
+    // 判据绑端到端用例：**另一个请求**送进去的追加指令要换来第二轮、
+    // 且指令逐字进第二轮提示 —— 假送达 / 注册表没共享都会让这条红。
+    verify: {
+      kind: 'test',
+      name: 'steering_a_running_member_from_another_request_lands_in_its_next_round',
+    },
+    blocks: ['M2'],
+  },
 
   // ——— M3 上下文与成本 ———
   {

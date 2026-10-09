@@ -4,7 +4,7 @@ use axum::extract::{Path, RawQuery, State};
 use axum::Json;
 use serde_json::{json, Value};
 
-use quill_adapters::{ExpertId, MemberId, SessionId};
+use quill_adapters::{AbortScope, AdapterError, ExpertId, MemberId, Message, SessionId};
 use quill_agent::{
     BeginOutcome, DispatchKey, DispatchLedger, DispatchRecord, DispatchTask, Dispatcher,
     MemberResult, RoundPrefix, RoundRequest,
@@ -381,7 +381,10 @@ pub async fn run(
         state.llm()?,
         state.llm_config_snapshot(),
         std::sync::Arc::clone(db),
-    );
+    )
+    // Q113：注册表用 **AppState 上那一份**（而不是执行器自带的新份）——
+    // 另一条请求里的 steer/abort 才够得到这一轮正在跑的成员。
+    .with_control(std::sync::Arc::clone(&state.member_control));
     let dispatcher = Dispatcher::new(executor, ledger);
     let owner = user.0.user_id;
 
@@ -522,6 +525,82 @@ pub async fn inflight(
         "note": "「可安全重派 / 需人工确认」的分档由领域层 Dispatcher::recover 给出，\
                  本路由不复制该口径（避免第二份真相源）。",
     })))
+}
+
+/// 给**运行中**的成员追加一条指令（Q113：把 Q023 的执行器能力接到 HTTP 上）。
+///
+/// 注册表取自 `AppState`（进程级共享）—— 这正是本路由能作用于**另一个请求**里
+/// 正在跑的成员的原因。机制与出处见 `crate::member_control` 的模块头。
+pub async fn steer(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(member): Path<String>,
+    JsonBody(body): JsonBody,
+) -> Result<Json<Value>, ApiError> {
+    let member = parse_member(&member)?;
+    let text = crate::jsonx::need_str(&body, "text", "追加指令请求")?;
+    // need_str 已保证 trim 后非空，这里不可能失败 —— 若不失败仍报 400 而不是 500：
+    // 它终究是请求体的形状问题。
+    let msg = Message::user(text).map_err(|_| {
+        ApiError::bad_request("追加指令的 text 不能为空。下一步：写入要给成员的指令正文。")
+    })?;
+    state
+        .member_control
+        .steer(&user.0.user_id, &member, msg)
+        .map_err(control_error_to_api)?;
+    Ok(Json(json!({
+        "member": member.as_str(),
+        "delivered": true,
+        "note": "指令已进 FIFO；成员会在**这一轮的下一轮模型调用之前**取走它。",
+    })))
+}
+
+/// 中途取消运行中的成员（Q113：把 Q024 的执行器能力接到 HTTP 上）。
+///
+/// 语义 = `StopRound`（停路径里点名的这一位）。`AbortRoom`（停整间房）留在执行器层：
+/// **不加没有需求的参数**；要停一整轮，对在跑的每个成员各发一条即可
+/// （`GET /api/dispatch/inflight` 能看到在途的有哪些）。
+pub async fn abort(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(member): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let member = parse_member(&member)?;
+    state
+        .member_control
+        .abort(&user.0.user_id, &member, AbortScope::StopRound)
+        .map_err(control_error_to_api)?;
+    Ok(Json(json!({
+        "member": member.as_str(),
+        "cancelled": true,
+        "note": "取消已送达：成员按「被取消」结算（产出为空、不再跑下一轮）。",
+    })))
+}
+
+/// 路径参数 `{member}` → `MemberId`。形状不对是 400（语法问题），
+/// 不是 404（「这位成员现在没在跑」）—— 两者不能混。
+fn parse_member(raw: &str) -> Result<MemberId, ApiError> {
+    MemberId::parse(raw).map_err(|e| {
+        ApiError::bad_request(format!(
+            "路径参数 {{member}}（成员标识）不合法：{e}。\
+             下一步：用 GET /api/dispatch/inflight 的记录里列出的 member 值。"
+        ))
+    })
+}
+
+/// 控制面错误 → HTTP 信封。两种「够不到」分清：没有在跑的成员 → 404；
+/// 已被取消（送了也不会被读走）→ 409，不假装送达。
+/// detail 里本来就有「下一步」那句（`member_control::no_running` 统一口径），原样透传。
+fn control_error_to_api(e: AdapterError) -> ApiError {
+    match e {
+        AdapterError::NotFound(d) => ApiError::entity_not_found(d),
+        AdapterError::Conflict(d) => ApiError::conflict(
+            d,
+            "用 GET /api/dispatch/inflight 看这一轮的状态；已取消的成员不会再跑，\
+             要它干活就重派（同一派工键会幂等跳过已结算的成员）。",
+        ),
+        other => ApiError::internal(format!("成员控制面失败：{other}")),
+    }
 }
 
 fn read_only_ledger(state: &AppState) -> Result<SqlxDispatchLedger, ApiError> {

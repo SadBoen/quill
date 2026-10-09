@@ -51,6 +51,7 @@ fn state(t: &TestDb) -> AppState {
         llm_config: Arc::new(RwLock::new(Default::default())),
         providers: Arc::new(RwLock::new(Default::default())),
         login_limiter: Arc::new(Default::default()),
+        member_control: Default::default(),
         pbkdf2: quill_control::Pbkdf2Params::for_tests(),
     }
 }
@@ -72,6 +73,7 @@ fn state_without_db() -> AppState {
         llm_config: Arc::new(RwLock::new(Default::default())),
         providers: Arc::new(RwLock::new(Default::default())),
         login_limiter: Arc::new(Default::default()),
+        member_control: Default::default(),
         pbkdf2: quill_control::Pbkdf2Params::for_tests(),
     }
 }

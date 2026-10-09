@@ -49,6 +49,7 @@ fn state_with(db: Option<&TestDb>) -> AppState {
         llm_config: Arc::new(RwLock::new(Default::default())),
         providers: Arc::new(RwLock::new(Default::default())),
         login_limiter: Arc::new(Default::default()),
+        member_control: Default::default(),
         pbkdf2: quill_control::Pbkdf2Params::for_tests(),
     }
 }
@@ -605,6 +606,18 @@ async fn dispatch_routes_are_registered_and_answer_in_chinese() {
             "/api/teams/0192b7c8-0000-7000-8000-000000000003/dispatch",
         ),
         ("GET", "/api/dispatch/inflight", "/api/dispatch/inflight"),
+        // 运行中成员的控制面（Q113）。没有在跑的成员 → 404 entity_not_found
+        // （「这位现在没在跑」）—— 与「路由没挂上」的 not_found 靠 code 分开。
+        (
+            "POST",
+            "/api/dispatch/{member}/steer",
+            "/api/dispatch/cost-analyst-1/steer",
+        ),
+        (
+            "POST",
+            "/api/dispatch/{member}/abort",
+            "/api/dispatch/cost-analyst-1/abort",
+        ),
     ] {
         assert!(
             EXTRA_ROUTES.contains(&(method, declared)),
@@ -721,6 +734,7 @@ async fn healthz_surfaces_startup_warnings_so_silent_fallback_is_impossible() {
         llm_config: Arc::new(RwLock::new(Default::default())),
         providers: Arc::new(RwLock::new(Default::default())),
         login_limiter: Arc::new(Default::default()),
+        member_control: Default::default(),
         pbkdf2: quill_control::Pbkdf2Params::for_tests(),
     };
     let resp = build_router(bad)

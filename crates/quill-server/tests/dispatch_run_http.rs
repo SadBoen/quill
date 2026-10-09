@@ -47,6 +47,9 @@ fn expert(name: &str) -> quill_adapters::ExpertId {
 struct EchoProvider {
     calls: Mutex<Vec<String>>,
     prompts: Mutex<Vec<(String, String)>>,
+    /// 每次调用里**全部** user 消息的正文（含追加指令注入的那几条）——
+    /// Q113 的用例要看「经 HTTP 送进去的指令有没有逐字进下一轮提示」。
+    all_user_texts: Mutex<Vec<Vec<String>>>,
 }
 
 impl EchoProvider {
@@ -54,6 +57,7 @@ impl EchoProvider {
         Self {
             calls: Mutex::new(Vec::new()),
             prompts: Mutex::new(Vec::new()),
+            all_user_texts: Mutex::new(Vec::new()),
         }
     }
 
@@ -64,6 +68,11 @@ impl EchoProvider {
     /// 每个请求的 `(system, user)` 正文，按调用顺序。
     fn prompts(&self) -> Vec<(String, String)> {
         self.prompts.lock().expect("测试锁不该毒化").clone()
+    }
+
+    /// 每次调用的全部 user 正文，按调用顺序。
+    fn all_user_texts(&self) -> Vec<Vec<String>> {
+        self.all_user_texts.lock().expect("测试锁不该毒化").clone()
     }
 }
 
@@ -103,6 +112,18 @@ impl Provider for EchoProvider {
                 .expect("测试锁不该毒化")
                 .push((sys, user));
         }
+        {
+            let users: Vec<String> = request
+                .messages
+                .iter()
+                .filter(|m| matches!(m.role, quill_provider::Role::User))
+                .map(text_of)
+                .collect();
+            self.all_user_texts
+                .lock()
+                .expect("测试锁不该毒化")
+                .push(users);
+        }
         let model = request.model.clone();
         Box::pin(async move {
             Ok(ChatResponse {
@@ -130,7 +151,7 @@ impl Provider for EchoProvider {
     }
 }
 
-fn state(t: &TestDb, provider: Arc<EchoProvider>) -> AppState {
+fn state<P: Provider + 'static>(t: &TestDb, provider: Arc<P>) -> AppState {
     let resolver = EnvTokenResolver::new(vec![(
         TOKEN_A.to_string(),
         AuthContext {
@@ -151,6 +172,7 @@ fn state(t: &TestDb, provider: Arc<EchoProvider>) -> AppState {
         })),
         providers: Arc::new(RwLock::new(Default::default())),
         login_limiter: Arc::new(Default::default()),
+        member_control: Default::default(),
         pbkdf2: quill_control::Pbkdf2Params::for_tests(),
     }
 }
@@ -873,4 +895,248 @@ async fn a_member_session_id_of_the_wrong_kind_is_400_and_runs_nobody() {
         serde_json::json!(0),
         "被拒的一轮不许在台账留下记录：{listed}"
     );
+}
+
+// ------------------------------------------------------------- Q113：steer / abort 的 HTTP 出口
+
+/// 第一轮 `chat` 会**卡住**直到放行的 provider —— 「成员正跑在另一个请求里」
+/// 这个窗口靠它变得确定（手法同 `chat_stream_http.rs` 的 GatedProvider）。
+#[derive(Debug)]
+struct GatedEchoProvider {
+    inner: EchoProvider,
+    /// 每次进入 `chat` 报到（第几次调用）；测试收到 1 才知道成员真的在跑。
+    started: std::sync::mpsc::Sender<usize>,
+    /// 第一轮挂在这上面等放行；`take()` 之后（第二轮起）直接跑。
+    release: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+}
+
+impl Provider for GatedEchoProvider {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn chat<'a>(&'a self, request: &'a ChatRequest) -> BoxFuture<'a, ChatResponse> {
+        let n = self.inner.call_count() + 1;
+        let _ = self.started.send(n);
+        let gate = self.release.lock().expect("测试锁不该毒化").take();
+        Box::pin(async move {
+            if let Some(rx) = gate {
+                // 放行前这里一直 Pending —— 成员就是「运行中」，select! 才有东西可取消。
+                let _ = rx.await;
+            }
+            self.inner.chat(request).await
+        })
+    }
+
+    fn stream<'a>(&'a self, request: &'a ChatRequest) -> BoxFuture<'a, ProviderStream> {
+        self.inner.stream(request)
+    }
+
+    fn models<'a>(&'a self) -> BoxFuture<'a, Vec<ModelInfo>> {
+        self.inner.models()
+    }
+}
+
+/// 把一次请求丢进后台任务 —— steer/abort 的用例要**同时**发第二条请求。
+fn spawn_call(
+    app: &AppState,
+    method: &'static str,
+    path: String,
+    body: Option<serde_json::Value>,
+) -> tokio::task::JoinHandle<(StatusCode, serde_json::Value)> {
+    let app = app.clone();
+    tokio::spawn(async move { call(&app, method, &path, body).await })
+}
+
+/// **另一个请求**送进去的追加指令要真的送达：成员跑出第二轮、交付第二轮正文，
+/// 且指令逐字出现在第二轮的提示里。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn steering_a_running_member_from_another_request_lands_in_its_next_round() {
+    let t = TestDb::new("dispatch-http-steer");
+    let f = seed(&t.bridge(), user_id(), 0x51, &["cost-analyst"]);
+    let (started_tx, started_rx) = std::sync::mpsc::channel::<usize>();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+    let provider = Arc::new(GatedEchoProvider {
+        inner: EchoProvider::new(),
+        started: started_tx,
+        release: Mutex::new(Some(release_rx)),
+    });
+    let app = state(&t, Arc::clone(&provider));
+
+    // 派工那一轮放进后台 —— 成员会卡在闸门后面，直到我们送指令并放行。
+    let run = spawn_call(
+        &app,
+        "POST",
+        format!("/api/teams/{}/dispatch/run", team_hex(f.team_id)),
+        Some(body(&f, vec![member_entry(0x51, "cost-analyst", 1)])),
+    );
+
+    // 第一次模型调用报到 = 成员**正在另一条请求里跑**。
+    assert_eq!(
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("成员必须在闸门后面跑起来"),
+        1
+    );
+
+    // 从**另一条请求**送追加指令。
+    let (status, v) = call(
+        &app,
+        "POST",
+        "/api/dispatch/cost-analyst-1/steer",
+        Some(serde_json::json!({ "text": "补充一句：把数据来源附上" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "对运行中的成员送指令应 200：{v}");
+    assert_eq!(v["delivered"], serde_json::json!(true), "{v}");
+
+    release_tx.send(()).expect("放行第一轮");
+
+    // 第二轮报到 = 指令真的换来了又一轮（用 recv_timeout：吞掉指令时要变红，不能挂死）。
+    assert_eq!(
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("收到追加指令却不跑第二轮，等于把指令吞了"),
+        2
+    );
+
+    let (status, run_v) = run.await.expect("派工任务不该 panic");
+    assert_eq!(status, StatusCode::OK, "{run_v}");
+    assert_eq!(run_v["delivered"], serde_json::json!(1), "{run_v}");
+    assert_eq!(
+        run_v["results"][0]["output"],
+        serde_json::json!("成员产出 #2"),
+        "交付的必须是追加指令之后那一轮的正文：{run_v}"
+    );
+    assert_eq!(provider.inner.call_count(), 2, "有且只有两轮模型调用");
+
+    let users = provider.inner.all_user_texts();
+    assert_eq!(users.len(), 2, "两轮各记一次：{users:?}");
+    assert!(
+        users[1]
+            .iter()
+            .any(|t| t.contains("补充一句：把数据来源附上")),
+        "经 HTTP 送进去的指令必须逐字进第二轮提示：{users:?}"
+    );
+}
+
+/// **另一个请求**送进去的取消要真的打断正在飞的模型调用：成员按「被取消」结算，
+/// 产出为空、不再跑下一轮。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn aborting_a_running_member_from_another_request_cancels_it_mid_call() {
+    let t = TestDb::new("dispatch-http-abort");
+    let f = seed(&t.bridge(), user_id(), 0x52, &["cost-analyst"]);
+    let (started_tx, started_rx) = std::sync::mpsc::channel::<usize>();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+    let provider = Arc::new(GatedEchoProvider {
+        inner: EchoProvider::new(),
+        started: started_tx,
+        release: Mutex::new(Some(release_rx)),
+    });
+    let app = state(&t, Arc::clone(&provider));
+
+    let run = spawn_call(
+        &app,
+        "POST",
+        format!("/api/teams/{}/dispatch/run", team_hex(f.team_id)),
+        Some(body(&f, vec![member_entry(0x52, "cost-analyst", 1)])),
+    );
+    assert_eq!(
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("成员必须在闸门后面跑起来"),
+        1
+    );
+
+    let (status, v) = call(&app, "POST", "/api/dispatch/cost-analyst-1/abort", None).await;
+    assert_eq!(status, StatusCode::OK, "对运行中的成员发取消应 200：{v}");
+    assert_eq!(v["cancelled"], serde_json::json!(true), "{v}");
+
+    // **不放行**闸门。若取消没生效，接收端被丢会让等待立刻报错、成员照跑第一轮
+    // ——下面的断言会变红；所以这里既不会挂死，也不会假绿。
+    drop(release_tx);
+
+    let (status, run_v) = run.await.expect("派工任务不该 panic");
+    assert_eq!(status, StatusCode::OK, "{run_v}");
+    assert_eq!(run_v["delivered"], serde_json::json!(0), "{run_v}");
+    assert_eq!(run_v["failed"], serde_json::json!(1), "{run_v}");
+    assert_eq!(
+        run_v["results"][0]["error_code"],
+        serde_json::json!("member_cancelled"),
+        "取消要按 member_cancelled 结算：{run_v}"
+    );
+    // 「进入 chat」的报到只有第 1 次：取消之后不许再进第二轮模型调用。
+    assert!(
+        started_rx.try_recv().is_err(),
+        "取消之后又报到了 = 还跑了下一轮"
+    );
+    assert_eq!(
+        provider.inner.call_count(),
+        0,
+        "第一轮的模型调用是在闸门后面被取消的——那一次请求当场作废，不该落地"
+    );
+    assert_eq!(
+        run_v["member_messages_written"],
+        serde_json::json!(0),
+        "被取消的成员没有产出可写：{run_v}"
+    );
+}
+
+/// 没有在跑的成员时两条路由都**如实报错**（404 + 下一步），不假装送达；
+/// 成员标识的形状错误是 400（语法），不是 404（状态）——两者不许混。
+#[tokio::test]
+async fn steer_and_abort_without_a_running_member_are_honest_errors() {
+    let t = TestDb::new("dispatch-http-idle");
+    let provider = Arc::new(EchoProvider::new());
+    let app = state(&t, Arc::clone(&provider));
+
+    let (status, v) = call(
+        &app,
+        "POST",
+        "/api/dispatch/cost-analyst-1/steer",
+        Some(serde_json::json!({ "text": "在吗" })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "没在跑就该 404，不假装送达：{v}"
+    );
+    assert_eq!(
+        v["error"]["code"],
+        serde_json::json!("entity_not_found"),
+        "{v}"
+    );
+    assert!(
+        v.to_string().contains("没有正在运行的成员"),
+        "要点名「没有在跑的成员」：{v}"
+    );
+    assert!(v.to_string().contains("下一步"), "失败响应要自诊断：{v}");
+
+    let (status, v) = call(&app, "POST", "/api/dispatch/cost-analyst-1/abort", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{v}");
+    assert!(v.to_string().contains("没有正在运行的成员"), "{v}");
+
+    // 形状不对的成员标识：400（语法问题），不是 404。
+    let (status, v) = call(
+        &app,
+        "POST",
+        "/api/dispatch/Cost_Analyst/steer",
+        Some(serde_json::json!({ "text": "x" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{v}");
+
+    // text 是必填（空白串 → 400），不会静默送一条空指令。
+    let (status, v) = call(
+        &app,
+        "POST",
+        "/api/dispatch/cost-analyst-1/steer",
+        Some(serde_json::json!({ "text": "   " })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{v}");
+    assert!(v.to_string().contains("text"), "要点名是哪个字段：{v}");
+
+    assert_eq!(provider.call_count(), 0, "这一组都不该起任何成员");
 }
