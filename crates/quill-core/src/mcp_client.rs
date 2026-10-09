@@ -4,9 +4,11 @@
 //! 本模块是**唯一**发起连接的地方。两者混在一起的后果是「保存配置会因为连不上而失败」，
 //! 而连不上往往正是用户需要先把配置登记进去才能排查的东西。
 //!
-//! **只铺了 stdio。** `streamable_http` / `sse` 明确报「还没铺」，不假装连过：
-//! `probe` 对这两种传输给 `probed=false` 加一句白话原因。报一个「没做」比报一个
-//! 编出来的 `connected: false` 强 —— 后者会让用户去查一个根本不存在的网络故障。
+//! **铺了 stdio 与内置（`builtin`）两种。** 内置服务器在内存管道上跑（见
+//! [`crate::builtin`]），不起子进程、也不用装东西；`streamable_http` / `sse`
+//! 明确报「还没铺」，不假装连过：`probe` 对此给 `probed=false` 加一句白话原因。
+//! 报一个「没做」比报一个编出来的 `connected: false` 强 —— 后者会让用户去查
+//! 一个根本不存在的网络故障。
 //!
 //! **命令是发起请求那个用户自己配的。** `mcp_servers` 按 `user_id` 过滤，
 //! 拉起谁的进程由谁的配置决定；这里不做任何跨用户兜底，也不接受请求体里
@@ -22,8 +24,8 @@
 //!
 //! 移植出处：`vendor/goose/crates/goose/src/agents/mcp_client.rs`（1687 行，
 //! goose v1.53.0）。goose 用同一族 rmcp API（`serve` → `initialize` →
-//! `list_tools` → `call_tool`）；quill 只铺了 stdio 一种传输，其余传输如实报
-//! 「还没铺」，与 goose 的多传输相比是**已知缺口**（记在 `docs/ARCHITECTURE.md`）。
+//! `list_tools` → `call_tool`）；quill 铺了 stdio 与 `builtin` 两种传输
+//! （后者见 [`crate::builtin`]），其余传输如实报「还没铺」。
 
 use std::process::Stdio;
 use std::sync::Arc;
@@ -34,7 +36,7 @@ use rmcp::model::{
     Implementation, PaginatedRequestParams, Tool as McpTool,
 };
 use rmcp::transport::TokioChildProcess;
-use rmcp::{ClientHandler, ServiceExt};
+use rmcp::{ClientHandler, RoleClient, ServiceExt};
 use serde_json::{json, Map, Value};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
@@ -223,9 +225,27 @@ fn not_probed_reason(row: &McpServerRow) -> Option<String> {
     if !row.enabled {
         return Some("已停用（你自己关掉的），本轮没有发起任何连接。".to_string());
     }
+    if row.transport == "builtin" {
+        let name = row.command.as_deref().unwrap_or("").trim();
+        if name.is_empty() {
+            return Some(format!(
+                "builtin 配置里没写内置服务器的名字。\
+                 下一步：把 command 填成其中一个：{}。",
+                crate::builtin::names()
+            ));
+        }
+        if !crate::builtin::is_builtin(name) {
+            return Some(format!(
+                "内置服务器 {name:?} 不认识，本轮没有发起任何连接。\
+                 下一步：把 command 改成 {} 之一，或把 transport 改成 stdio 走外部命令。",
+                crate::builtin::names()
+            ));
+        }
+        return None;
+    }
     if row.transport != "stdio" {
         return Some(format!(
-            "传输方式 {} 的协议层还没铺，本轮只铺了 stdio —— 这不是连接失败，是还没做。",
+            "传输方式 {} 的协议层还没铺，本轮只铺了 stdio 与 builtin —— 这不是连接失败，是还没做。",
             row.transport
         ));
     }
@@ -322,15 +342,11 @@ struct HandshakeTools {
 }
 
 async fn handshake(row: &McpServerRow) -> Result<HandshakeTools, String> {
-    let (transport, stderr, drain) = spawn_stdio(row)?;
-
-    let service = match QuillClient.serve(transport).await {
-        Ok(s) => s,
-        // 传输层在这一句之前就被丢掉了，`ChildWithCleanup` 的 Drop 会杀掉子进程，
-        // 排空任务随之结束。故意不 join 它：握手已经失败了，再等它把 stderr 读完
-        // 只是让失败来得更慢。
-        Err(e) => return Err(with_stderr(format!("initialize 失败：{e}"), &stderr).await),
-    };
+    let Connected {
+        service,
+        stderr,
+        drain,
+    } = connect(row).await?;
 
     // 协议版本与实现名都是**服务器报什么我们就存什么**。报不出来就说报不出来 ——
     // 拿默认值填上会让「这服务器是谁」看起来像真的。
@@ -429,6 +445,73 @@ const MAX_PAGES: usize = 8;
 /// `spawn_stdio` 的返回：`(传输层, stderr 累积器, 排空任务句柄)`。
 /// 排空句柄是 `Option`：传输层在没接 stderr 时不会给我们一个。
 type SpawnedStdio = (TokioChildProcess, Arc<StderrTail>, Option<JoinHandle<()>>);
+
+/// 一台服务器**连上之后**的东西：客户端服务 + 两个诊断件。
+struct Connected {
+    service: rmcp::service::RunningService<RoleClient, QuillClient>,
+    stderr: Arc<StderrTail>,
+    drain: Option<JoinHandle<()>>,
+}
+
+/// 连上这台服务器。**两条传输在这里合流**：`stdio` 拉子进程、`builtin` 在内存管道上跑
+/// （见 [`crate::builtin`]）。
+///
+/// 合流的理由与下面 `spawn_stdio` 头注里那条一样：探测与 `tools/call` 必须走**同一套**
+/// 连接形状。只不过现在多了一种传输，如果两条各自实现一遍，「探测时连的」与
+/// 「调用工具时连的」就不只是 cwd/env 会漂，而是**连的根本不是同一台服务器**。
+///
+/// 收尾（`service.cancel()` 与等排空任务）仍留在调用方：探测与调用对「什么时候该收尾」
+/// 不一样（探测早收，调用要等结果渲染完）。
+async fn connect(row: &McpServerRow) -> Result<Connected, String> {
+    if row.transport == "builtin" {
+        let name = row.command.as_deref().unwrap_or("").trim().to_string();
+        let (read, write) = crate::builtin::spawn(&name).ok_or_else(|| {
+            format!(
+                "内置服务器 {name:?} 不认识，没有发起连接。\
+                 下一步：把 command 改成 {} 之一。",
+                crate::builtin::names()
+            )
+        })?;
+        let service = QuillClient.serve((read, write)).await.map_err(|e| {
+            format!(
+                "内置服务器 {name} 的 initialize 失败：{e}。\
+                 下一步：它是随 quill 自带的（不起子进程、不用装依赖），连不上就是 quill 自己的\
+                 问题 —— 请带上这一句报一个 issue。"
+            )
+        })?;
+        return Ok(Connected {
+            service,
+            stderr: Arc::new(StderrTail::default()),
+            drain: None,
+        });
+    }
+
+    let (transport, stderr, drain) = spawn_stdio(row)?;
+    let service = match QuillClient.serve(transport).await {
+        Ok(s) => s,
+        // 传输层在这一句之前就被丢掉了，`ChildWithCleanup` 的 Drop 会杀掉子进程，
+        // 排空任务随之结束。故意不 join 它：握手已经失败了，再等它把 stderr 读完
+        // 只是让失败来得更慢。
+        // 面向用户的错误**一律带「下一步」** —— 这一句会原样进界面。
+        Err(e) => {
+            return Err(with_stderr(
+                format!(
+                    "initialize 失败：{e}。\
+                     下一步：在终端里手动跑一次 `{}`，看它启动后会不会往 stdout 写 JSON-RPC\
+                     （stdio 传输的 stdout 只能是协议内容）；下面附的 stderr 末尾通常就是原因。",
+                    command_line(row)
+                ),
+                &stderr,
+            )
+            .await)
+        }
+    };
+    Ok(Connected {
+        service,
+        stderr,
+        drain,
+    })
+}
 
 /// 探测与 `tools/call` 走的是**同一个**拉起函数。分成两份的话，「探测时用的
 /// cwd/env」与「真正调用工具时用的 cwd/env」就会漂，而那种漂移只在某一个
@@ -580,25 +663,11 @@ async fn invoke(
     remote_name: &str,
     args: Map<String, Value>,
 ) -> Result<String, String> {
-    let (transport, stderr, drain) = spawn_stdio(row)?;
-    let service = match QuillClient.serve(transport).await {
-        Ok(s) => s,
-        // 传输层在这一句之前就被丢掉了，`ChildWithCleanup` 的 Drop 会杀掉子进程。
-        // 故意不 join 排空任务：握手已经失败了，再等它把 stderr 读完只是让失败来得更慢。
-        // 面向用户的错误**一律带「下一步」** —— 这一句会原样进界面。
-        Err(e) => {
-            return Err(with_stderr(
-                format!(
-                    "initialize 失败：{e}。\
-                     下一步：在终端里手动跑一次 `{}`，看它启动后会不会往 stdout 写 JSON-RPC\
-                     （stdio 传输的 stdout 只能是协议内容）；下面附的 stderr 末尾通常就是原因。",
-                    command_line(row)
-                ),
-                &stderr,
-            )
-            .await)
-        }
-    };
+    let Connected {
+        service,
+        stderr,
+        drain,
+    } = connect(row).await?;
 
     // 调用这一侧**也要**过服务器自报那道闸门（ISSUE-014）。挂载侧已经按 0
     // 处理了，但工具是模型按名字直接调进来的 —— 一台自报没有 tools 的服务器
@@ -939,12 +1008,12 @@ impl Summary {
     /// 一个都调不到的情况。
     pub fn note(&self, probes: &[Probe]) -> String {
         if self.probed == 0 {
-            return "本轮没有发起任何协议握手：没有启用的 stdio 服务器。\
+            return "本轮没有发起任何协议握手：没有启用的 MCP 服务器。\
                     配了服务器就能真的 initialize + tools/list。"
                 .to_string();
         }
         let mut s = format!(
-            "本轮真的对 {} 台 stdio 服务器发起了 initialize + tools/list，{} 台连通、{} 台失败。",
+            "本轮真的对 {} 台 MCP 服务器发起了 initialize + tools/list，{} 台连通、{} 台失败。",
             self.probed, self.connected, self.failed
         );
         let connected_with_tools = probes
@@ -1144,7 +1213,10 @@ mod tests {
         assert_eq!(s.failed, 1);
         assert!(!s.all_connected());
         let note = s.note(&[good, bad]);
-        assert!(note.contains("2 台 stdio 服务器"), "{note}");
+        assert!(note.contains("2 台 MCP 服务器"), "{note}");
+        // 措辞里不许再写死「stdio」：内置（builtin）行也走这条 note，
+        // 写死的话界面上会对着（内存管道里的）内置服务器说「stdio 服务器」。
+        assert!(!note.contains("stdio"), "{note}");
         // `Summary::note` **只**讲协议层看到的东西。「挂没挂进工具表」是
         // `tools::mcp_tool_visibility` 的判断，由 `api_extensions::mcp_body`
         // 拿到挂载结果之后追加。这里断言它**不**碰那件事 ——
@@ -1209,5 +1281,90 @@ mod tests {
         assert!(v["error"].is_null());
         let keys: Vec<&String> = v.as_object().unwrap().keys().collect();
         assert!(!keys.contains(&&"command".to_string()));
+    }
+
+    // ---------------------------------------------------------------- builtin
+
+    /// 一行 `transport = 'builtin'` 的配置。`command` 里写**名字**，不是路径。
+    fn builtin_row(name: &str, server: Option<&str>) -> McpServerRow {
+        let mut r = row(name);
+        r.transport = "builtin".into();
+        r.command = server.map(|s| s.to_string());
+        r
+    }
+
+    #[tokio::test]
+    async fn a_builtin_server_is_probed_over_an_in_memory_pipe() {
+        // 内置服务器**不拉子进程**：两对 `tokio::io::duplex` 交叉接上就成。
+        // 这条钉住三件：真的完成了握手、四个工具都在、服务器自报工具能力。
+        let r = builtin_row("mem", Some("memory"));
+        let d = discover(&r).await;
+        assert!(d.probe.probed, "内置服务器该真的握手：{:?}", d.probe);
+        assert!(d.probe.connected, "{:?}", d.probe);
+        assert_eq!(d.probe.tool_count, 4, "{:?}", d.probe);
+        let names: Vec<&str> = d.tools.iter().map(|t| t.remote_name.as_str()).collect();
+        for want in [
+            "remember_memory",
+            "retrieve_memories",
+            "remove_memory_category",
+            "remove_specific_memory",
+        ] {
+            assert!(names.contains(&want), "缺工具 {want}，实际 {names:?}");
+        }
+        assert!(
+            d.probe
+                .server_info
+                .as_deref()
+                .unwrap_or("")
+                .contains("quill-memory"),
+            "服务器要自报名字：{:?}",
+            d.probe
+        );
+        assert_eq!(
+            d.probe.server_declares_tools,
+            Some(true),
+            "内置服务器的能力是**实测**的，不是本地开关推的：{:?}",
+            d.probe
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unknown_builtin_name_is_refused_before_any_connection() {
+        let r = builtin_row("mem", Some("nope"));
+        let p = probe(&r).await;
+        assert!(!p.probed, "名字不认识就不该发起连接：{:?}", p);
+        let why = p.error.expect("要说明为什么没探测");
+        assert!(why.contains("nope"), "要点名那个不认识的名字：{why}");
+        assert!(why.contains("memory"), "要列出可用的内置名：{why}");
+    }
+
+    #[tokio::test]
+    async fn a_builtin_row_without_a_name_is_reported() {
+        let r = builtin_row("mem", None);
+        let p = probe(&r).await;
+        assert!(!p.probed);
+        assert!(
+            p.error.expect("要说明原因").contains("command"),
+            "要告诉用户名字写在 command 里"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_tool_call_round_trips_over_the_in_memory_pipe() {
+        // 过**真协议**调一次工具。挑 `retrieve_memories`（只读）：它不落盘，
+        // 所以这条用例不会在工作目录里留下 `.quill/memory`。
+        let r = builtin_row("mem", Some("memory"));
+        let out = call_tool(
+            &r,
+            "u1",
+            "retrieve_memories",
+            &serde_json::json!({"category": "*", "is_global": false}),
+        )
+        .await
+        .expect("内置服务器该真的能调");
+        assert!(
+            out.contains("Retrieved memories"),
+            "回的是记忆服务器的话术，实际 {out:?}"
+        );
     }
 }

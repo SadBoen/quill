@@ -209,7 +209,7 @@ cargo test --workspace                                                          
 `remove_specific_memory`），背后是**按分类落盘的 `.txt`**（一分类一文件；
 一次 `remember` 追加「可选 `# 标签` 行 + 正文 + 空行」；一次 `retrieve` 按空行切条）。
 goose 把它登记进 `goose-mcp/src/lib.rs` 的 `BUILTIN_EXTENSIONS`，有两条入口：
-**进程内**（`goose/src/agents/extension_manager/builtin.rs:19-33` 的
+**进程内**（`goose/src/agents/extension_manager/builtin.rs:35-40` 的
 `tokio::io::duplex`）与 **stdio**（`goose mcp memory`，
 `goose-mcp/src/mcp_server_runner.rs:36-49`）。
 
@@ -217,9 +217,10 @@ goose 把它登记进 `goose-mcp/src/lib.rs` 的 `BUILTIN_EXTENSIONS`，有两�
 
 - **落点**：`crates/quill-core/src/memory.rs`（存储语义 + 四个工具 + 分类名安全边界 +
   全局记忆拼进 instructions）。
-- **stdio 入口**：`quill mcp memory`（`crates/quill-cli/src/main.rs` 的 `run_mcp`），
-  对应上游的 `goose mcp memory`。**只走 stdio**：quill 的 `mcp_client` 只铺了 stdio，
-  进程内 duplex 那条没有对应实现（记进 `docs/UPSTREAM-DIVERGENCES.md` A6）。
+- **两条入口都有**：stdio 入口 `quill mcp memory`（`crates/quill-cli/src/main.rs`
+  的 `run_mcp`）对应上游的 `goose mcp memory`；进程内那条是
+  `memory::serve_on_duplex` + `crate::builtin`（照上游的 `tokio::io::duplex`
+  手法），对上配置行已有的 `transport='builtin'`（queue Q111 已接通）。
 - **为什么在 `quill-core`**：`docs/ARCHITECTURE.md §3.3` 的映射表里「MCP」本来就
   归 `quill-core`（上游列的是 `goose/agents/mcp_client.rs`、`goose-mcp`）。
 - **依赖形状**：为它把 rmcp 的 `server` / `macros` / `transport-io` 三个 feature 打开，
@@ -228,12 +229,15 @@ goose 把它登记进 `goose-mcp/src/lib.rs` 的 `BUILTIN_EXTENSIONS`，有两�
 
 ### 6.3 还没做（如实记）
 
-- **记忆还没接进任何一轮对话**：没有任何地方把 `quill mcp memory` 登记成一台 MCP
-  服务器，模型现在还调不到它。与 Q017/Q020/Q022 同一状态（内核逻辑先落地、接线另记）。
+- **默认不预置这一行配置**：quill 不往任何用户的 `mcp_servers` 里塞
+  `transport='builtin'` + `command=memory` —— 装完没有记忆，用户要自己去设备页加。
+  「默认给谁开」是产品决定，不是技术缺口（接线本身已通，判据见 §6.4）。
 
 ### 6.4 判据复现（2026-10-09 实测）
 
 ```bash
 cargo test -p quill-core --lib memory          # → 13 passed / 0 failed
 cargo test -p quill-cli --test mcp_memory_stdio # → 1 passed / 0 failed（真子进程 + 手写 JSON-RPC）
+cargo test -p quill-core --lib mcp_client      # → 16 passed / 0 failed（含 4 条 builtin：内存管道握手/真调工具/名字不认识/没写名字）
+cargo test -p quill-server --test extensions_http # → 67 passed / 0 failed（含 3 条 builtin：HTTP 收配置→真连上→工具进对话工具表→真调；坏配置 400 不落库；PATCH 走同一道校验）
 ```

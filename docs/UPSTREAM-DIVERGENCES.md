@@ -91,28 +91,26 @@ ASCII 4 字符 1 token、非 ASCII 1 字符 1 token；内核侧 `TokenEstimator`
 
 ---
 
-### A6. 记忆（memory）：逻辑照抄，**只走 stdio**，且尚未接进对话
+### A6. 记忆（memory）：逻辑照抄，两条传输都在，**默认不预置**
 
 **上游**：goose 把记忆做成一个**内置 MCP 扩展** —— `goose-mcp/src/lib.rs` 的
 `BUILTIN_EXTENSIONS` 里 `memory` 一项，四个工具
 （`remember_memory` / `retrieve_memories` / `remove_memory_category` /
 `remove_specific_memory`），背后是按分类落盘的 `.txt`。它有一条**进程内**路径
-（`vendor/goose/crates/goose/src/agents/extension_manager/builtin.rs:19-33` 用
+（`vendor/goose/crates/goose/src/agents/extension_manager/builtin.rs:35-40` 用
 `tokio::io::duplex` 起服务器），也有一条 **stdio** 路径
 （`goose mcp memory`，`vendor/goose/crates/goose-mcp/src/mcp_server_runner.rs:36-49`）。
 
 **quill**：`crates/quill-core/src/memory.rs` 照抄了那套存储语义与四个工具
-（含分类名的安全边界、全局记忆拼进 instructions），stdio 入口是
-`quill mcp memory`（`crates/quill-cli/src/main.rs` 的 `run_mcp`）。
-
-**为什么只走 stdio**：quill 的 `mcp_client` **只铺了 stdio 一种传输**
-（`crates/quill-core/src/mcp_client.rs` 头注），进程内 duplex 那条没有对应实现。
-照 goose 的 stdio 支走，功能等价、形状不同，不必为此先改传输层。
+（含分类名的安全边界、全局记忆拼进 instructions）。**两条传输也都有**：stdio 入口是
+`quill mcp memory`（`crates/quill-cli/src/main.rs` 的 `run_mcp`），进程内那条是
+`serve_on_duplex`，对上配置行的 `transport='builtin'`（`crates/quill-core/src/builtin.rs`，
+queue Q111）。**接进对话 = 登记一行配置**（`transport='builtin'` + `command=memory`），
+保存即真的握手，四个工具进那一轮的工具表、模型调得到。
 
 **代价 / 还没做的**：
-- **记忆还没接进任何一轮对话** —— 没有任何地方把 `quill mcp memory` 登记成一台
-  MCP 服务器，模型现在还调不到它。与 Q017（压缩）/Q020（状态机）/Q022（重试）
-  同一状态：内核逻辑先落地，接线另记。
+- **默认不预置**：quill 不往任何用户的配置里塞这一行 —— 装完没有记忆，用户要自己
+  去设备页加一行才有。「默认给谁开」是产品决定，不是技术缺口。
 - 本地目录是 `.quill/memory`（上游 `.goose/memory`）；全局目录用
   `default_global_memory_dir()` 现算，**没引 goose 用的 `etcetera`**。
 - `remove_specific_memory` 的删除口径是「内容**包含**」而不是「相等」（照抄上游，
@@ -297,10 +295,11 @@ grep -n "fn finish_turn" crates/quill-server/src/api_chat.rs
 # A5：零读写的列
 grep -c "checkpoint_key\|error_state\|replan_count" crates/quill-server/src/*.rs
 
-# A6：记忆在内核、stdio 入口在 CLI、传输只有 stdio
+# A6：记忆在内核、两条传输（stdio 入口在 CLI、进程内在 quill-core::builtin）
 grep -n "pub fn remember\|pub fn retrieve" crates/quill-core/src/memory.rs
 grep -n "run_mcp" crates/quill-cli/src/main.rs
-grep -n "只铺了 stdio" crates/quill-core/src/mcp_client.rs
+grep -n "pub fn serve_on_duplex" crates/quill-core/src/memory.rs
+grep -n "pub fn spawn" crates/quill-core/src/builtin.rs
 
 # A7：回滚是原地删除（goose 那条），fork 没做（octop 那条）
 grep -n "rollback_from_message" crates/quill-server/src/chat_repo.rs

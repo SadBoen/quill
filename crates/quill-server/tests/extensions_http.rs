@@ -273,7 +273,7 @@ async fn a_reachable_stdio_server_is_reported_as_connected_with_its_real_tool_co
     // 它会逼着后来的人把真功能改回「没挂」的样子才配得上这条断言。
     // 现在断言的是新事实：挂了几个、挂在哪，看得见。
     let note = v["note"].as_str().expect("必须有说明");
-    assert!(note.contains("1 台 stdio 服务器"), "{note}");
+    assert!(note.contains("1 台 MCP 服务器"), "{note}");
     assert!(
         note.contains("真的挂进对话工具表的有 3 个"),
         "note 必须说清挂了几个：{note}"
@@ -2196,6 +2196,189 @@ async fn another_users_mcp_servers_never_reach_your_tool_table() {
     assert!(
         b_names.contains(&"secret__read-note".to_string()),
         "B 自己应当看得见：{b_names:?}"
+    );
+}
+
+// ------------------------------------------- 内置服务器（transport='builtin'）
+//
+// 一行 `transport='builtin'` + `command=memory`，就是「记忆」的全部接线：不用装
+// 任何东西、不用填本机路径，保存的那一刻服务器就在**内存管道**上起来了
+// （见 `quill_core::builtin`）。这一组钉的是 Q111 的判据 —— **一轮对话里能真的
+// 调 `remember_memory` / `retrieve_memories`** —— 而不是「库里存了一行配置」。
+
+/// 一行 `transport='builtin'` 的配置：`command` 里写内置服务器的**名字**。
+fn builtin(name: &str, server: &str) -> serde_json::Value {
+    serde_json::json!({
+        "name": name,
+        "transport": "builtin",
+        "command": server,
+        // 空数组 = 能力全开（三态之一）。写成 null 的话工具数会是 0，
+        // 这条测的就不是连通性了。
+        "enabled_capabilities": []
+    })
+}
+
+/// 主线：保存 → **真的握手**（内存管道）→ 四个工具进对话工具表 → 挑一个真调起来。
+#[tokio::test]
+async fn a_builtin_memory_server_connects_and_its_tools_reach_the_conversation() {
+    let h = Harness::new("ext-mcp-builtin-memory");
+    seed_user(&h.db.bridge(), UID_A);
+
+    let v = save(
+        &h,
+        TOKEN_A,
+        serde_json::json!({"servers": [builtin("mem", "memory")]}),
+    )
+    .await;
+    assert_eq!(
+        v["connected"],
+        serde_json::json!(true),
+        "内置服务器必须真的握手（内存管道），不是「配了但连不上」：{v}"
+    );
+    assert_eq!(v["probed"], serde_json::json!(1));
+    assert_eq!(v["failed_count"], serde_json::json!(0));
+    let st = &v["status"][0];
+    assert_eq!(
+        st["tool_count"],
+        serde_json::json!(4),
+        "记忆服务器报四个工具：{st}"
+    );
+    assert!(
+        st["server_info"]
+            .as_str()
+            .unwrap_or("")
+            .contains("quill-memory"),
+        "服务器要自报名字：{st}"
+    );
+    assert_eq!(v["mounted_count"], serde_json::json!(4), "{v}");
+    // note 是界面原样显示的话。只有内置服务器时它不能说「stdio 服务器」——
+    // 「哪几台、什么传输」在这一句里是事实，不是措辞。
+    let note = v["note"].as_str().expect("必须有说明");
+    assert!(note.contains("1 台 MCP 服务器"), "{note}");
+    assert!(!note.contains("stdio"), "这一轮没有 stdio 服务器：{note}");
+
+    // 对话那一轮真正用的工具表：四个都在（挂载名 = mem__原名）。
+    let r = chat_tool_table(&h, UID_A).await;
+    let names = spec_names(&r);
+    for remote in [
+        "remember_memory",
+        "retrieve_memories",
+        "remove_memory_category",
+        "remove_specific_memory",
+    ] {
+        let want = format!("mem__{remote}");
+        assert!(
+            names.contains(&want),
+            "模型这一轮的工具表里必须有 {want}：{names:?}"
+        );
+    }
+
+    // 真的调一次（挑只读的那个：不落盘），走的是对话里同一条执行路径。
+    let call = quill_provider::ToolCall::new(
+        "c1",
+        "mem__retrieve_memories",
+        serde_json::json!({"category": "*", "is_global": false}),
+    );
+    let out = r.call(&call).expect("挂上去的内置工具必须真的调得通");
+    assert!(
+        out.contains("Retrieved memories"),
+        "回的是记忆服务器的话术：{out}"
+    );
+}
+
+/// 三种坏配置：名字不认识、没写名字、带 url —— **写库之前**一律 400 + 下一步。
+#[tokio::test]
+async fn a_builtin_row_that_cannot_work_is_refused_before_any_write() {
+    let h = Harness::new("ext-mcp-builtin-shape");
+    seed_user(&h.db.bridge(), UID_A);
+
+    // 1) 名字不认识：要点名那个名字，并列出可用的内置名。
+    let msg = post_bad(
+        &h,
+        serde_json::json!({"servers": [builtin("unknown", "not-a-builtin")]}),
+    )
+    .await;
+    assert!(msg.contains("not-a-builtin"), "{msg}");
+    assert!(msg.contains("memory"), "要列出可用的内置名：{msg}");
+
+    // 2) 没写名字：要说清名字写在 command 里。
+    let msg = post_bad(
+        &h,
+        serde_json::json!({"servers": [{"name": "noname", "transport": "builtin"}]}),
+    )
+    .await;
+    assert!(msg.contains("command"), "{msg}");
+
+    // 3) 带 url：内置服务器就在本进程里跑，没有地址。
+    let mut with_url = builtin("urly", "memory");
+    with_url["url"] = serde_json::json!("http://127.0.0.1:1/mcp");
+    let msg = post_bad(&h, serde_json::json!({"servers": [with_url]})).await;
+    assert!(msg.contains("url"), "{msg}");
+
+    // 被拒的这三次**一个字节都不许落库**。
+    assert!(
+        list(&h, TOKEN_A).await["servers"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "坏配置被拒后不许留下任何行"
+    );
+}
+
+/// PATCH 走的是**同一道**交叉校验：把 stdio 行改成 builtin 却没把 command 换成
+/// 内置名（还是那个路径），必须 400 —— POST 拦得住、PATCH 放得进去，等于绕开校验。
+#[tokio::test]
+async fn patching_a_row_to_builtin_still_goes_through_the_same_shape_check() {
+    let h = Harness::new("ext-mcp-builtin-patch");
+    seed_user(&h.db.bridge(), UID_A);
+    save(&h, TOKEN_A, serde_json::json!({"servers": [stdio("keep")]})).await;
+
+    let (st, v) = patch_mcp(
+        &h,
+        UID_A,
+        "keep",
+        serde_json::json!({"transport": "builtin"}),
+    )
+    .await;
+    assert_eq!(
+        st,
+        StatusCode::BAD_REQUEST,
+        "command 还是路径、不是内置名，必须被拒：{v}"
+    );
+    assert!(
+        v["error"]["detail"]
+            .as_str()
+            .unwrap_or("")
+            .contains("quill-no-such-mcp-binary"),
+        "要点名那个不认识的名字：{v}"
+    );
+
+    // 换成真名字就能过，并且改完**真的连上**（下一轮列表里如实报）。
+    // 能力一起打开：原行是 `enabled_capabilities: null`（全禁），PATCH 只改点名的
+    // 字段 —— 不点名它就会「连上了但工具数 0」，那是对的、不是这次要测的东西。
+    let (st, v) = patch_mcp(
+        &h,
+        UID_A,
+        "keep",
+        serde_json::json!({
+            "transport": "builtin",
+            "command": "memory",
+            "enabled_capabilities": []
+        }),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["server"]["transport"], serde_json::json!("builtin"));
+    let listed = list(&h, TOKEN_A).await;
+    assert_eq!(
+        listed["status"][0]["connected"],
+        serde_json::json!(true),
+        "改完就该真的连上：{listed}"
+    );
+    assert_eq!(
+        listed["status"][0]["tool_count"],
+        serde_json::json!(4),
+        "{listed}"
     );
 }
 

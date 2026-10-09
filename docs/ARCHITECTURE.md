@@ -133,12 +133,12 @@ goose 内核的参考源（`vendor/goose/crates/`，实测各 crate 规模）：
 | 内核能力 | goose 出处 | quill 落点 | 覆盖度 |
 |---|---|---|---|
 | provider 抽象 | `goose-providers`/`-provider-types` | `quill-provider`（叶子，传输）+ `quill-core::llm`（配置与组装，Q015 已搬） | 部分；**组装只剩一套**（2026-10-08） |
-| MCP 客户端 | `goose/agents/mcp_client.rs`、`goose-mcp` | **`quill-core/src/mcp_client.rs`**（1213 行，Q014 已搬出 HTTP 层） | 部分（只铺 stdio） |
+| MCP 客户端 | `goose/agents/mcp_client.rs`、`goose-mcp` | **`quill-core/src/mcp_client.rs`**（1213 行，Q014 已搬出 HTTP 层） | 部分（stdio + **内置 `builtin`**；`streamable_http`/`sse` 如实报「还没铺」） |
 | 对话循环 | `goose/agents/agent.rs` → `Agent::reply` | **`quill-core/src/turn.rs`**（661 行，Q012 已搬）——壳侧 `api_chat.rs` 只剩「拼 TurnInput + 映射错误 + 落库」 | 部分；状态机已有（`quill-core/src/state_machine.rs`，Q020），**未接线** |
 | 工具执行 | `goose/agents/tool_execution.rs` | **`quill-core/src/tools.rs`**（1402 行，Q013 已搬，走 `ToolSources` 端口） | 部分（只读工具，写入类故意不做） |
 | 子 agent | `goose/agents/subagent_handler.rs` | `quill-adapters::MemberExecutor` + `member_executor.rs` | 第一版（`steer`/`abort` 未做） |
 | **上下文压缩** | `goose-context-management`（1156 行） | **已接线**（Q018）：内核 `quill-core/src/compaction.rs` 是纯逻辑，壳 `quill-server/src/chat_compaction.rs` 注入 provider 与 token 估算；`compaction_threshold_tokens` 真的被读 | 可用（估算口径，无真分词器；删工具响应的重试阶梯因缺可信分类器而不触发） |
-| **记忆** | **`goose-mcp/src/memory/mod.rs`**（goose 的记忆是一个 MCP 扩展，不在 `goose/session`） | **已实现**（Q019）：内核 `quill-core/src/memory.rs` 是存储语义 + 四个工具；stdio 入口 `quill mcp memory`（`quill-cli`） | 可用（**未接线**：还没登记成一台 MCP 服务器，模型暂调不到） |
+| **记忆** | **`goose-mcp/src/memory/mod.rs`**（goose 的记忆是一个 MCP 扩展，不在 `goose/session`） | **已实现并接线**（Q019 + Q111）：内核 `quill-core/src/memory.rs` 是存储语义 + 四个工具；两条入口 —— stdio `quill mcp memory`（`quill-cli`）与**内置**（`quill-core/src/builtin.rs`，对上配置行 `transport='builtin'` + `command=memory`） | 可用（**默认不预置**：用户要自己去设备页加那一行；产品决定，见 `UPSTREAM-DIVERGENCES.md` A6） |
 | **会话回滚（快照）** | **`goose/session/session_manager.rs` 的 `truncate_conversation_from_message`**（原写「goose 无此原语」是**错的** —— 只按 `snapshot` 这个词找，漏了函数名） | **已实现**（Q021）：`quill-server/src/chat_repo.rs::rollback_from_message` + `POST /api/sessions/{id}/rollback` | 可用（**没有前端入口**；octop 那条不破坏原线程的 **fork 没做**） |
 | 权限 | `goose/permission` | `quill-control`（用户/角色，面向多租户，口径不同） | 需逐块比对 |
 | skills | `goose/skills` | `skills_repo.rs` / `skillhub.rs` / `api_extensions` | 部分 |
@@ -274,7 +274,7 @@ L0  quill-adapters  quill-store  quill-provider
 | 工具执行 | `quill-core` | `goose/agents/tool_execution.rs` | L4 内联 |
 | MCP | `quill-core` | `goose/agents/mcp_client.rs`、`goose-mcp` | L4 内联 |
 | 上下文压缩 | `quill-core` | **`goose-context-management`** | 自创算法 |
-| 记忆 | `quill-core`（2026-10-09 落地：`src/memory.rs`，stdio 入口 `quill mcp memory`） | **`goose-mcp/src/memory/mod.rs`**（原写「`goose/session` 相关」是**错的** —— goose 的记忆是 `goose-mcp` 里的一个 MCP 扩展） | 自创 |
+| 记忆 | `quill-core`（2026-10-09 落地：`src/memory.rs`，两条入口：stdio `quill mcp memory` + 内置 `src/builtin.rs`，Q111） | **`goose-mcp/src/memory/mod.rs`**（原写「`goose/session` 相关」是**错的** —— goose 的记忆是 `goose-mcp` 里的一个 MCP 扩展） | 自创 |
 
 ---
 

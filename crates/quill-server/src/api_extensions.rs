@@ -284,7 +284,10 @@ pub async fn delete_mcp(
     .into_response())
 }
 
-const ALLOWED_TRANSPORTS: [&str; 3] = ["stdio", "streamable_http", "sse"];
+// `builtin` 从第一天就在 `mcp_servers.transport` 的 CHECK 里（`0001_init.sql`），
+// 但 API 一直不收 —— 声明了做不到。queue Q111 把它接上：`command` 写内置服务器的
+// 名字（目前只有 memory），服务端在内存管道上跑它，不起子进程、不用装依赖。
+const ALLOWED_TRANSPORTS: [&str; 4] = ["stdio", "builtin", "streamable_http", "sse"];
 
 /// `PATCH /api/extensions/mcp/{name}` —— 单条局部更新（含改名）。
 ///
@@ -727,6 +730,31 @@ fn check_transport_shape(
     url: Option<&str>,
 ) -> Result<(), ApiError> {
     let bad = ApiError::bad_request;
+    if transport == "builtin" {
+        let name = command.unwrap_or("").trim();
+        if name.is_empty() {
+            return Err(bad(format!(
+                "{label} command 必填：builtin 传输要在 command 里写内置服务器的**名字**\
+                 （目前内置的有：{}）。\
+                 下一步：把 command 填成 memory。",
+                quill_core::builtin::names()
+            )));
+        }
+        if !quill_core::builtin::is_builtin(name) {
+            return Err(bad(format!(
+                "{label} 内置服务器 {name:?} 不认识（目前内置的有：{}）。\
+                 下一步：改成其中之一，或把传输方式改成 stdio 自己起一个进程。",
+                quill_core::builtin::names()
+            )));
+        }
+        if url.is_some() {
+            return Err(bad(format!(
+                "{label} url 不该出现在 builtin 配置上：内置服务器就在本进程里跑，没有地址。\
+                 下一步：清空 url（PATCH 传 null），或把传输方式改成 streamable_http / sse。"
+            )));
+        }
+        return Ok(());
+    }
     if transport == "stdio" {
         if command.unwrap_or("").trim().is_empty() {
             return Err(bad(format!(

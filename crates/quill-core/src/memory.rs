@@ -29,15 +29,18 @@
 //! - 全局目录用 `default_global_memory_dir()` 现算（`%APPDATA%\quill\memory` /
 //!   `$XDG_CONFIG_HOME/quill/memory` / `$HOME/.config/quill/memory`），**没有引入 goose 用的
 //!   `etcetera`** —— 平台目录只有这两支，为它加一个依赖不划算；口径写在这里以便核对。
-//! - goose 把内置扩展跑在**进程内**（`tokio::io::duplex`，见 `goose/src/agents/extension_manager/builtin.rs`）；
-//!   quill 走它自己的 stdio 那条（`goose mcp memory` 的等价物），因为 quill 的 `mcp_client`
-//!   只铺了 stdio。功能等价，形状不同。
+//! - goose 把内置扩展跑在**进程内**（`tokio::io::duplex`，见
+//!   `goose/src/agents/extension_manager/builtin.rs:35-40`）；quill **两条都有**：
+//!   stdio 入口是 `serve_stdio`（`quill mcp memory`），进程内那条是 `serve_on_duplex`
+//!   （对上配置行的 `transport='builtin'`，见 `crate::builtin`）。
 //!
 //! ## 这一层的边界
 //!
 //! 本模块只负责**记忆的读写与它的 MCP 工具面**。把它**接进某轮对话**（让模型自动
-//! 调得到）要靠壳侧把 `quill mcp memory` 登记成一台 MCP 服务器 —— 与 Q017/Q020/Q022
-//! 一样，内核逻辑先落地、接线另记。
+//! 调得到）靠的是壳侧登记一行 MCP 服务器配置：`transport='builtin'` + `command=memory`
+//! 保存即用（queue Q111 已接通，判据见 `crates/quill-server/tests/extensions_http.rs`
+//! 的 `a_builtin_memory_server_connects_and_its_tools_reach_the_conversation`）；
+//! `command` 指向 `quill mcp memory` 的 stdio 走法同样可用。
 
 use std::collections::HashMap;
 use std::fs;
@@ -628,6 +631,28 @@ pub async fn serve_stdio() -> Result<(), String> {
         .await
         .map_err(|e| format!("记忆服务器异常退出：{e}"))?;
     Ok(())
+}
+
+/// 在**内存管道**上跑这台服务器，返回**客户端那一端**（读, 写）。
+///
+/// 上游同一手法：`vendor/goose/crates/goose/src/agents/extension_manager/builtin.rs:35-40`
+/// —— 两对 `tokio::io::duplex` 交叉接上，服务器与客户端都在本进程里，不起子进程、
+/// 也不要求用户装任何东西。`crate::builtin` 就是拿它对上 `transport='builtin'` 的配置行。
+///
+/// 服务器任务**故意不把错误回传**：它跑在后台，客户端那一端会先看到「传输断了」，
+/// 用户拿到的是那条错误；这里只往 stderr 记一句日志（stdout 不在这条路径上）。
+pub fn serve_on_duplex() -> (tokio::io::DuplexStream, tokio::io::DuplexStream) {
+    let (server_read, client_write) = tokio::io::duplex(65536);
+    let (client_read, server_write) = tokio::io::duplex(65536);
+    tokio::spawn(async move {
+        match MemoryServer::new().serve((server_read, server_write)).await {
+            Ok(running) => {
+                let _ = running.waiting().await;
+            }
+            Err(e) => eprintln!("[memory] 内置服务器出错：{e}"),
+        }
+    });
+    (client_read, client_write)
 }
 
 #[cfg(test)]
