@@ -47,6 +47,27 @@ const DELEGATION_PREAMBLE: &str = "\
 你的产出会被汇总给主持人，期间没有人与你交互，所以不要提问、不要请求确认 —— \
 直接给出可用的结论。信息不足时，用你已有的知识做出最合理的判断，并标出不确定之处。";
 
+/// 成员追问的标记（queue Q105）：模型回一行以它开头的文本 = 一次澄清请求。
+const ASK_PREFIX: &str = "[提问]";
+
+/// 允许追问时追加到 system 末尾的那段。
+///
+/// **它显式覆盖上面那句「不要提问」**，而不是与之并列 —— 否则模型收到的是一对
+/// 自相矛盾的指令。同时说清本仓的追问语义：**没有人会回答**，追问只是换一次
+/// 自我审视，收到后仍要自行决断（用户 2026-10-09 拍板的口径）。
+fn ask_addendum(budget: u32) -> String {
+    format!(
+        "\n\n【关于追问】以下规则**覆盖上面那句「不要提问」**：你最多可以提出 {budget} 次澄清请求。\
+         确实缺少必要信息时，**只**回一行以「{ASK_PREFIX}」开头的追问，不要写别的。\
+         但请注意：**没有人会回答你** —— 追问只是让你重新审视一次，收到追问后你仍须依据已有信息自行决断；\
+         仍不确定之处请显式标注。超过 {budget} 次追问会被判为失败。"
+    )
+}
+
+/// 追问耗尽后注入的「自行决断」指令（无人回答时的唯一出路）。
+const SELF_DECIDE_NUDGE: &str = "（系统）没有人可以回答你的追问。请依据已有信息自行决断，\
+     直接给出可用的结论；仍不确定之处请显式标注。";
+
 /// 用 provider 真跑一次成员任务的执行器。
 ///
 /// 无状态：每次 `start` 都独立拼 prompt 并调一次模型。成员的会话归属由
@@ -189,6 +210,13 @@ async fn run_member(
 ) -> Result<MemberRunEnd, AdapterError> {
     let member = req.member().clone();
     let mut system = String::from(DELEGATION_PREAMBLE);
+    // 预算 > 0 才追加那段；= 0 时提示词一个字不变（老行为）。
+    // 注意预算来自团队列 `max_ask_depth`，**默认团队是 3 不是 0**（见
+    // `quill_agent::team_limits`）—— 会走到这里的默认团队都会带上追问段。
+    let ask_budget = req.max_ask_depth();
+    if ask_budget > 0 {
+        system.push_str(&ask_addendum(ask_budget));
+    }
     if let Some(p) = persona(&db, req.owner(), req.expert())?
         .as_deref()
         .map(str::trim)
@@ -203,6 +231,10 @@ async fn run_member(
     ];
 
     let mut rounds = 0u32;
+    // 已经用掉的追问次数（queue Q105）。闸门是**用掉之前**判的：预算 N 就只放行
+    // N 次追问，第 N+1 次如实失败 —— 与 `max_dispatch`/`max_replan` 同一条纪律
+    // 「超限就拒绝，不静默截断」。
+    let mut asks_used = 0u32;
     // 这一轮**所有**模型调用的 token 都记在这里，而不是只留最后一次 ——
     // 与对话循环（`quill_core::turn::TurnUsage`）同一个累加器、同一条语义：
     // 只加真值、缓存两项不并进入参、单轮逐字不变。steer 会让成员有多轮，
@@ -227,6 +259,30 @@ async fn run_member(
         turn_usage.push(resp.usage);
 
         let text = resp.text;
+        // 追问（Q105）：模型只回一行 `[提问] …`。**没有人会回答**，所以这不是
+        // 「等人回话」，而是「再跑一轮、逼它自行决断」。预算用完仍追问 = 如实失败，
+        // 不静默把追问当结论交出去（那会让主持人收到一句没头没尾的问题）。
+        if ask_budget > 0 && text.trim_start().starts_with(ASK_PREFIX) {
+            asks_used += 1;
+            if asks_used > ask_budget {
+                return Err(AdapterError::Internal(format!(
+                    "成员 {member} 的追问超过上限（max_ask_depth = {ask_budget}，已就第 \
+                     {asks_used} 次提问），无法再有更多澄清。\
+                     下一步：把任务说明里缺的信息补全后重派，或 PATCH /api/teams/{{id}} \
+                     调大 max_ask_depth（上限 5）。"
+                )));
+            }
+            if rounds >= MEMBER_MAX_ROUNDS {
+                return Err(AdapterError::Internal(format!(
+                    "成员 {member} 的轮次超过上限（{MEMBER_MAX_ROUNDS} 轮，已跑 {rounds} 次模型调用）。\
+                     下一步：把任务说明一次写全再重派。"
+                )));
+            }
+            messages.push(LlmMessage::assistant(text));
+            messages.push(LlmMessage::user(SELF_DECIDE_NUDGE));
+            continue;
+        }
+
         let pending = run.drain_steers();
         if pending.is_empty() {
             return Ok(MemberRunEnd::Text(text, usage_of(turn_usage.finish())));
@@ -908,5 +964,162 @@ mod tests {
             .expect("第一次 poll 就完成")
             .expect_err("没有在跑的成员必须报错");
         assert!(format!("{err}").contains("没有正在运行的成员"), "{err}");
+    }
+
+    // ------------------------------------------------------ 追问闸门（Q105）
+
+    /// 按脚本逐轮回话的桩 provider（第 n 次调用回第 n 条，用光后回最后一条）。
+    #[derive(Debug)]
+    struct Scripted {
+        replies: Mutex<Vec<String>>,
+        calls: std::sync::atomic::AtomicUsize,
+        seen_user: Mutex<Vec<String>>,
+    }
+
+    impl Scripted {
+        fn new(replies: &[&str]) -> Self {
+            Self {
+                replies: Mutex::new(replies.iter().map(|s| s.to_string()).collect()),
+                calls: std::sync::atomic::AtomicUsize::new(0),
+                seen_user: Mutex::new(Vec::new()),
+            }
+        }
+        fn call_count(&self) -> usize {
+            self.calls.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    impl quill_provider::Provider for Scripted {
+        fn name(&self) -> &str {
+            "scripted"
+        }
+
+        fn chat<'a>(
+            &'a self,
+            request: &'a ChatRequest,
+        ) -> quill_provider::BoxFuture<'a, ChatResponse> {
+            let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.seen_user
+                .lock()
+                .expect("锁不毒化")
+                .extend(request.messages.iter().rev().take(1).map(text_of));
+            let replies = self.replies.lock().expect("锁不毒化");
+            let reply = replies
+                .get(n)
+                .or_else(|| replies.last())
+                .cloned()
+                .unwrap_or_default();
+            let model = request.model.clone();
+            Box::pin(async move {
+                Ok(ChatResponse {
+                    id: None,
+                    model,
+                    text: reply,
+                    reasoning: String::new(),
+                    tool_calls: Vec::new(),
+                    finish_reason: None,
+                    usage: Default::default(),
+                })
+            })
+        }
+
+        fn stream<'a>(
+            &'a self,
+            _r: &'a ChatRequest,
+        ) -> quill_provider::BoxFuture<'a, ProviderStream> {
+            Box::pin(async {
+                Err(ProviderError::NotConfigured {
+                    detail: "单测不用流式".into(),
+                })
+            })
+        }
+
+        fn models<'a>(&'a self) -> quill_provider::BoxFuture<'a, Vec<ModelInfo>> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+    }
+
+    /// `max_ask_depth = 0`（默认）：提示词**逐字**保持老样子，成员不会追问 —— 回一句
+    /// `[提问]` 也被当成普通正文交付，不问不拦（老行为一个字不变）。
+    #[test]
+    fn ask_depth_zero_keeps_the_old_behavior_and_the_old_prompt() {
+        let (db, dir) = temp_db("ask-off");
+        let owner = UserId::from_bytes([9; 16]);
+        let provider = Arc::new(Scripted::new(&["[提问] 这算不算问题？"]));
+        let exec = ProviderMemberExecutor::new(
+            Arc::clone(&provider) as SharedProvider,
+            llm_cfg(),
+            Arc::clone(&db),
+        );
+        // 不调 with_max_ask_depth → 默认 0。
+        let out = poll_noop(exec.start(req(owner, "cost-analyst", "cost-analyst-1")))
+            .expect("第一次 poll 就完成")
+            .expect("应成功");
+        assert_eq!(out.status().as_wire(), "done");
+        assert_eq!(
+            out.output(),
+            "[提问] 这算不算问题？",
+            "不许追问时，[提问] 只是普通正文，原样交付"
+        );
+        assert_eq!(provider.call_count(), 1, "不许追问就只调一次模型");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 允许追问：模型第一次回 `[提问]`，执行器注入「自行决断」再跑一轮；交付的是
+    /// **第二轮**的正文（不是那句追问）。
+    #[test]
+    fn an_ask_is_answered_with_a_self_decide_nudge_and_the_member_runs_again() {
+        let (db, dir) = temp_db("ask-on");
+        let owner = UserId::from_bytes([10; 16]);
+        let provider = Arc::new(Scripted::new(&[
+            "[提问] 该用哪种口径？",
+            "结论：按成本口径，降 12%。",
+        ]));
+        let exec = ProviderMemberExecutor::new(
+            Arc::clone(&provider) as SharedProvider,
+            llm_cfg(),
+            Arc::clone(&db),
+        );
+        let r = req(owner, "cost-analyst", "cost-analyst-1").with_max_ask_depth(2);
+        let out = poll_noop(exec.start(r))
+            .expect("第一次 poll 就完成")
+            .expect("应成功");
+        assert_eq!(out.status().as_wire(), "done");
+        assert_eq!(
+            out.output(),
+            "结论：按成本口径，降 12%。",
+            "交付的必须是自行决断之后的正文，不是那句追问"
+        );
+        assert_eq!(provider.call_count(), 2, "追问要换来第二轮模型调用");
+        let seen = provider.seen_user.lock().expect("锁不毒化").clone();
+        assert!(
+            seen.iter().any(|t| t.contains("没有人可以回答你的追问")),
+            "第二轮必须带上「自行决断」的注入：{seen:?}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 追问用满还继续追问 → **如实失败**（不把追问当结论交出去），且失败原因点名
+    /// `max_ask_depth` 与上限。
+    #[test]
+    fn asking_beyond_the_budget_is_an_honest_failure() {
+        let (db, dir) = temp_db("ask-over");
+        let owner = UserId::from_bytes([11; 16]);
+        // 每次都追问 → 第 2 次就超过 budget=1。
+        let provider = Arc::new(Scripted::new(&["[提问] 还是不确定"]));
+        let exec = ProviderMemberExecutor::new(
+            Arc::clone(&provider) as SharedProvider,
+            llm_cfg(),
+            Arc::clone(&db),
+        );
+        let r = req(owner, "cost-analyst", "cost-analyst-1").with_max_ask_depth(1);
+        let err = poll_noop(exec.start(r))
+            .expect("第一次 poll 就完成")
+            .expect_err("用满还追问必须如实报错");
+        let msg = format!("{err}");
+        assert!(msg.contains("追问超过上限"), "{msg}");
+        assert!(msg.contains("max_ask_depth"), "{msg}");
+        assert!(msg.contains("下一步"), "{msg}");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

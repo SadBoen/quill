@@ -192,6 +192,10 @@ pub struct MemberStartRequest {
     instructions: String,
     chain: Vec<ChainHop>,
     required_capabilities: Option<Vec<String>>,
+    /// 成员允许追问的最大次数（团队列 `max_ask_depth`，queue Q105）。
+    /// `MemberStartRequest` 的构造默认是 0；派工真路径送的是**团队列的值**
+    /// （默认团队 = 3，见 `quill_agent::team_limits::DEFAULT_MAX_ASK_DEPTH`）。
+    max_ask_depth: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -253,7 +257,18 @@ impl MemberStartRequest {
             instructions,
             chain: Vec::new(),
             required_capabilities: None,
+            max_ask_depth: 0,
         })
+    }
+
+    /// 允许成员追问的次数（团队 `max_ask_depth`）。默认 0。
+    pub fn with_max_ask_depth(mut self, depth: u32) -> Self {
+        self.max_ask_depth = depth;
+        self
+    }
+
+    pub fn max_ask_depth(&self) -> u32 {
+        self.max_ask_depth
     }
 
     pub fn with_chain(mut self, hop: ChainHop) -> Self {

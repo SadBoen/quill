@@ -559,6 +559,10 @@ impl<E: MemberExecutor, L: DispatchLedger> Dispatcher<E, L> {
         .map_err(|e| AgentError::DispatchRequestInvalid {
             reason: e.to_string(),
         })?;
+        // queue Q105：把团队的 `max_ask_depth` 交给执行器 —— 追问闸门在它那里
+        // （只有执行器看得到运行时的追问，而且 schema 的
+        // `CHECK ((state='ASKING') = (ask_depth>0))` 不允许 DONE 行带 ask_depth）。
+        req = req.with_max_ask_depth(limits.max_ask_depth());
         for hop in chain {
             req = req.with_chain(hop.clone());
         }

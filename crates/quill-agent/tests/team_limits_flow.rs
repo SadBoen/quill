@@ -8,9 +8,10 @@
 //! 2. 没超限的一轮照常执行；
 //! 3. `guidelines` 逐字进每个成员的任务正文（执行器拿到的 `instructions`）。
 //!
-//! `max_ask_depth` **不在这里测**：它没有生效点 —— quill 的成员执行器没有
-//! 「追问」通道（见 `quill_agent::team_limits` 的文件头）。给一个没人调用的
-//! 闸门写测试，只会得到一条永远绿的假证据。
+//! 4. `max_ask_depth` 从团队列**逐字送到执行器**（queue Q105）：闸门本身在对侧
+//!    —— 追问发生在模型回话的那一刻，只有执行器看得到，所以这里钉的是「送对了」，
+//!    执行器那一半在 `crates/quill-server/src/member_executor.rs` 的单测里（三条：
+//!    0 保持老行为 / 追问换来第二轮 / 用满如实失败）。
 
 use std::sync::{Arc, Mutex};
 
@@ -170,11 +171,17 @@ fn a_round_beyond_max_replan_is_rejected_while_the_first_round_passes() {
 #[derive(Debug, Default)]
 struct PromptRecorder {
     seen: Mutex<Vec<(String, String)>>,
+    /// 每次 `start` 拿到的 `max_ask_depth`（Q105：证明团队列真的送到了执行器）。
+    asks: Mutex<Vec<u32>>,
 }
 
 impl PromptRecorder {
     fn seen(&self) -> Vec<(String, String)> {
         self.seen.lock().expect("测试锁不该毒化").clone()
+    }
+
+    fn asks(&self) -> Vec<u32> {
+        self.asks.lock().expect("测试锁不该毒化").clone()
     }
 }
 
@@ -188,6 +195,10 @@ impl MemberExecutor for PromptRecorder {
             .lock()
             .expect("测试锁不该毒化")
             .push((req.title().to_string(), req.instructions().to_string()));
+        self.asks
+            .lock()
+            .expect("测试锁不该毒化")
+            .push(req.max_ask_depth());
         async move {
             MemberOutcome::done(member, "已完成", "产出")
                 .map_err(|err| AdapterError::Internal(format!("构造成员产出失败：{err}")))
@@ -244,6 +255,59 @@ fn guidelines_reach_every_member_prompt_before_the_task_text() {
     }
     // 两个成员各自的标题不同（证明不是把同一条记录复制了两遍）。
     assert_ne!(seen[0].0, seen[1].0);
+}
+
+#[test]
+fn max_ask_depth_reaches_every_executor_verbatim() {
+    // Q105 的真路径证据：闸门在执行器那一侧，所以这里必须证明团队列
+    // **真的送进了 `MemberStartRequest`**，而不是停在派工器里没传。默认 0 那条
+    // 也一并钉住，防止「送错了值」被漏掉。
+    let recorder = Arc::new(PromptRecorder::default());
+    let d = Dispatcher::new(
+        SharedExecutor::new(Arc::clone(&recorder)),
+        MemDispatchLedger::new(),
+    );
+    let limits = TeamLimits::new(4, 2, 3, "").expect("合法限制");
+
+    let tasks = [task("cost-analyst", 1), task("growth-analyst", 1)];
+    round_with(&d, &team3(), 0, &tasks, &limits).expect("应派成功");
+    assert_eq!(
+        recorder.asks(),
+        vec![3, 3],
+        "团队 max_ask_depth=3 必须逐字送到每个成员"
+    );
+
+    // 默认团队（`TeamLimits::default()`，与 schema 默认同口径 = 3）：派工真路径
+    // 送的是**团队列的值**，所以默认团队就是 3 —— 不是 0。送 0 只发生在显式
+    // 把列设成 0 的团队（下面再钉一次）。
+    let recorder0 = Arc::new(PromptRecorder::default());
+    let d0 = Dispatcher::new(
+        SharedExecutor::new(Arc::clone(&recorder0)),
+        MemDispatchLedger::new(),
+    );
+    round_with(
+        &d0,
+        &team3(),
+        0,
+        &[task("cost-analyst", 1)],
+        &TeamLimits::default(),
+    )
+    .expect("应派成功");
+    assert_eq!(
+        recorder0.asks(),
+        vec![3],
+        "默认团队的列是 3（schema 默认），真路径必须照送"
+    );
+
+    // 显式设成 0 的团队：逐字送 0（执行器据此保持「不许提问」的老提示词）。
+    let recorder_zero = Arc::new(PromptRecorder::default());
+    let dz = Dispatcher::new(
+        SharedExecutor::new(Arc::clone(&recorder_zero)),
+        MemDispatchLedger::new(),
+    );
+    let no_ask = TeamLimits::new(4, 2, 0, "").expect("合法限制");
+    round_with(&dz, &team3(), 0, &[task("cost-analyst", 1)], &no_ask).expect("应派成功");
+    assert_eq!(recorder_zero.asks(), vec![0], "显式 0 必须逐字送到执行器");
 }
 
 #[test]
