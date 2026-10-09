@@ -118,6 +118,9 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/api/sessions/{id}/metrics", get(api_chat::metrics))
         .route("/api/sessions/{id}/context", get(api_chat::context))
+        // 回滚到某条消息之前（Q021，照 goose 的 truncate_conversation_from_message）。
+        // **quill 自加的路由**（octop 那条是 fork，不是原地回滚），登记在 EXTRA。
+        .route("/api/sessions/{id}/rollback", post(api_chat::rollback))
         .route("/api/usage", get(api_chat::usage));
 
     // 只读端点与「只读索引」的检索已接通（不需要模型）：pages / pages/{path} /
@@ -526,6 +529,10 @@ pub const EXTRA_ROUTES: &[(&str, &str)] = &[
     // 流式发消息。**不是 octop 的契约路由**（上游那条还是一次性返回），
     // 是我们为了让长回复能边写边看自己加的，所以登记在 EXTRA 而不是 CONTRACT。
     ("POST", "/api/sessions/{id}/messages/stream"),
+    // 回滚到某条消息之前（Q021）。**不是 octop 的契约路由** —— octop 那边是
+    // `POST .../threads/{tid}/fork`（另建新线程、不动原线程），quill 这条按 goose 的
+    // `truncate_conversation_from_message` 做**原地删除**，语义不同，所以进 EXTRA。
+    ("POST", "/api/sessions/{id}/rollback"),
     ("GET", "/api/teams/{id}/dispatch"),
     ("POST", "/api/teams/{id}/dispatch"),
     // 派工**真执行**。自加的路由（octop 的派工只登记不跑），所以进 EXTRA。

@@ -59,6 +59,8 @@
 | 记忆分类名必须是单个文件名分量（空 / `*` / `.` / `..` / 含 `/\:` / Windows 保留名一律拒） | `crates/quill-core/src/memory.rs`（`get_memory_file`） | `vendor/goose/crates/goose-mcp/src/memory/mod.rs:184-215` | 已接入 | 逐条照抄（含 `CON`/`PRN`/`AUX`/`NUL`/`CLOCK$`/`COM1..9`/`LPT1..9` 与上标 ¹²³）。这是**安全边界**：分类名来自模型 |
 | 全局记忆在启动时拼进服务器 instructions（`Global Memories:` 段） | `crates/quill-core/src/memory.rs`（`instructions_with_global_memories`） | `vendor/goose/crates/goose-mcp/src/memory/mod.rs:143-170` | 已接入 | 行为照抄；全局目录用 `default_global_memory_dir()` 现算（`%APPDATA%` / `$XDG_CONFIG_HOME` / `$HOME/.config`），**没引 goose 用的 `etcetera`** |
 | 内置扩展的 stdio 入口（`goose mcp memory`） | `crates/quill-cli/src/main.rs`（`run_mcp` → `quill mcp memory`） | `vendor/goose/crates/goose-mcp/src/mcp_server_runner.rs:36-49` | 已接入 | 调用序列照抄（`ServiceExt::serve(stdio())` → `waiting()`）。goose 另有**进程内**那条（`vendor/goose/crates/goose/src/agents/extension_manager/builtin.rs:19-33` 的 `tokio::io::duplex`）；quill 只走 stdio，因为它的 `mcp_client` 只铺了 stdio |
+| 会话回滚：给定一条消息，删掉它**连同之后**的全部（`>= 边界`） | `crates/quill-server/src/chat_repo.rs`（`rollback_from_message`） | `vendor/goose/crates/goose/src/session/session_manager.rs:2631-2660` | 已接入 | 语义照抄（含「边界找不到就什么都不删」）。**排序键换成 `seq`**：goose 按 `(created_timestamp, id)` 定边界，quill 的等价物是 `seq`（`ux_messages_seq` 唯一）。**quill 多做一步**：同批重算 `sessions.message_count`（goose 不存这个冗余列） |
+| 回滚的另一条入口：按时间戳删（`created_timestamp >= ?`） | `crates/quill-server/src/chat_repo.rs`（`rollback_from_message` 同族，**未实现时间戳那条**） | `vendor/goose/crates/goose/src/session/session_manager.rs:2620-2629` | 我们的选择 | 上游有两条 truncate；quill 只做了**按消息**那条（HTTP 面也只暴露它）。按时间戳那条没有 UI 需要，先不做，避免一个没人调得动的入口 |
 
 ## goose 刻意没抄
 

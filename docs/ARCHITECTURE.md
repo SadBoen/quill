@@ -139,6 +139,7 @@ goose 内核的参考源（`vendor/goose/crates/`，实测各 crate 规模）：
 | 子 agent | `goose/agents/subagent_handler.rs` | `quill-adapters::MemberExecutor` + `member_executor.rs` | 第一版（`steer`/`abort` 未做） |
 | **上下文压缩** | `goose-context-management`（1156 行） | **已接线**（Q018）：内核 `quill-core/src/compaction.rs` 是纯逻辑，壳 `quill-server/src/chat_compaction.rs` 注入 provider 与 token 估算；`compaction_threshold_tokens` 真的被读 | 可用（估算口径，无真分词器；删工具响应的重试阶梯因缺可信分类器而不触发） |
 | **记忆** | **`goose-mcp/src/memory/mod.rs`**（goose 的记忆是一个 MCP 扩展，不在 `goose/session`） | **已实现**（Q019）：内核 `quill-core/src/memory.rs` 是存储语义 + 四个工具；stdio 入口 `quill mcp memory`（`quill-cli`） | 可用（**未接线**：还没登记成一台 MCP 服务器，模型暂调不到） |
+| **会话回滚（快照）** | **`goose/session/session_manager.rs` 的 `truncate_conversation_from_message`**（原写「goose 无此原语」是**错的** —— 只按 `snapshot` 这个词找，漏了函数名） | **已实现**（Q021）：`quill-server/src/chat_repo.rs::rollback_from_message` + `POST /api/sessions/{id}/rollback` | 可用（**没有前端入口**；octop 那条不破坏原线程的 **fork 没做**） |
 | 权限 | `goose/permission` | `quill-control`（用户/角色，面向多租户，口径不同） | 需逐块比对 |
 | skills | `goose/skills` | `skills_repo.rs` / `skillhub.rs` / `api_extensions` | 部分 |
 | slash 命令 | `goose/slash_commands` | 需核 | 需核 |
@@ -213,7 +214,7 @@ grep -rhoE '^(pub )?(async )?fn [a-z_]+' crates/*/src/**/*.rs | grep -oE 'fn [a-
 
 ## 2. 结构性问题（按危害排序）
 
-- **P-1 内核没有独立层（最重）**：按 `C1`，内核应**移植自 goose** 且独立成层；实际它散在 HTTP crate 里，且最重的两块（压缩/记忆）为零。**这是"地基不牢"的根**。（**2026-10-08/09 起不再成立**：Q012–Q015 把对话循环/工具/MCP/provider 搬进 `quill-core`，Q017/Q018 补上压缩并接线，Q019 补上记忆 —— 剩下的是子 agent 执行模型与快照，见 queue。）
+- **P-1 内核没有独立层（最重）**：按 `C1`，内核应**移植自 goose** 且独立成层；实际它散在 HTTP crate 里，且最重的两块（压缩/记忆）为零。**这是"地基不牢"的根**。（**2026-10-08/09 起不再成立**：Q012–Q015 把对话循环/工具/MCP/provider 搬进 `quill-core`，Q017/Q018 补上压缩并接线，Q019 补上记忆，Q021 补上会话回滚 —— 剩下的是**子 agent 执行模型**，见 queue。）
 - **P-2 分层泄漏**：`quill-server` 既 HTTP 又编排又 SQL 又内核（内核部分 2026-10-08 起已按 Q013/Q014/Q015 搬出三块）；`quill-agent → quill-wiki` 的倒挂**已修**（`.layer-guard.mjs` 的基线里现在只剩 `quill-upgrade → quill-backup` 同层依赖）。
 - **P-3 冗余**：id/hex 转换 6+ 处、取值助手 5+ 套、provider 组装 2 套、SQL 未收口。
 - **P-4 名实不符**：`quill-agent` 不装 agent（仍在）；`quill-upgrade` 零调用 —— **2026-10-08 已不再成立**（`/api/upgrade/prepare` 真走它的升级前备份守卫）；**2026-10-09 起 `POST /api/upgrade/apply` 补齐了产物管线（下载 + 校验 + 暂存 + 交出命令）**，只剩「进程内自替换」这一件设计上做不到的事（Q063）。
@@ -315,7 +316,7 @@ L0  quill-adapters  quill-store  quill-provider
 | P1-1 | 建 `quill-core` 并搬运内核逻辑（D1-a 第一步） | 纯重构：对话循环 / 工具 / MCP / provider 组装 |
 | P1-2 | 照 `goose-context-management` 实现上下文压缩 | 当前只有配置字段、零实现 |
 | P1-3 | 记忆 | 迁移清单里最重的一块（**2026-10-09 已实现，Q019**：`quill-core/src/memory.rs` + `quill mcp memory`；未接线） |
-| P1-4 | 内核状态机 / 快照 / 重试（照 `goose/agents/`） | 长程任务不中断的底子 |
+| P1-4 | 内核状态机 / 快照 / 重试（照 `goose/agents/`） | 长程任务不中断的底子（状态机 Q020 / 重试 Q022 已在内核；**回滚 Q021 已落地** `POST /api/sessions/{id}/rollback`） |
 | P1-5 | 逐块比对 provider 移植覆盖度，合并两套组装 | 消除 §1.6 的 provider 冗余 |
 
 ### P2 易实现的小功能（不阻塞，随时插空）

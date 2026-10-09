@@ -670,6 +670,94 @@ pub fn rename_session(
     })
 }
 
+// ---------------------------------------------------------------------------
+// Q021 · 回滚到某一条消息（照 goose 的 `truncate_conversation_from_message`）
+// ---------------------------------------------------------------------------
+
+/// 找边界消息在会话里的 `seq`。找不到 = 这条消息不在该会话里。
+pub const ROLLBACK_BOUNDARY_SQL: &str =
+    "SELECT seq FROM messages WHERE user_id = ? AND session_id = ? AND id = ? LIMIT 1";
+
+/// 删掉边界消息**以及它之后**的全部消息（`seq >= 边界`）。
+pub const ROLLBACK_FROM_SEQ_SQL: &str =
+    "DELETE FROM messages WHERE user_id = ? AND session_id = ? AND seq >= ?";
+
+/// 回滚后重算会话的 `message_count`（会话列表读的就是这一列；不重算，侧栏会
+/// 一直显示回滚前的条数）。
+pub const ROLLBACK_REBASE_SQL: &str = "UPDATE sessions SET message_count = \
+       (SELECT COUNT(*) FROM messages WHERE user_id = ? AND session_id = ?), \
+     updated_at = ? \
+     WHERE user_id = ? AND id = ? AND deleted_at IS NULL";
+
+/// 回滚到某条消息**之前**：把这条消息连同它之后的所有消息从会话里删掉，
+/// 返回删了几条（0 = 这条消息不在该会话里，什么都没动）。
+///
+/// **移植出处**：`vendor/goose/crates/goose/src/session/session_manager.rs:2631-2660`
+/// 的 `truncate_conversation_from_message`。上游先按 `(created_timestamp, id)`
+/// 定边界，再删 `>= 边界` 的全部；quill 的等价排序键是 `seq`
+/// （`ux_messages_seq` 保证一个会话里唯一），所以「定边界」是一次 `seq` 查询、
+/// 「删」是 `seq >= 边界`。
+///
+/// **上游找不到边界时什么都不删**（`if let Some(...)` 那层）；这里照做 ——
+/// 用返回的 0 行让调用方区分「找不到这条消息」与「删了若干条」。
+///
+/// **与上游的一处必要差异**：goose 的 truncate 不碰会话计数；quill 的
+/// `sessions.message_count` 是**存着的列**、会话列表读它，所以这里同批重算。
+/// `next_seq` 不用管 —— 它由 `MAX(seq)+1` 现算（见 [`NEXT_SEQ_SQL`]）。
+pub fn rollback_from_message(
+    db: &DbBridge,
+    uid: UserId,
+    sid: [u8; 16],
+    message_id: [u8; 16],
+    now: i64,
+) -> Result<u64, AgentError> {
+    db.call(move |pool, _rt| {
+        Box::pin(async move {
+            let mut tx = pool
+                .begin()
+                .await
+                .map_err(|e| storage_error("开回滚事务", e))?;
+
+            let boundary: Option<i64> = sqlx::query_scalar(ROLLBACK_BOUNDARY_SQL)
+                .bind(uid.as_bytes().to_vec())
+                .bind(sid.to_vec())
+                .bind(message_id.to_vec())
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| storage_error("找回滚边界", e))?;
+
+            let Some(seq) = boundary else {
+                // 上游口径：边界找不到就不动。事务里什么都没写，drop 即回滚。
+                return Ok(0);
+            };
+
+            let deleted = sqlx::query(ROLLBACK_FROM_SEQ_SQL)
+                .bind(uid.as_bytes().to_vec())
+                .bind(sid.to_vec())
+                .bind(seq)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| storage_error("回滚消息", e))?
+                .rows_affected();
+
+            sqlx::query(ROLLBACK_REBASE_SQL)
+                .bind(uid.as_bytes().to_vec())
+                .bind(sid.to_vec())
+                .bind(now)
+                .bind(uid.as_bytes().to_vec())
+                .bind(sid.to_vec())
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| storage_error("重算会话计数", e))?;
+
+            tx.commit()
+                .await
+                .map_err(|e| storage_error("提交回滚", e))?;
+            Ok(deleted)
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -807,5 +895,36 @@ mod tests {
             "改名不是「用过它」：刷新活跃时间会让会话跳到侧栏最上面"
         );
         assert!(RENAME_SQL.contains("updated_at = ?"), "改名要留痕");
+    }
+
+    #[test]
+    fn rollback_is_scoped_to_the_session_and_deletes_the_boundary_too() {
+        // 三条谓词缺一不可：
+        // ① 按用户+会话隔离（少了就把别人的消息删了）；
+        // ② `seq >= ?` 是**含边界**（goose 的 `>= 边界` 口径）——
+        //    改成 `>` 会让「回滚到某轮」把那一轮自己留下，语义就错了；
+        // ③ 边界查询也按会话过滤（少了会在别的会话里找一个同 id 的消息）。
+        assert!(ROLLBACK_BOUNDARY_SQL.contains("user_id = ?"));
+        assert!(ROLLBACK_BOUNDARY_SQL.contains("session_id = ?"));
+        assert!(ROLLBACK_FROM_SEQ_SQL.contains("user_id = ?"));
+        assert!(ROLLBACK_FROM_SEQ_SQL.contains("session_id = ?"));
+        assert!(
+            ROLLBACK_FROM_SEQ_SQL.contains("seq >= ?"),
+            "必须含边界（goose 的口径），改成 `>` 会留下被回滚的那一条"
+        );
+    }
+
+    #[test]
+    fn rollback_rebases_the_message_count_and_respects_soft_delete() {
+        // `message_count` 是会话列表读的**存着的列**：回滚后不重算，侧栏就会
+        // 显示一个已经不存在的条数。软删的会话改不动（与读口径一致）。
+        assert!(
+            ROLLBACK_REBASE_SQL.contains("COUNT(*) FROM messages"),
+            "必须按剩下的消息重算，不是简单相减"
+        );
+        assert!(ROLLBACK_REBASE_SQL.contains("deleted_at IS NULL"));
+        assert!(
+            ROLLBACK_REBASE_SQL.contains("user_id = ?") && ROLLBACK_REBASE_SQL.contains("id = ?")
+        );
     }
 }

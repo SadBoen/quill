@@ -385,6 +385,60 @@ pub async fn rename(
     .into_response())
 }
 
+/// `POST /api/sessions/{id}/rollback` —— 回滚到某条消息**之前**（queue Q021）。
+///
+/// **移植出处**：goose 的 `session_manager::truncate_conversation_from_message`
+/// （`vendor/goose/crates/goose/src/session/session_manager.rs:2631-2660`）——
+/// 给定一条消息，把它**连同它之后的全部**从会话里删掉。
+///
+/// **octop 侧对应的是另一件事**：`POST /agents/{agent_id}/threads/{thread_id}/fork`
+/// （`summary="Fork thread from an assistant message"`，不破坏原线程，另建一个从某条
+/// assistant 消息续写的新线程）。那条路由的实现在 octop 的 sparse 集合之外、本地读不到，
+/// 所以 quill 这边按 goose 的口径做**原地回滚**，并把这条差异记进
+/// `docs/UPSTREAM-DIVERGENCES.md`。
+///
+/// **必须显式给 `message_id`**：没有「默认删到某处」这种入口 —— 破坏性操作要点名删到哪。
+pub async fn rollback(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+    JsonBody(body): JsonBody,
+) -> Result<axum::response::Response, ApiError> {
+    crate::api_experts::only_keys(&body, &["message_id"], "POST /api/sessions/{id}/rollback")?;
+    let raw: String = crate::jsonx::need_str(&body, "message_id", "回滚请求")?;
+    let message_id = quill_adapters::UuidBytes::parse(raw.trim())
+        .map(|u| *u.as_bytes())
+        .map_err(|e| {
+            ApiError::bad_request(format!(
+                "message_id = {raw:?} 非法（{e}）。\
+                 下一步：用 GET /api/sessions/{{id}}/messages 拿到的 32 位 hex 再来调。"
+            ))
+        })?;
+
+    let db = state.db()?;
+    let uid = user.0.user_id;
+    let sid = parse_id(&id)?;
+    ensure_session(db, uid, sid).await?;
+
+    let deleted = crate::chat_repo::rollback_from_message(db, uid, sid, message_id, now_ms())
+        .map_err(storage)?;
+    if deleted == 0 {
+        // 边界找不到 = 这条消息不在该会话里（goose 也是「什么都不删」）。
+        // 如实报 404，不假装回滚成功。
+        return Err(ApiError::entity_not_found(format!(
+            "消息 {raw:?} 不在会话 {id} 里，本次没有删任何消息。\
+             下一步：确认这条消息属于该会话（GET /api/sessions/{id}/messages），再调一次。"
+        )));
+    }
+
+    Ok(Json(json!({
+        "id": id,
+        "message_id": raw,
+        "deleted": deleted,
+    }))
+    .into_response())
+}
+
 pub async fn list_messages(
     State(state): State<AppState>,
     user: AuthUser,

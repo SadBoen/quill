@@ -120,6 +120,38 @@ ASCII 4 字符 1 token、非 ASCII 1 字符 1 token；内核侧 `TokenEstimator`
 
 ---
 
+### A7. 会话回滚：照 goose 做**原地删除**，没做 octop 那条**非破坏性 fork**
+
+**上游**（两个来源，形状不同）：
+- **goose**（内核）：`session/session_manager.rs:2631-2660` 的
+  `truncate_conversation_from_message` —— 给定一条消息，把它**连同之后**的全部
+  **原地删掉**（`>= 边界`）；另有 `:2575` 的 `copy_session`（复制一个会话）与
+  `:2620` 的 `truncate_conversation(session_id, timestamp)`。
+- **octop**（外壳）：`POST /agents/{agent_id}/threads/{thread_id}/fork`
+  （`summary="Fork thread from an assistant message"`，`.octop-ref/octop/src/octop/api/routers/chat/history.py:419-446`）
+  —— **不动原线程**，另建一个新线程、把历史复制到选中的那条 assistant 消息为止，
+  让用户从那里续写。定位参数 `ForkThreadBody` 支持 `message_id` / `content` /
+  `assistant_turns_from_end`（`.../chat/models.py:152-167`）。
+
+**quill**：`crates/quill-server/src/chat_repo.rs::rollback_from_message` +
+`POST /api/sessions/{id}/rollback`（`api_chat::rollback`）—— 走的是 **goose 那条**：
+原地删除边界消息及之后的一切，登记在 `EXTRA_ROUTES`。
+
+**为什么选 goose 那条**：Q021 的判据是「**能回滚到某一轮**」，goose 的 truncate 正是这个；
+octop 的 fork 是**分支**不是回滚。而且 **octop 的 fork 实现在 sparse 集合之外**
+（`src/octop/infra/agents/threads/` 不在检出里，`fork_dashboard_thread` 读不到）——
+照抄不了，硬做就是自创（违反第 3 条）。所以先落地读得到的那条。
+
+**代价 / 还没做的**：
+- **没有前端入口**（没有「回滚到这里」按钮）。
+- **fork 没做**：非破坏性那条（`copy_session` + 可选 truncate）在 goose 里读得到、
+  octop 的路由形状也读得到，但 octop 的实现读不到 → 要做先拍板（quill 侧是
+  另建会话，还是要不要把 `sessions` 的一堆列也复制过去）。
+- **语义不同要认清**：quill 这条是**破坏性**的（消息真被删）；octop 那条不会动原线程。
+  用户从一个产品换到另一个，行为不一样 —— 这是有意的，写在这里以免被当成 bug。
+
+---
+
 ## B. 外壳侧（对 octop）
 
 ### B1. 团队派工会话（`kind='team_leader'`）：**自创**，octop 没有这一层
@@ -269,6 +301,11 @@ grep -c "checkpoint_key\|error_state\|replan_count" crates/quill-server/src/*.rs
 grep -n "pub fn remember\|pub fn retrieve" crates/quill-core/src/memory.rs
 grep -n "run_mcp" crates/quill-cli/src/main.rs
 grep -n "只铺了 stdio" crates/quill-core/src/mcp_client.rs
+
+# A7：回滚是原地删除（goose 那条），fork 没做（octop 那条）
+grep -n "rollback_from_message" crates/quill-server/src/chat_repo.rs
+grep -n "sessions/{id}/rollback" crates/quill-server/src/routes.rs
+grep -n "fork" .octop-ref/octop/src/octop/api/routers/chat/history.py
 
 # B1：派工记账会话（建它的是 teams_repo，不是 api_teams —— 这条命令原来是错的，已改）
 grep -c "team_leader" crates/quill-server/src/api_chat.rs crates/quill-server/src/teams_repo.rs
