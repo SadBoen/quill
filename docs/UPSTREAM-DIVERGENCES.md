@@ -195,6 +195,22 @@ roaming connection to the run owner」）与 `:103-115` 的 `agent_cancel_token`
 跑起来之后**真的有消息**，前端藏起来会让侧栏计数和实际数量对不上。
 跟踪项：queue Q052（「建团队时静默多出的那个会话，不在侧栏露出来」）。
 
+**Q025 把同一层再往下延了一级**：派工真跑一轮时，每个成员各有一条自己的
+`kind='team_member'` 会话（`chat_repo::INSERT_MEMBER_SESSION_SQL`；
+`api_dispatch::ensure_member_sessions` 在记账/执行前**缺则建**，`parent_session_id`
+指回主持人会话），成员的任务与产出作为一对 user/assistant 消息写进那条会话
+（`persist_member_outputs`）。**「每子 agent 独立会话」这件事本身是对齐 goose 的**
+（`vendor/goose/crates/goose/src/agents/subagent_handler.rs:178-190`：每个子 agent 一个
+`session_id`，经 `SessionManager` 落盘）——quill 自己的是**存法**：用户对话、主持人、
+成员的会话挤在同一张 `sessions` 表里，靠 `kind` + `parent_session_id` 分家
+（schema 的 CHECK 对 `team_member` 强制三项归属非空，`0001_init.sql:284`）。
+所以成员会话也要靠 `exclude_kind` 才不混进侧栏（前端发的是
+`?exclude_kind=team_leader,team_member`）。
+**代价**：① 成员会话在「全量会话」口径里可见（团队页/用量页看得见它），
+而成员这一轮的 token 用量现在**没记**（执行器不带 usage，条目是 Q026）——
+用量页会看到一条 token 全 0 的会话；② 成员会话按调用方给的 id 复用，不回收，
+`message_count` 随派工轮数增长，会话数会被「每成员一条」放大。
+
 ### B2. 通道（channels）：部分能力只做诚实降级
 
 **上游**：octop 的通道（微信等）有完整收发链路。

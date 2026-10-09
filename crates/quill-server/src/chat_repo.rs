@@ -40,6 +40,17 @@ pub const INSERT_SQL: &str =
     "INSERT INTO sessions(user_id,id,kind,room_id,title,provider_id,model,state,\
      workspace_path,created_at,updated_at,last_active_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)";
 
+/// 建一条 `team_member` 会话（成员自己的工作区，queue Q025）。
+///
+/// **单列一条 SQL 而不是给 `INSERT_SQL` 加参数**：`sessions` 的 CHECK 要求
+/// `kind='team_member'` 时 `team_id` / `parent_session_id` / `expert_id` 三项**全非空**
+/// （`0001_init.sql:284`），列清单与 solo 那条根本不同 —— 合成一条会让
+/// 「哪几个字段对哪种 kind 必填」这件事消失在参数表里。
+pub const INSERT_MEMBER_SESSION_SQL: &str =
+    "INSERT INTO sessions(user_id,id,kind,room_id,title,team_id,parent_session_id,expert_id,\
+     provider_id,model,state,workspace_path,created_at,updated_at,last_active_at) \
+     VALUES(?,?,'team_member',?,?,?,?,?,'local',?,'IDLE',?,?,?,?)";
+
 /// 挂专家（建会话后单独一步，因为 `expert_id` 允许为空）。
 pub const SET_EXPERT_SQL: &str = "UPDATE sessions SET expert_id = ? WHERE user_id = ? AND id = ?";
 
@@ -65,6 +76,24 @@ pub struct NewSoloSession {
     pub id: [u8; 16],
     pub room_id: String,
     pub title: String,
+    pub model: String,
+    pub workspace_path: String,
+    pub now: i64,
+}
+
+/// 建一条 `team_member` 会话要写进去的字段（queue Q025）。
+///
+/// 三项归属（`team_id` / `parent_session_id` / `expert_id`）**不设 `Option`**：
+/// schema 对 `team_member` 就要求它们全非空（`0001_init.sql:284`），少一项根本插不进去 ——
+/// 那不该等到运行期才发现。
+#[derive(Debug, Clone)]
+pub struct NewMemberSession {
+    pub id: [u8; 16],
+    pub room_id: String,
+    pub title: String,
+    pub team_id: [u8; 16],
+    pub parent_session_id: [u8; 16],
+    pub expert_id: String,
     pub model: String,
     pub workspace_path: String,
     pub now: i64,
@@ -150,6 +179,38 @@ pub fn insert_solo_session(
     })
 }
 
+/// 建一条 `team_member` 会话（成员自己的工作区，queue Q025）。
+///
+/// `op` 与 [`insert_solo_session`] 同一条理由：调用方各自点名是哪一步失败。
+pub fn insert_member_session(
+    db: &DbBridge,
+    uid: UserId,
+    s: NewMemberSession,
+    op: &'static str,
+) -> Result<(), AgentError> {
+    db.call(move |pool, _rt| {
+        Box::pin(async move {
+            sqlx::query(INSERT_MEMBER_SESSION_SQL)
+                .bind(uid.as_bytes().to_vec())
+                .bind(s.id.to_vec())
+                .bind(&s.room_id)
+                .bind(&s.title)
+                .bind(s.team_id.to_vec())
+                .bind(s.parent_session_id.to_vec())
+                .bind(&s.expert_id)
+                .bind(&s.model)
+                .bind(&s.workspace_path)
+                .bind(s.now)
+                .bind(s.now)
+                .bind(s.now)
+                .execute(&pool)
+                .await
+                .map_err(|e| storage_error(op, e))?;
+            Ok(())
+        })
+    })
+}
+
 /// 把会话挂到某个专家上。`expert` 为空串时调用方**不应**调它（等价于不挂）。
 pub fn set_expert(
     db: &DbBridge,
@@ -182,6 +243,32 @@ pub fn session_exists(db: &DbBridge, uid: UserId, sid: [u8; 16]) -> Result<bool,
                 .await
                 .map_err(|e| storage_error("查会话", e))?;
             Ok(n > 0)
+        })
+    })
+}
+
+/// 这条会话的 `kind`（未软删）。返回 `None` = 不存在或已软删 —— 两种都算
+/// 「这里没有一条会话」，与 `session_exists` 同一口径。
+///
+/// 存在的**用途**（queue Q025）：派工要确认成员会话在不在，缺则建、已有但**类型不对**
+/// 则报错 —— 把成员的消息写进用户的聊天会话是数据污染，不是「顺手复用」。
+pub const KIND_SQL: &str = "SELECT kind FROM sessions \
+     WHERE user_id = ? AND id = ? AND deleted_at IS NULL";
+
+pub fn session_kind(
+    db: &DbBridge,
+    uid: UserId,
+    sid: [u8; 16],
+) -> Result<Option<String>, AgentError> {
+    db.call(move |pool, _rt| {
+        Box::pin(async move {
+            let kind: Option<String> = sqlx::query_scalar(KIND_SQL)
+                .bind(uid.as_bytes().to_vec())
+                .bind(sid.to_vec())
+                .fetch_optional(&pool)
+                .await
+                .map_err(|e| storage_error("查会话类型", e))?;
+            Ok(kind)
         })
     })
 }

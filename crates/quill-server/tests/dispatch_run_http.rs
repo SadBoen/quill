@@ -1,11 +1,12 @@
 //! `POST /api/teams/{id}/dispatch/run` —— 派工**真执行**的契约。
 //!
-//! 钉住四件事，每一件都是「只记账」那一版做不到的：
+//! 钉住五件事，每一件都是「只记账」那一版做不到的：
 //!
 //! 1. 真的每个成员各调一次模型，正文进 `results`（不是 `executed:false`）；
 //! 2. 幂等：同一轮重复提交，第二次不再执行，成员进 `skipped_as_duplicate`；
 //! 3. 团队不存在 → 404，不是 200 加一份空结果；
-//! 4. 派给**不属于这个团**的专家 → 4xx，且一个成员都没跑（名册校验不是摆设）。
+//! 4. 派给**不属于这个团**的专家 → 4xx，且一个成员都没跑（名册校验不是摆设）；
+//! 5. 成员的任务与产出写进**各自的会话**，缺的成员会话先建出来（Q025）。
 
 mod common;
 mod dispatch_seed;
@@ -281,6 +282,27 @@ async fn running_the_same_round_twice_only_executes_once() {
         provider.call_count(),
         1,
         "🔴 幂等闸门没拦住第二次模型调用——那是重复烧钱"
+    );
+
+    // Q025：被挡下的一轮也不许往成员会话里再追加一对消息。
+    assert_eq!(
+        v2["member_messages_written"],
+        serde_json::json!(0),
+        "没真跑的成员没有产出可写：{v2}"
+    );
+    let sid = member_session(0x22, &expert("cost-analyst"));
+    let (status, msgs) = call(
+        &app,
+        "GET",
+        &format!("/api/sessions/{}/messages", sid.to_compact_hex()),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{msgs}");
+    assert_eq!(
+        msgs["messages"].as_array().expect("数组").len(),
+        2,
+        "重复提交不许把同一轮的任务与产出写第二遍：{msgs}"
     );
 }
 
@@ -601,5 +623,254 @@ async fn a_team_without_guidelines_keeps_the_member_prompt_clean() {
         !prompts[0].1.contains("团队准则"),
         "没有准则时不许拼一个空标题：{}",
         prompts[0].1
+    );
+}
+
+// ---------------------------------------------------------------- Q025：成员会话
+
+/// 与 `member_entry` 同形，但 `member_session_id` 可以指定 ——「会话不在就建」
+/// 与「指错了类型」两条用例都要一条 seed 没铺过的 id。
+fn entry_with_sid(expert_name: &str, sid: &quill_adapters::SessionId) -> serde_json::Value {
+    let e = expert(expert_name);
+    let member = quill_adapters::MemberId::for_expert(&e, 1).expect("成员标识合法");
+    serde_json::json!({
+        "expert": expert_name,
+        "member": member.as_str(),
+        "title": format!("分析 {expert_name}"),
+        "instructions": "给出三点结论",
+        "member_session_id": sid.to_compact_hex(),
+    })
+}
+
+/// book 的 members[] 只认「派给谁」——`title` / `instructions` 是 run 才认的字段，
+/// 带上它们 `only_keys` 会 400。
+fn book_entry(expert_name: &str, sid: &quill_adapters::SessionId) -> serde_json::Value {
+    let mut v = entry_with_sid(expert_name, sid);
+    let obj = v.as_object_mut().expect("对象");
+    obj.remove("title");
+    obj.remove("instructions");
+    v
+}
+
+/// 铺一条 solo 会话（「指错了类型」用例需要一条**不是**成员会话的会话）。
+fn seed_solo_session(
+    db: &std::sync::Arc<quill_server::db::DbBridge>,
+    owner: quill_domain::UserId,
+    id: [u8; 16],
+) {
+    db.call(move |pool, _rt| {
+        Box::pin(async move {
+            sqlx::query(
+                "INSERT INTO sessions (user_id, id, kind, room_id, workspace_path, \
+                 created_at, updated_at, last_active_at) \
+                 VALUES (?, ?, 'solo', 'r-solo', '.quill-test-ws/solo', 0, 0, 0)",
+            )
+            .bind(owner.as_bytes().to_vec())
+            .bind(id.to_vec())
+            .execute(&pool)
+            .await
+            .map_err(|e| quill_server::db::storage_error("铺 solo 会话", e))?;
+            Ok(())
+        })
+    })
+    .unwrap_or_else(|e| panic!("铺 solo 会话失败：{e}"));
+}
+
+/// run 之后成员的「任务 + 产出」真的在它自己的会话里 —— 经真实 HTTP 路由读回，
+/// 并钉住「写进去的正文与成员实际收到的 prompt 是同一份」。
+#[tokio::test]
+async fn a_round_writes_task_and_output_into_the_member_session() {
+    let t = TestDb::new("dispatch-run-member-session");
+    let f = seed(&t.bridge(), user_id(), 0x41, &["cost-analyst"]);
+    let provider = Arc::new(EchoProvider::new());
+    let app = state(&t, Arc::clone(&provider));
+    let sid = member_session(0x41, &expert("cost-analyst"));
+
+    let (status, v) = call(
+        &app,
+        "POST",
+        &format!("/api/teams/{}/dispatch/run", team_hex(f.team_id)),
+        Some(body(&f, vec![member_entry(0x41, "cost-analyst", 1)])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(v["member_messages_written"], serde_json::json!(1), "{v}");
+    assert_eq!(v["member_persist_error"], serde_json::Value::Null, "{v}");
+
+    let (status, msgs) = call(
+        &app,
+        "GET",
+        &format!("/api/sessions/{}/messages", sid.to_compact_hex()),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{msgs}");
+    let msgs = msgs["messages"].as_array().expect("消息数组").clone();
+    assert_eq!(msgs.len(), 2, "一轮成员回合是两条（任务 + 产出）：{msgs:?}");
+
+    let seen = provider.prompts();
+    assert_eq!(seen.len(), 1, "只有一个成员跑过");
+    assert_eq!(msgs[0]["role"], serde_json::json!("user"), "{msgs:?}");
+    assert_eq!(msgs[0]["seq"], serde_json::json!(1), "{msgs:?}");
+    assert_eq!(
+        msgs[0]["content"],
+        serde_json::json!(seen[0].1),
+        "会话里记的任务正文必须与成员实际收到的 prompt 是同一份：{msgs:?}"
+    );
+    assert_eq!(msgs[1]["role"], serde_json::json!("assistant"), "{msgs:?}");
+    assert_eq!(msgs[1]["seq"], serde_json::json!(2), "{msgs:?}");
+    assert_eq!(
+        msgs[1]["content"],
+        serde_json::json!("成员产出 #1"),
+        "产出必须原样进它自己的会话：{msgs:?}"
+    );
+    assert_eq!(msgs[1]["status"], serde_json::json!("complete"), "{msgs:?}");
+}
+
+/// book 在记账之前把缺的成员会话建出来（外键要求它先在），且归属三项齐全 ——
+/// 建出来的是真正的成员会话，不是随手塞一条空会话。
+#[tokio::test]
+async fn booking_creates_the_member_session_it_records() {
+    let t = TestDb::new("dispatch-book-creates-member-session");
+    let f = seed(&t.bridge(), user_id(), 0x42, &["cost-analyst"]);
+    let provider = Arc::new(EchoProvider::new());
+    let app = state(&t, Arc::clone(&provider));
+    // seed 铺的是 member_session(0x42, …)；这里换一个前缀 ——
+    // 「缺则建」那条分支只有在这一步才真的走。
+    let fresh = member_session(0x99, &expert("cost-analyst"));
+
+    let (status, v) = call(
+        &app,
+        "POST",
+        &format!("/api/teams/{}/dispatch", team_hex(f.team_id)),
+        Some(body(&f, vec![book_entry("cost-analyst", &fresh)])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "book 应 202：{v}");
+    assert_eq!(provider.call_count(), 0, "book 只记账，不许调模型");
+
+    // 结构：kind 与归属三项（schema 的 CHECK 只管「非空」，指向谁要这里验）。
+    let db = t.bridge();
+    let (kind, team, parent, expert_id): (String, String, String, String) = db
+        .call({
+            let uid = user_id().as_bytes().to_vec();
+            let sid = fresh.as_bytes().to_vec();
+            move |pool, _rt| {
+                Box::pin(async move {
+                    let row = sqlx::query_as::<_, (String, String, String, String)>(
+                        "SELECT kind, hex(team_id), hex(parent_session_id), expert_id \
+                         FROM sessions WHERE user_id = ? AND id = ?",
+                    )
+                    .bind(uid)
+                    .bind(sid)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|e| quill_server::db::storage_error("读成员会话归属", e))?;
+                    Ok(row)
+                })
+            }
+        })
+        .expect("读成员会话归属失败");
+    assert_eq!(kind, "team_member", "建出来的必须是成员会话");
+    assert_eq!(team.to_lowercase(), team_hex(f.team_id), "要指向本团");
+    assert_eq!(
+        parent.to_lowercase(),
+        f.leader_session.to_compact_hex(),
+        "要指回主持人会话"
+    );
+    assert_eq!(expert_id, "cost-analyst", "要记名册里那个专家");
+
+    // 出口一：全量列表（团队页 / 用量页）看得见它。
+    let (status, all) = call(&app, "GET", "/api/sessions?exclude_kind=team_leader", None).await;
+    assert_eq!(status, StatusCode::OK, "{all}");
+    let top = all["sessions"]
+        .as_array()
+        .expect("会话数组")
+        .iter()
+        .find(|s| {
+            s["id"]
+                .as_str()
+                .unwrap_or_default()
+                .eq_ignore_ascii_case(&fresh.to_compact_hex())
+        })
+        .unwrap_or_else(|| panic!("新建的成员会话必须在全量列表里：{all}"));
+    assert_eq!(top["kind"], serde_json::json!("team_member"), "{all}");
+    assert_eq!(
+        top["title"],
+        serde_json::json!("cost-analyst"),
+        "book 没有任务标题，会话标题退回专家名：{all}"
+    );
+
+    // 出口二：侧栏那条请求（前端实际发的参数）看不见它。
+    let (status, hidden) = call(
+        &app,
+        "GET",
+        "/api/sessions?exclude_kind=team_leader,team_member",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{hidden}");
+    assert!(
+        !hidden["sessions"]
+            .as_array()
+            .expect("会话数组")
+            .iter()
+            .any(|s| s["id"]
+                .as_str()
+                .unwrap_or_default()
+                .eq_ignore_ascii_case(&fresh.to_compact_hex())),
+        "成员会话不该出现在侧栏的会话列表里：{hidden}"
+    );
+}
+
+/// `member_session_id` 指向一条**别的类型**的会话 → 400，一个成员都不跑、
+/// 台账不留记录：把成员的消息写进用户的聊天会话是数据污染，不是「顺手复用」。
+#[tokio::test]
+async fn a_member_session_id_of_the_wrong_kind_is_400_and_runs_nobody() {
+    let t = TestDb::new("dispatch-run-wrong-kind-member-session");
+    let f = seed(&t.bridge(), user_id(), 0x43, &["cost-analyst"]);
+    let provider = Arc::new(EchoProvider::new());
+    let app = state(&t, Arc::clone(&provider));
+
+    let mut solo = [0u8; 16];
+    solo[0] = 0x44;
+    seed_solo_session(&t.bridge(), user_id(), solo);
+    let solo = quill_adapters::SessionId::from_bytes(solo);
+
+    let (status, v) = call(
+        &app,
+        "POST",
+        &format!("/api/teams/{}/dispatch/run", team_hex(f.team_id)),
+        Some(body(&f, vec![entry_with_sid("cost-analyst", &solo)])),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST, "类型不对必须 400：{v}");
+    assert_eq!(v["error"]["code"], serde_json::json!("bad_request"), "{v}");
+    assert!(
+        v.to_string().contains("不是团队成员的会话"),
+        "要点名是类型不对：{v}"
+    );
+    assert_eq!(
+        provider.call_count(),
+        0,
+        "🔴 会话类型不对就不许起成员（跑出来的产出没有可写的地方）"
+    );
+
+    let (_, listed) = call(
+        &app,
+        "GET",
+        &format!(
+            "/api/teams/{}/dispatch?room_id={}&round=0",
+            team_hex(f.team_id),
+            f.room_id
+        ),
+        None,
+    )
+    .await;
+    assert_eq!(
+        listed["count"],
+        serde_json::json!(0),
+        "被拒的一轮不许在台账留下记录：{listed}"
     );
 }

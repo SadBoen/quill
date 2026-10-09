@@ -385,7 +385,8 @@ quill-testkit   ← 仅 dev-dependency
 2. **M2 核心：派工真执行**（§3.6）—— 参照 `vendor/goose` 的 `run_subagent_task`，
    让 `api_dispatch.rs` 的台账真正被消费者消费。这是「专家团」从「摆件」变「能干活」的分界。
    **（第一版已完成：`member_executor.rs` 的 `ProviderMemberExecutor` + `dispatch/run`；
-   剩下 `steer`/`abort` 与成员 token 用量，见 Q023–Q026）**
+   2026-10-09 更新：`steer`/`abort`（Q023/Q024）与成员独立会话（Q025）也落地了，
+   但 steer/abort 还没有 HTTP 出口（Q113）；剩下成员 token 用量（Q026））**
 3. **对话内核补齐**（§3.1）：HITL、轨迹、会话分叉、WS 主通道。
 4. **上下文与记忆**（§3.5）：这是 goose 最有价值、quill 完全空白的一块。
 5. **工作区 / 终端 / 上传**（§3.8）：让界面上那些「点了没反应」的入口真通。

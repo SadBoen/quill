@@ -144,6 +144,19 @@ pub async fn book(
         }
     }
 
+    // queue Q025：先确保每个成员的会话都在（缺则按 `team_member` 建）。
+    // `task_dispatches.member_session_id` 对 `sessions` 有外键，会话不在就记不进账。
+    // 本路由只说「派给谁」，没有任务标题 —— 会话标题退回专家名。
+    ensure_member_sessions(
+        &state,
+        user.0.user_id,
+        team_id,
+        leader,
+        &room_id,
+        &member_sessions,
+        &BTreeMap::new(),
+    )?;
+
     let ledger = SqlxDispatchLedger::new(
         std::sync::Arc::clone(state.db()?),
         DispatchScope::new(team_id, leader, member_sessions),
@@ -328,6 +341,38 @@ pub async fn run(
             .map_err(|e| ApiError::internal(format!("团队 {team} 的成员名册在库里不合法：{e}")))?;
     }
 
+    // queue Q025：确保每个成员的会话都在，并把「任务 + 产出」的写回素材先备好 ——
+    // 下面 `tasks` / `member_sessions` / `limits` 都要 move 进派工线程，跑完就取不到了。
+    let titles: BTreeMap<ExpertId, String> = tasks
+        .iter()
+        .map(|t| (t.expert.clone(), t.title.clone()))
+        .collect();
+    ensure_member_sessions(
+        &state,
+        user.0.user_id,
+        team_id,
+        leader,
+        &room_id,
+        &member_sessions,
+        &titles,
+    )?;
+    let write_plan: Vec<MemberWritePlan> = tasks
+        .iter()
+        .filter_map(|t| {
+            member_sessions.get(&t.expert).map(|sid| MemberWritePlan {
+                member: t.member.clone(),
+                session: *sid.as_bytes(),
+                // 与成员实际收到的正文**是同一份**（都过 `apply_guidelines`）——
+                // 写进会话的是「这一轮真的发生了什么」，不是事后复述。
+                task_text: format!(
+                    "任务：{}\n\n{}",
+                    t.title,
+                    limits.apply_guidelines(&t.instructions)
+                ),
+            })
+        })
+        .collect();
+
     let ledger = SqlxDispatchLedger::new(
         std::sync::Arc::clone(db),
         DispatchScope::new(team_id, leader, member_sessions),
@@ -377,6 +422,12 @@ pub async fn run(
     })
     .and_then(|r| r.map_err(|e| dispatch_error_to_api("执行派工", e)))?;
 
+    // queue Q025：把每个交付成员的任务与产出写进各自的会话。
+    // 写失败**不让整轮失败**（成员已经真跑完了、报告必须回给调用方），
+    // 失败原因原样进响应 —— 见 `persist_member_outputs` 的注释。
+    let (member_messages_written, member_persist_error) =
+        persist_member_outputs(db, user.0.user_id, &write_plan, &report);
+
     Ok((
         axum::http::StatusCode::OK,
         Json(json!({
@@ -396,6 +447,8 @@ pub async fn run(
             "recovered_for_retry": report.recovered_for_retry.len(),
             "results": report.results.iter().map(result_json).collect::<Vec<Value>>(),
             "summary": report.summary(),
+            "member_messages_written": member_messages_written,
+            "member_persist_error": member_persist_error,
         })),
     ))
 }
@@ -561,6 +614,164 @@ fn parse_hex16(raw: &str, what: &str) -> Result<[u8; 16], ApiError> {
         ))
     })?;
     Ok(*parsed.as_bytes())
+}
+
+// -------------------------------------------- Q025：成员跑在哪张会话里、产出写回哪
+
+/// 一轮派工里「要写进哪个会话、写什么」的素材。
+///
+/// 在 `tasks` / `member_sessions` / `limits` 被 move 进派工线程**之前**拼好 ——
+/// 落库发生在那一轮跑完之后，那时这些值已经不在手里了。
+struct MemberWritePlan {
+    member: MemberId,
+    session: [u8; 16],
+    task_text: String,
+}
+
+/// 确认这一轮每个成员的会话都在（queue Q025）。
+///
+/// **缺就建**：`task_dispatches.member_session_id` 对 `sessions` 有外键，会话不在
+/// 台账就写不进去；而生产里没有任何别的地方会建成员会话，所以「给成员各开独立会话」
+/// 这件事落在派工这一层。建出来的行满足 schema 对 `team_member` 的三项硬要求
+/// （`team_id` / `parent_session_id` / `expert_id`，见 `0001_init.sql:284`）。
+///
+/// **已有就验**：那个 id 被一条**别的类型**的会话占用时 400 —— 把成员的消息写进
+/// 用户的聊天会话是数据污染，不是「顺手复用」。
+fn ensure_member_sessions(
+    state: &AppState,
+    uid: quill_adapters::UserId,
+    team_id: [u8; 16],
+    leader: SessionId,
+    room_id: &str,
+    members: &BTreeMap<ExpertId, SessionId>,
+    titles: &BTreeMap<ExpertId, String>,
+) -> Result<(), ApiError> {
+    let db = state.db()?;
+    let model = state
+        .llm_config
+        .read()
+        .map_err(|_| ApiError::internal("llm_config 锁被毒化"))?
+        .model
+        .clone();
+    for (expert, sid) in members {
+        let sid_bytes = *sid.as_bytes();
+        match crate::chat_repo::session_kind(db, uid, sid_bytes)
+            .map_err(|e| agent_error_to_api("查成员会话", e))?
+        {
+            Some(kind) if kind == "team_member" => {}
+            Some(kind) => {
+                return Err(ApiError::bad_request(format!(
+                    "members[] 里给专家 {expert} 的 member_session_id 指向一条 {kind:?} 类型的会话，\
+                     不是团队成员的会话（团队成员的会话由派工自己建）。\
+                     下一步：把这一项的 member_session_id 换成一个没被占用的 32 位十六进制 id，\
+                     或删掉这一项。"
+                )));
+            }
+            None => {
+                let short = &quill_adapters::ids::to_hex_lower(&sid_bytes)[..12];
+                let title: String = titles
+                    .get(expert)
+                    .cloned()
+                    .unwrap_or_else(|| expert.as_str().to_string())
+                    .chars()
+                    .take(crate::api_chat::TITLE_MAX_CHARS)
+                    .collect();
+                crate::chat_repo::insert_member_session(
+                    db,
+                    uid,
+                    crate::chat_repo::NewMemberSession {
+                        id: sid_bytes,
+                        room_id: room_id.to_string(),
+                        title,
+                        team_id,
+                        parent_session_id: *leader.as_bytes(),
+                        expert_id: expert.as_str().to_string(),
+                        model: model.clone(),
+                        workspace_path: format!("ws/{short}"),
+                        now: crate::db::now_ms(),
+                    },
+                    "建成员会话",
+                )
+                .map_err(|e| agent_error_to_api("建成员会话", e))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 把这一轮每个交付成员的「任务 + 产出」写进各自的会话（queue Q025）。
+///
+/// 返回（写成了几个成员，第一条失败原因）。**故意不让它把整轮判失败**：成员已经
+/// 真跑完了（钱花了），报告必须回给调用方；落库失败如实放进响应
+/// （`member_persist_error`），不静默吞掉 —— 同 Q018 压缩失败那条取舍。
+fn persist_member_outputs(
+    db: &crate::db::DbBridge,
+    uid: quill_adapters::UserId,
+    plan: &[MemberWritePlan],
+    report: &quill_agent::DispatchReport,
+) -> (usize, Option<String>) {
+    let mut written = 0usize;
+    let mut first_error: Option<String> = None;
+    for result in &report.results {
+        let MemberResult::Delivered { member, outcome } = result else {
+            // 失败 / 取消的成员没有「产出」可写（自报状态与原因在台账与响应里）。
+            continue;
+        };
+        let Some(entry) = plan.iter().find(|p| p.member == *member) else {
+            continue;
+        };
+        match write_member_turn(db, uid, entry.session, &entry.task_text, outcome.output()) {
+            Ok(()) => written += 1,
+            Err(e) => {
+                if first_error.is_none() {
+                    first_error = Some(format!("成员 {member} 的产出没能写进它的会话：{e}"));
+                }
+            }
+        }
+    }
+    (written, first_error)
+}
+
+/// 一次成员回合写两条消息（user = 任务、assistant = 产出），并推进会话计数。
+///
+/// **用量一律不写**：成员执行器现在不带 token 用量（那是 Q026）—— 不编数，
+/// 宁可让用量页看不到这一份，也不写真值不明的数字。
+fn write_member_turn(
+    db: &crate::db::DbBridge,
+    uid: quill_adapters::UserId,
+    sid: [u8; 16],
+    task_text: &str,
+    output: &str,
+) -> Result<(), String> {
+    let now = crate::db::now_ms();
+    let seq = crate::chat_repo::next_seq(db, uid, sid).map_err(|e| e.to_string())?;
+    for (seq, role, content) in [
+        (seq, "user", task_text.to_string()),
+        (seq + 1, "assistant", output.to_string()),
+    ] {
+        crate::chat_repo::insert_message(
+            db,
+            uid,
+            sid,
+            crate::chat_repo::NewMessage {
+                id: crate::api_chat::new_id().map_err(|e| e.to_string())?,
+                seq,
+                role: role.to_string(),
+                status: "complete".to_string(),
+                content,
+                reasoning: None,
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_read_tokens: None,
+                cache_write_tokens: None,
+                turn_ms: None,
+                created_at: now,
+            },
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    crate::chat_repo::touch_session(db, uid, sid, seq + 2, None, None, now)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

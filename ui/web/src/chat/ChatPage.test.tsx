@@ -377,6 +377,21 @@ it('思考增量与正文分开，不会被当成答案渲染', async () => {
   close()
 })
 
+it('侧栏的会话列表请求排除两种 agent 内部会话', async () => {
+  // 后端用 `exclude_kind` 把 agent 内部会话藏起来（Q025）：`team_leader` 是建团的
+  // 副产品，`team_member` 是派工真跑一轮时每个成员的工作会话。它们都不该出现在
+  // 用户侧栏里（前端不按 kind 分组，一律当普通对话渲染）。这条钉的是**出站那一半** ——
+  // 后端接口本身另有 `session_kind_filter_http.rs` 覆盖。
+  const fetchMock = routedFetch()
+  renderPage('/chat', fetchMock)
+  await waitFor(() => {
+    const listCalls = fetchMock.mock.calls
+      .map(([input]) => String(input))
+      .filter((url) => url.includes('/api/sessions?'))
+    expect(listCalls).toEqual(['/api/sessions?exclude_kind=team_leader,team_member'])
+  })
+})
+
 // ——— 换会话（2026-10-07）———
 
 /**
@@ -410,7 +425,7 @@ it('切到另一个会话时，上一个会话的话不会留在屏幕上', asyn
     const url = String(input)
     if (url.includes('/api/experts')) return jsonResponse(EXPERTS)
     if (url.includes('/healthz')) return jsonResponse({ llm: { max_context_tokens: 8192 } })
-    // 列表是裸的 `/api/sessions`（`loadSessions()` 不带查询串），
+    // 列表是 `/api/sessions?…`（`loadSessions()` 带 `exclude_kind` 查询串），
     // 而带 id 的会话详情/历史是 `/api/sessions/<id>/…` —— 两者必须分开判，
     // 否则 `/api/sessions/SESSION_A/messages` 会被当成列表。
     const hit = Object.keys(HISTORY).find((sid) => url.includes(`/sessions/${sid}/`))

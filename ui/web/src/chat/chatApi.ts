@@ -6,19 +6,25 @@ import type { SessionMetrics } from './sessionMetrics'
 /**
  * 侧栏的会话列表。
  *
- * **排除 `team_leader`。** 建团队时 `POST /api/teams` 会顺带插一条这种会话
- * ——`teams.leader_session_id` 是 NOT NULL 且外键指向 sessions，而派工接口
- * 强制要 `leader_session_id`，它就是记账的落点，删不掉。
+ * **排除两种 agent 内部会话：`team_leader` 与 `team_member`。**
  *
- * 但它不该出现在这里：前端没有任何地方按 kind 分组，于是用户看到的是
- * 「建个团队凭空多出一会话」，点进去还是空的。
+ * - `team_leader`：建团队时 `POST /api/teams` 会顺带插一条 ——
+ *   `teams.leader_session_id` 是 NOT NULL 且外键指向 sessions，而派工接口
+ *   强制要 `leader_session_id`，它就是记账的落点，删不掉。
+ * - `team_member`：派工真跑一轮时，每个成员各有一张自己的工作会话（queue Q025），
+ *   成员的任务与产出写在里面。它是**跑给主持人看的中间产物**，不是用户开的会话。
  *
- * 过滤在后端做而不是这里，理由是那条会话跑起来之后真的有消息：前端藏起来
+ * 它们都不该出现在这里：前端没有任何地方按 kind 分组，于是用户看到的是
+ * 「建个团队凭空多出一会话」「派一轮活侧栏多出三条」，点进去还不是给用户看的。
+ *
+ * 过滤在后端做而不是这里，理由是这些会话跑起来之后真的有消息：前端藏起来
  * 会让侧栏的条数和实际数量对不上。详见 crates/quill-server/src/api_chat.rs
  * 的 `SessionListQuery`。
  */
 export async function loadSessions(): Promise<Session[]> {
-  const body = await apiJson<{ sessions: Session[] }>('/api/sessions?exclude_kind=team_leader')
+  const body = await apiJson<{ sessions: Session[] }>(
+    '/api/sessions?exclude_kind=team_leader,team_member',
+  )
   return body.sessions
 }
 

@@ -250,6 +250,25 @@ export const ITEMS = [
     verify: { kind: 'cmd', cmd: 'grep -rqE "max_dispatch|max_replan|max_ask_depth|guidelines" crates/quill-server/src crates/quill-store/src', cwd: 'wsl' },
     blocks: ['M2'],
   },
+  {
+    id: 'B2-5',
+    milestone: 'M2',
+    title: '成员的任务与产出进各自的会话（Q025）',
+    // 「每子 agent 独立会话」本身对齐 goose（`agents/subagent_handler.rs:178-190`：
+    // 独立 session_id 经 SessionManager 落盘）；quill 自己的是**存法**（全部会话
+    // 在同一张 sessions 表里靠 kind 分家，所以成员会话要靠 exclude_kind 才不混进
+    // 侧栏），对齐与代价记在 docs/UPSTREAM-DIVERGENCES.md 的 B1。
+    //
+    // 判据绑端到端用例（不是「表里有没有行」这种结构检查）：
+    // run 完一轮后经 GET /api/sessions/{id}/messages 读回两条，
+    // 且任务正文与成员实际收到的 prompt 逐字相同 —— 写回的若是事后复述，
+    // 这条会红。
+    verify: {
+      kind: 'test',
+      name: 'a_round_writes_task_and_output_into_the_member_session',
+    },
+    blocks: ['M2'],
+  },
 
   // ——— M3 上下文与成本 ———
   {

@@ -23,7 +23,11 @@ pub const HISTORY_LIMIT: i64 = 40;
 /// 改名时截到 80」这种没人会发现的不一致。
 pub const TITLE_MAX_CHARS: usize = 64;
 
-fn new_id() -> Result<[u8; 16], ApiError> {
+/// 生成一个会话 / 消息标识（16 字节随机）。
+///
+/// `pub(crate)`：派工那条线（`api_dispatch`）给成员会话写消息时也要生成本地 id
+/// （queue Q025）—— 与其再抄一份 `getrandom` 的零值保护，不如共用这一处。
+pub(crate) fn new_id() -> Result<[u8; 16], ApiError> {
     let mut b = [0u8; 16];
     getrandom::fill(&mut b)
         .map_err(|e| ApiError::internal(format!("生成会话标识失败（系统随机源不可用）：{e}")))?;
