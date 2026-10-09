@@ -21,9 +21,10 @@ export const CAPABILITY_GAPS = [
     fallback: 'MCP',
     route: 'GET /api/extensions/mcp',
     status: 'partial',
-    // 「还差什么」必须是真的还差着。stdio 与 tools/call 都通了、工具也真的挂进
-    // 对话工具表了，所以剩下的缺口只有传输方式：streamable_http / sse 还没铺。
-    detail: 'stdio 真的 initialize + tools/list + tools/call，工具已挂进对话工具表；streamable_http 与 sse 这两种传输还没铺',
+    // 「还差什么」必须是真的还差着。stdio 与内置（builtin）都通了、tools/call 也通了、
+    // 工具也真的挂进对话工具表了，所以剩下的缺口只有传输方式：streamable_http /
+    // sse 还没铺。
+    detail: 'stdio 与内置（builtin，如记忆服务器）都真的 initialize + tools/list + tools/call，工具已挂进对话工具表；streamable_http 与 sse 这两种传输还没铺',
   },
   {
     labelKey: 'chat.tools.skills',

@@ -1,6 +1,11 @@
 import { apiJson } from '../api/client'
 
-export type McpTransport = 'stdio' | 'streamable_http' | 'sse'
+/**
+ * `builtin` = **内置服务器**：随 quill 自带、跑在同一个进程里（内存管道），
+ * 不起子进程也不用装东西。它的**名字**写在 `command` 里（目前只有 `memory`），
+ * 名字清单来自服务端响应的 `builtin_servers` —— 别在前端硬编码一份。
+ */
+export type McpTransport = 'stdio' | 'streamable_http' | 'sse' | 'builtin'
 
 /** MCP 服务端的最小可编辑形状（quill 未提供 openapi 类型，模块内自带）。 */
 export interface McpServerConfig {
@@ -24,7 +29,7 @@ export interface McpServerConfig {
  */
 export interface McpServerStatus {
   name: string
-  /** 本轮是不是真的发起过协议握手。停用 / 非 stdio / 缺 command 都会是 false。 */
+  /** 本轮是不是真的发起过协议握手。停用 / 传输方式没铺 / 缺 command 都会是 false。 */
   probed: boolean
   connected: boolean
   /** 按 `enabled_capabilities` 过滤之后真正会交给模型的工具条数。 */
@@ -58,6 +63,13 @@ export interface McpServerStatus {
 /** `GET /api/extensions/mcp` 的响应；servers 字段缺失时按空数组处理。 */
 export interface McpServerList {
   servers?: McpServerConfig[]
+  /**
+   * 内置服务器的名字清单（服务端给的，目前只有 `memory`）。
+   *
+   * 表单里 `transport=builtin` 那一栏的可选项就来自这里 —— 硬编码一份
+   * 前端自己的名单，服务端加了内置服务器之后这边会安静地少一个选项。
+   */
+  builtin_servers?: string[]
   /**
    * 本轮探测过的服务器是不是**全部**连上了。
    *

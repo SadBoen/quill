@@ -126,10 +126,11 @@ it('MCP 与技能包标「部分接通」，不标 501 —— 它们的路由是
   // `GET /api/extensions/skills`）。写成 501 等于让用户去「接」一个早就接好
   // 的东西，比不说还糟。
   //
-  // 这条断言的文案改过两次，每次都是因为**真的又接完了一层**：
+  // 这条断言的文案改过三次，每次都是因为**真的又接完了一层**：
   //   1. 技能包 2026-10-06 挂进对话工具表 → 文案从「还调不到」改成「已挂进」；
   //   2. MCP 同日接上 `with_mcp_tools` 与 `tools/call` → 缺口从「还没挂进
-  //      对话的工具表」换成「streamable_http 与 sse 还没铺」。
+  //      对话的工具表」换成「streamable_http 与 sse 还没铺」；
+  //   3. 内置（builtin）传输 2026-10-09 接通（Q111）→ 缺口只剩那两种没铺的传输。
   // 拿旧缺口当现状写，就是把能用的说成不能用。
   renderTab([])
   await waitFor(() => expect(within(card()).getByRole('button', { name: '生成专家' })).toBeInTheDocument())
@@ -137,8 +138,8 @@ it('MCP 与技能包标「部分接通」，不标 501 —— 它们的路由是
   await waitFor(() => expect(within(card()).getByText('GET /api/extensions/mcp')).toBeInTheDocument())
 
   expect(
-    within(card()).getByText(/部分接通 · stdio 真的 initialize \+ tools\/list/),
-    'MCP 的 stdio 链路（握手、tools/list、挂载）已经真的通了，文案要照实说',
+    within(card()).getByText(/部分接通 · stdio 与内置（builtin，如记忆服务器）都真的 initialize \+ tools\/list/),
+    'MCP 的 stdio 与内置两条链路（握手、tools/list、挂载）都已经真的通了，文案要照实说',
   ).toBeInTheDocument()
   expect(
     within(card()).getByText(/部分接通 · 已挂进对话工具表/),

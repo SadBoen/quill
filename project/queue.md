@@ -303,6 +303,14 @@
   - **同批改掉的假话**：`Summary::note` 写死的「N 台 stdio 服务器」对 builtin 行就是假的 → 改成「MCP 服务器」（两处文案 + 两处断言，并新增 `!note.contains("stdio")` 钉住）；`UPSTREAM-USAGE.md` / `UPSTREAM-DIVERGENCES.md` A6 / `KERNEL-PORTS.md` §6 / `docs/ARCHITECTURE.md` / `memory.rs` 头注里「只走 stdio」「记忆还没接进对话」的现状陈述同批更正；引用行号 `builtin.rs:19-33`（那是 docker 分支）→ 真位置 `:35-40`。
   - **未做（如实记）**：**默认不给任何用户预置这一行**（装完没有记忆，用户自己去设备页加）——「默认给谁开」是产品决定，不是技术缺口；`remove_specific_memory` 的「包含」删除口径照抄上游、未收紧（记在 A6）；内置服务器目前只有 memory 一个，加新的往 `BUILTIN_SERVERS` + `spawn` 里加（goose 那张注册表等有第二个再谈）。
 
+- [x] Q112 · `transport='builtin'` 的 **UI 出口**与 API 回读（Q111 落地当天发现的「后端有、外面没有」）· `ui/web/src/devices` / `mcp_repo.rs` · **已完成 2026-10-09**：三处缺口，逐条核过再补：
+  1. **前端 `McpTransport` 没有 `'builtin'`**（`devices/api.ts`），设备页的传输方式下拉里也没有这一项 → 用户从界面上**加不出**内置服务器（后端 API 收，界面无从表达）。按本仓规矩（「后端做完了而开关没有出口，功能就等于没做」）补上：类型收 `'builtin'`、下拉加「内置（builtin）」、选中后渲染「内置服务器」那一栏（名字），**不渲染**地址/环境变量/请求头（内置那台一个都不收）；`transportGlyph` 加「内置」；列表地址那一格显示 `command`（名字）。
+  2. **`mcp_repo::to_json` 只给 stdio 回 `command`** → 内置行的名字**丢了**：界面上显示不出是哪一台，编辑框回填后名字没了 —— 表单是全量提交，下一次点保存必被 400 挡下（「command 必填」）。补一个 builtin 分支：回 `command`、不回 `url`/`headers`。
+  3. **名字清单只有服务端知道**：列表响应新增 `builtin_servers`（= `quill_core::builtin::BUILTIN_SERVERS`），表单那一栏的可选项用它 —— 前端不硬编码一份会漂的名单（清单还没加载出来时退回自由输入，服务端认不认识它说了算）；已保存的名字不在清单里时**留在选项里**，不替用户静默换成第一项。
+  - **判据实测**：`cargo test -p quill-server --lib mcp_repo` → **16 passed / 0 failed**（新增 `a_builtin_row_serializes_with_its_name_and_without_a_url`）；`cargo test -p quill-server --test extensions_http` → **67 passed / 0 failed**（builtin 两条用例补了「command 原样读回」「builtin_servers 含 memory」「改完回读带着名字且无 url」）；前端新增 `ui/web/src/devices/DevicesBuiltin.test.tsx` 2 条 + `mcpConfig.test.ts` 内置组 2 条 → `npx vitest run src/devices/DevicesBuiltin.test.tsx src/devices/mcpConfig.test.ts` → **10 passed / 0 failed**。
+  - **反向验证三条，各自只让对应测试变红、均已还原**：① 把 `to_json` 的 builtin 分支打掉 → mcp_repo 1 红 + HTTP 2 红；② 把 `readMcpForm` 的 builtin 分支打掉 → 前端 2 红（报出的正是 `url:"null"` 与 `headers:{}` 泄漏）；③ 把表单里的 builtin 选项打掉 → `DevicesBuiltin` 2 红。
+  - **未做（如实记）**：内置服务器仍只有 memory 一台（加新的往 `BUILTIN_SERVERS` + `spawn` 里加，表单会自动多一个选项）；**默认不预置**这一行（同 Q111）。
+
 1. 从**最上面未完成**的取。**批次由用户指定**（默认 1~3 条；用户说「取 30 条」就按 30 条列批，
    能一次做完的做完，做不完的留 `[ ]` 并写明卡在哪）。做完就提交（最高指示第 5 条）。
 2. 判据写不出来或依赖缺失的，**不要跳过乱做** —— 在条目后补一句 `（卡在：…）` 并往下取。

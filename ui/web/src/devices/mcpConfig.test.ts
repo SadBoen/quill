@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { MCP_NAME_PATTERN, MCP_NAME_RE, mcpCapabilityMode } from './mcpConfig'
+import { MCP_NAME_PATTERN, MCP_NAME_RE, mcpCapabilityMode, mcpSecretMap, readMcpForm } from './mcpConfig'
 
 /**
  * 这组表子与 `crates/quill-server/src/mcp_repo.rs` 的
@@ -64,5 +64,47 @@ describe('能力开关三态', () => {
     expect(mcpCapabilityMode([])).toBe('all')
     expect(mcpCapabilityMode(['read'])).toBe('exact')
     expect(mcpCapabilityMode(undefined)).toBe('none')
+  })
+})
+
+describe('内置服务器（transport=builtin）', () => {
+  const t = (key: string, options?: Record<string, unknown>): string =>
+    String(options?.defaultValue ?? key)
+
+  function formBody(fields: Record<string, string>): FormData {
+    const data = new FormData()
+    data.set('capability_mode', 'all')
+    for (const [key, value] of Object.entries(fields)) data.set(key, value)
+    return data
+  }
+
+  it('提交出来的是 command=名字，没有 url / headers / env', () => {
+    // 内置服务器就在本进程里跑：地址与环境变量都不存在。混进任何一项，
+    // 服务端的交叉校验会 400（「url 不该出现在 builtin 配置上」），
+    // 而用户只是从下拉框里选了个「内置」。
+    const out = readMcpForm(
+      formBody({ name: 'mem', transport: 'builtin', command: 'memory' }),
+      null,
+      false,
+      t,
+    )
+    if (typeof out === 'string') throw new Error(`表单应当通过，实际被拒：${out}`)
+    expect(out).toEqual({
+      name: 'mem',
+      transport: 'builtin',
+      command: 'memory',
+      enabled_capabilities: [],
+    })
+    expect(out).not.toHaveProperty('url')
+    expect(out).not.toHaveProperty('headers')
+    expect(out).not.toHaveProperty('env')
+  })
+
+  it('内置行没有密钥可迁移 —— mcpSecretMap 不许把 env 或 headers 搬过来', () => {
+    // 两种传输的「机密字段」是两列（env / headers）。内置那台一个都没有，
+    // 借用任何一种都会在保存时把用户的密钥写进不该写的地方。
+    expect(mcpSecretMap({ name: 'm', transport: 'builtin', enabled_capabilities: [], command: 'memory' })).toEqual({})
+    expect(mcpSecretMap({ name: 'm', transport: 'stdio', enabled_capabilities: [], env: { A: '1' } })).toEqual({ A: '1' })
+    expect(mcpSecretMap({ name: 'm', transport: 'sse', enabled_capabilities: [], headers: { B: '2' } })).toEqual({ B: '2' })
   })
 })

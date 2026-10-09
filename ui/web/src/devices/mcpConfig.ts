@@ -44,7 +44,10 @@ export function mcpCapabilityMode(value: string[] | null | undefined): 'all' | '
 
 export function mcpSecretMap(server: EditableMcpServer | null): Record<string, string> {
   if (!server) return {}
-  return server.transport === 'stdio' ? server.env ?? {} : server.headers ?? {}
+  if (server.transport === 'stdio') return server.env ?? {}
+  // 内置服务器跑在本进程里：没有环境变量、也没有请求头，别把两边的字段互相搬。
+  if (server.transport === 'builtin') return {}
+  return server.headers ?? {}
 }
 
 function sameSink(left: EditableMcpServer, right: EditableMcpServer): boolean {
@@ -53,6 +56,12 @@ function sameSink(left: EditableMcpServer, right: EditableMcpServer): boolean {
     return left.command === right.command
       && JSON.stringify(left.args ?? []) === JSON.stringify(right.args ?? [])
       && (left.cwd ?? null) === (right.cwd ?? null)
+  }
+  // 内置服务器换的是**哪一台**（名字写在 command 里）——与 stdio 的「换了可执行
+  // 文件」同一件事。这条只在有密钥要迁移时用得到，而内置本来就没有密钥；
+  // 留它是因为「换了服务器却还沿用旧密钥」这类判断不该因为传输方式而漏。
+  if (left.transport === 'builtin' && right.transport === 'builtin') {
+    return left.command === right.command
   }
   return left.transport !== 'stdio' && right.transport !== 'stdio' && left.url === right.url
 }
@@ -92,6 +101,14 @@ export function readMcpForm(
       args: lines(data.get('args')),
       cwd: String(data.get('cwd') ?? '').trim() || null,
       env: secrets,
+    }
+  } else if (transport === 'builtin') {
+    // 名字写在 command 里（服务端 `quill_core::builtin` 认它）。**没有** url /
+    // headers / env —— 内置服务器就在本进程里跑，那些字段一个都不该冒出来。
+    candidate = {
+      ...common,
+      transport,
+      command: String(data.get('command')),
     }
   } else {
     candidate = {

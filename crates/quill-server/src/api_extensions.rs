@@ -136,6 +136,9 @@ async fn mcp_body(state: &AppState, uid: quill_adapters::UserId, rows: &[McpServ
     }
     json!({
         "servers": rows.iter().map(mcp_repo::to_json).collect::<Vec<Value>>(),
+        // 内置服务器有哪些名字，**只有服务端知道**（`quill_core::builtin`）。
+        // 前端要在表单里给出可选项，就从这里拿 —— 自己硬编码一份必然会漂。
+        "builtin_servers": quill_core::builtin::BUILTIN_SERVERS,
         "status": status,
         "connected": summary.all_connected(),
         "probed": summary.probed,

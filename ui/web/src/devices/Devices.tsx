@@ -40,7 +40,10 @@ export type DiscoveredServer = {
 }
 
 function serverAddress(server: McpServerConfig): string {
-  return server.transport === 'stdio' ? server.command ?? '' : server.url ?? ''
+  // stdio 与 builtin 的「地址」都是 `command` 那一列：前者是可执行文件，
+  // 后者是内置服务器的名字（见 `quill_core::builtin`）。
+  if (server.transport === 'stdio' || server.transport === 'builtin') return server.command ?? ''
+  return server.url ?? ''
 }
 
 /**
@@ -375,6 +378,7 @@ export function DeviceListPage(): ReactNode {
             onSubmit={add}
             initial={editing?.server}
             catalog={editing?.catalog}
+            builtinServers={config.data?.builtin_servers ?? []}
             error={formError}
             onCancel={editing ? () => { setEditing(null); setFormError(null) } : undefined}
           />
@@ -492,6 +496,7 @@ function McpForm({
   serverSide = false,
   initial,
   catalog,
+  builtinServers = [],
   error,
   onCancel,
 }: {
@@ -499,6 +504,8 @@ function McpForm({
   serverSide?: boolean
   initial?: EditableMcpServer
   catalog?: DiscoveredServer
+  /** 内置服务器的名字清单（服务端 `builtin_servers`）。空数组 = 还没拿到。 */
+  builtinServers?: string[]
   error?: string | null
   onCancel?: () => void
 }): ReactNode {
@@ -521,6 +528,7 @@ function McpForm({
           <option value="streamable_http">Streamable HTTP</option>
           <option value="sse">SSE</option>
           <option value="stdio">stdio</option>
+          <option value="builtin">{t('mcp.builtinTransport', { defaultValue: '内置（builtin）' })}</option>
         </select>
       </label>
       {transport === 'stdio' ? (
@@ -538,17 +546,41 @@ function McpForm({
             <input name="cwd" placeholder={t('mcp.optional', { defaultValue: '可选' })} defaultValue={initial?.transport === 'stdio' ? initial.cwd ?? '' : ''} />
           </label>
         </>
+      ) : transport === 'builtin' ? (
+        <label className="full-row">
+          {t('mcp.builtinServer', { defaultValue: '内置服务器' })}
+          {builtinServers.length ? (
+            // 名字清单来自服务端（`builtin_servers`）—— 前端不自己维护一份会漂的名单。
+            // 已保存的名字不在清单里（服务端换过名字）时把它**留在选项里**：
+            // 直接落到第一项等于替用户改配置，而他什么都没点。
+            <select
+              name="command"
+              required
+              defaultValue={initial?.transport === 'builtin' && initial.command ? initial.command : builtinServers[0]}
+            >
+              {(initial?.transport === 'builtin' && initial.command && !builtinServers.includes(initial.command)
+                ? [initial.command, ...builtinServers]
+                : builtinServers
+              ).map((item) => <option key={item} value={item}>{item}</option>)}
+            </select>
+          ) : (
+            // 清单还没拿到（列表没加载出来）：退回自由输入，服务端认不认识它说了算。
+            <input name="command" required autoComplete="off" spellCheck={false} placeholder="memory" defaultValue={initial?.transport === 'builtin' ? initial.command : ''} />
+          )}
+        </label>
       ) : (
         <label className="full-row">
           {t('mcp.url', { defaultValue: '地址' })}
           <input name="url" type="url" autoComplete="off" required placeholder="https://mcp.example.com/mcp" defaultValue={initial && initial.transport !== 'stdio' ? initial.url : ''} />
         </label>
       )}
-      <label className="full-row">
-        {transport === 'stdio' ? t('mcp.environment', { defaultValue: '环境变量' }) : t('mcp.headers', { defaultValue: '请求头' })}{' '}
-        {t('mcp.keyValueHelp', { defaultValue: '每行一条 KEY=VALUE' })}
-        <textarea key={transport} name="secrets" autoComplete="off" rows={3} defaultValue={secrets} />
-      </label>
+      {transport !== 'builtin' ? (
+        <label className="full-row">
+          {transport === 'stdio' ? t('mcp.environment', { defaultValue: '环境变量' }) : t('mcp.headers', { defaultValue: '请求头' })}{' '}
+          {t('mcp.keyValueHelp', { defaultValue: '每行一条 KEY=VALUE' })}
+          <textarea key={transport} name="secrets" autoComplete="off" rows={3} defaultValue={secrets} />
+        </label>
+      ) : null}
       <fieldset className="choice-field full-row">
         <legend>{t('mcp.capabilities', { defaultValue: '能力开关' })}</legend>
         <label>
@@ -593,6 +625,7 @@ function McpForm({
 
 function transportGlyph(transport: McpServerConfig['transport']): string {
   if (transport === 'stdio') return 'CLI'
+  if (transport === 'builtin') return '内置'
   return transport === 'sse' ? 'SSE' : 'HTTP'
 }
 

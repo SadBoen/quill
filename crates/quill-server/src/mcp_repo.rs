@@ -604,6 +604,14 @@ pub fn to_json(r: &McpServerRow) -> Value {
             },
         );
         v.insert("env".into(), map_to_json(&r.env));
+    } else if r.transport == "builtin" {
+        // 内置服务器的**名字**就写在 `command` 里（见 `quill_core::builtin`）。
+        // 不回这一列，界面上就显示不出这台内置服务器是哪一台；而且表单是全量提交 ——
+        // 回填时名字丢了，用户下一次点保存必被 400 挡下（「command 必填」）。
+        v.insert(
+            "command".into(),
+            r.command.clone().unwrap_or_default().into(),
+        );
     } else {
         v.insert("url".into(), r.url.clone().unwrap_or_default().into());
         v.insert("headers".into(), map_to_json(&r.headers));
@@ -887,6 +895,22 @@ mod tests {
         assert!(j.get("url").is_some());
         assert!(j.get("headers").is_some());
         assert!(j.get("command").is_none());
+    }
+
+    #[test]
+    fn a_builtin_row_serializes_with_its_name_and_without_a_url() {
+        // 内置服务器的名字住在 `command` 里（`quill_core::builtin`）。不回它，
+        // 界面上显示不出是哪一台，而且编辑框回填时名字就丢了 —— 下一次点保存
+        // 必被 400 挡下。`url` 冒出来则是另一个方向的问题：切到 builtin 之后
+        // 残留上一份地址，而内置服务器根本没有地址。
+        let mut b = base("mem");
+        b.transport = "builtin".into();
+        b.command = Some("memory".into());
+        b.url = None;
+        let j = to_json(&b);
+        assert_eq!(j["command"], serde_json::json!("memory"), "{j}");
+        assert!(j.get("url").is_none(), "{j}");
+        assert!(j.get("headers").is_none(), "{j}");
     }
 
     #[test]

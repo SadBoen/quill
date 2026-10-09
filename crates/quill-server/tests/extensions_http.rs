@@ -2251,6 +2251,21 @@ async fn a_builtin_memory_server_connects_and_its_tools_reach_the_conversation()
         "服务器要自报名字：{st}"
     );
     assert_eq!(v["mounted_count"], serde_json::json!(4), "{v}");
+    // 名字必须**回得来**：`command` 那一列就是「哪一台内置服务器」。不回它，界面上
+    // 这一行显示不出名字，编辑框回填后名字丢了 —— 下一次点保存必被 400 挡下。
+    assert_eq!(
+        v["servers"][0]["command"],
+        serde_json::json!("memory"),
+        "内置服务器的名字（command）必须原样读回：{v}"
+    );
+    // 名字清单由服务端给：表单里那一栏的可选项靠它，前端不自己维护一份会漂的名单。
+    assert!(
+        v["builtin_servers"]
+            .as_array()
+            .expect("builtin_servers 必须是数组")
+            .contains(&serde_json::json!("memory")),
+        "要给出内置服务器的名字清单：{v}"
+    );
     // note 是界面原样显示的话。只有内置服务器时它不能说「stdio 服务器」——
     // 「哪几台、什么传输」在这一句里是事实，不是措辞。
     let note = v["note"].as_str().expect("必须有说明");
@@ -2379,6 +2394,16 @@ async fn patching_a_row_to_builtin_still_goes_through_the_same_shape_check() {
         listed["status"][0]["tool_count"],
         serde_json::json!(4),
         "{listed}"
+    );
+    // 回读也带着名字 —— 编辑框就是靠这一列回填的。
+    assert_eq!(
+        server_of(&listed, "keep")["command"],
+        serde_json::json!("memory"),
+        "改完回读要带着内置服务器的名字：{listed}"
+    );
+    assert!(
+        server_of(&listed, "keep").get("url").is_none(),
+        "builtin 行不该冒出 url：{listed}"
     );
 }
 
