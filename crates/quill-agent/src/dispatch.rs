@@ -627,16 +627,23 @@ impl<E: MemberExecutor, L: DispatchLedger> Dispatcher<E, L> {
         })
     }
 
-    pub fn steer(&self, member: &MemberId, text: &str) -> Result<(), AgentError> {
+    /// 给运行中的成员追加指令。`owner` 是发起人 —— 没有它，两个用户各自的
+    /// `cost-analyst-1` 分不出该送给谁（见 `MemberExecutor::steer`）。
+    pub fn steer(&self, owner: UserId, member: &MemberId, text: &str) -> Result<(), AgentError> {
         let msg = Message::user(text).map_err(|e| AgentError::DispatchRequestInvalid {
             reason: e.to_string(),
         })?;
-        block_on(self.executor.steer(member, msg))
+        block_on(self.executor.steer(&owner, member, msg))
             .map_err(|e| AgentError::from_member_error(member, e))
     }
 
-    pub fn abort(&self, member: &MemberId, scope: AbortScope) -> Result<(), AgentError> {
-        block_on(self.executor.abort(member, scope))
+    pub fn abort(
+        &self,
+        owner: UserId,
+        member: &MemberId,
+        scope: AbortScope,
+    ) -> Result<(), AgentError> {
+        block_on(self.executor.abort(&owner, member, scope))
             .map_err(|e| AgentError::from_member_error(member, e))
     }
 }
@@ -766,18 +773,20 @@ impl<E: MemberExecutor> MemberExecutor for SharedExecutor<E> {
 
     fn steer(
         &self,
+        owner: &UserId,
         member: &MemberId,
         m: Message,
     ) -> impl std::future::Future<Output = Result<(), AdapterError>> + Send {
-        self.inner.steer(member, m)
+        self.inner.steer(owner, member, m)
     }
 
     fn abort(
         &self,
+        owner: &UserId,
         member: &MemberId,
         scope: AbortScope,
     ) -> impl std::future::Future<Output = Result<(), AdapterError>> + Send {
-        self.inner.abort(member, scope)
+        self.inner.abort(owner, member, scope)
     }
 }
 

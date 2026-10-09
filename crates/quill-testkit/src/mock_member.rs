@@ -3,7 +3,7 @@ use std::sync::Mutex;
 
 use quill_adapters::{
     AbortScope, AdapterError, ChainHop, MemberExecutor, MemberId, MemberOutcome,
-    MemberStartRequest, MemberStatus, Message,
+    MemberStartRequest, MemberStatus, Message, UserId,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -195,6 +195,7 @@ impl MemberExecutor for MockMemberExecutor {
 
     fn steer(
         &self,
+        _owner: &UserId,
         member: &MemberId,
         m: Message,
     ) -> impl std::future::Future<Output = Result<(), AdapterError>> + Send {
@@ -215,6 +216,7 @@ impl MemberExecutor for MockMemberExecutor {
 
     fn abort(
         &self,
+        _owner: &UserId,
         member: &MemberId,
         scope: AbortScope,
     ) -> impl std::future::Future<Output = Result<(), AdapterError>> + Send {

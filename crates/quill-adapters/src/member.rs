@@ -446,14 +446,25 @@ pub trait MemberExecutor: Send + Sync + 'static {
         req: MemberStartRequest,
     ) -> impl std::future::Future<Output = Result<MemberOutcome, AdapterError>> + Send;
 
+    /// 给**运行中**的成员追加一条指令（goose 的 `Agent::steer` 语义：成员在
+    /// 两轮模型调用之间取走它）。
+    ///
+    /// `owner` 是成员的发起人：成员标识在一轮里唯一，但两个用户各自的
+    /// `cost-analyst-1` 是两个不同的东西 —— 没有发起人就分不出该送给谁。
+    /// **没有在跑的成员时必须如实报错**：假装成功会让调用方以为指令送到了，
+    /// 而它永远不会生效。
     fn steer(
         &self,
+        owner: &UserId,
         member: &MemberId,
         m: Message,
     ) -> impl std::future::Future<Output = Result<(), AdapterError>> + Send;
 
+    /// 中途取消正在跑的成员。`scope` 决定只停这一位（`StopRound`）还是停
+    /// 这一整间房（`AbortRoom`）。同样：没有在跑的成员如实报错。
     fn abort(
         &self,
+        owner: &UserId,
         member: &MemberId,
         scope: AbortScope,
     ) -> impl std::future::Future<Output = Result<(), AdapterError>> + Send;

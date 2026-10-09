@@ -789,7 +789,7 @@ fn steer_failure_is_reported_but_does_not_settle_the_dispatch() {
     let (_, d) = dispatcher(vec![Step::Fault(FaultKind::LinkDropped)]);
     let member = MemberId::parse("cost-analyst-1").expect("应合法");
     let err = d
-        .steer(&member, "补充：请附上数据来源")
+        .steer(u(1), &member, "补充：请附上数据来源")
         .expect_err("应失败");
     assert_eq!(err.code(), "member_rejected");
     assert!(
@@ -807,11 +807,11 @@ fn stop_round_does_not_halt_members_but_abort_room_does() {
     let a = MemberId::parse("cost-analyst-1").expect("应合法");
     let b = MemberId::parse("growth-analyst-1").expect("应合法");
 
-    d.abort(&a, AbortScope::StopRound)
+    d.abort(u(1), &a, AbortScope::StopRound)
         .expect("StopRound 应成功");
     assert!(m.halted_members().is_empty(), "StopRound 不得停成员");
 
-    d.abort(&b, AbortScope::AbortRoom)
+    d.abort(u(1), &b, AbortScope::AbortRoom)
         .expect("AbortRoom 应成功");
     assert_eq!(
         m.halted_members(),
@@ -824,7 +824,7 @@ fn stop_round_does_not_halt_members_but_abort_room_does() {
 fn steer_with_blank_text_is_rejected_before_reaching_the_executor() {
     let (m, d) = dispatcher(vec![]);
     let member = MemberId::parse("cost-analyst-1").expect("应合法");
-    let err = d.steer(&member, "   ").expect_err("空白消息必须判红");
+    let err = d.steer(u(1), &member, "   ").expect_err("空白消息必须判红");
     assert_eq!(err.code(), "dispatch_request_invalid");
     assert_eq!(m.count_of("steer"), 0, "已检查：执行器未被调用");
 }

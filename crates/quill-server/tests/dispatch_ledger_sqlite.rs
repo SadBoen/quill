@@ -379,6 +379,7 @@ fn dispatcher_agrees_with_the_ledger_on_replay() {
         }
         async fn steer(
             &self,
+            _owner: &quill_adapters::UserId,
             _member: &MemberId,
             _msg: quill_adapters::Message,
         ) -> Result<(), quill_adapters::AdapterError> {
@@ -386,6 +387,7 @@ fn dispatcher_agrees_with_the_ledger_on_replay() {
         }
         async fn abort(
             &self,
+            _owner: &quill_adapters::UserId,
             _member: &MemberId,
             _scope: quill_adapters::AbortScope,
         ) -> Result<(), quill_adapters::AdapterError> {

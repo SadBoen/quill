@@ -57,7 +57,7 @@ fn start(
 
 fn steer(m: &Arc<MockMemberExecutor>, member_name: &str, text: &str) -> Result<(), AdapterError> {
     let msg = Message::user(text).expect("测试用消息应合法");
-    block_on(m.steer(&member(member_name), msg))
+    block_on(m.steer(&UserId::from_bytes([9; 16]), &member(member_name), msg))
 }
 
 fn abort(
@@ -65,7 +65,7 @@ fn abort(
     member_name: &str,
     scope: AbortScope,
 ) -> Result<(), AdapterError> {
-    block_on(m.abort(&member(member_name), scope))
+    block_on(m.abort(&UserId::from_bytes([9; 16]), &member(member_name), scope))
 }
 
 #[test]

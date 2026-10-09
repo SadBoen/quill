@@ -19,16 +19,23 @@
 //! 代价说清楚：调用方那个线程会**阻塞**整轮（成员数 × 模型延迟）。所以
 //! **`dispatch_round` 必须在阻塞上下文里调用**（本仓库走 `spawn_blocking`），
 //! 否则会占住一个 tokio worker。
+//!
+//! **运行中的成员是可控的（queue Q023/Q024）**：`start` 时把这一位登记进
+//! [`crate::member_control::MemberControl`]，于是 `steer`（追加指令）与 `abort`
+//! （中途取消）有可作用的对象。成员在**两轮模型调用之间**取走追加指令 ——
+//! 与 goose 的 `SteerOperation` 同一个窗口（`crate::member_control` 的模块头
+//! 列了出处）。没有追加指令时仍然只调一次模型，老行为一个字不变。
 
 use std::sync::Arc;
 
 use quill_adapters::{
     AbortScope, AdapterError, ExpertId, MemberExecutor, MemberId, MemberOutcome,
-    MemberStartRequest, Message, UserId,
+    MemberStartRequest, MemberStatus, Message, UserId,
 };
 use quill_provider::{Message as LlmMessage, SharedProvider};
 
 use crate::db::{blob_of, storage_error, DbBridge};
+use crate::member_control::{MemberControl, MemberRun};
 
 /// 子 agent 的固定前缀指令。
 ///
@@ -50,6 +57,10 @@ pub struct ProviderMemberExecutor {
     /// 避免派工这条线自己拼一套、与聊天那条线口径分叉。
     llm_config: crate::llm::LlmConfig,
     db: Arc<DbBridge>,
+    /// 运行中成员的控制面。默认每个执行器自己一份；`with_control` 可以换成
+    /// 进程里共享的那一份 —— 这样**另一个请求**（HTTP 的 steer/abort）才找得到
+    /// 正在跑的成员（queue Q113 接线）。
+    control: Arc<MemberControl>,
 }
 
 impl std::fmt::Debug for ProviderMemberExecutor {
@@ -70,7 +81,19 @@ impl ProviderMemberExecutor {
             provider,
             llm_config,
             db,
+            control: Arc::new(MemberControl::new()),
         }
+    }
+
+    /// 换成共享的控制面（进程里一份时，另一个请求才找得到运行中的成员）。
+    pub fn with_control(mut self, control: Arc<MemberControl>) -> Self {
+        self.control = control;
+        self
+    }
+
+    /// 这份执行器用的控制面（接线时把它放进 `AppState`）。
+    pub fn control(&self) -> &Arc<MemberControl> {
+        &self.control
     }
 }
 
@@ -139,7 +162,21 @@ fn persona(
     out.map_err(|e| AdapterError::Storage(format!("读专家人格失败：{e}")))
 }
 
-/// 真正跑一轮：拼 system + user，调一次模型，回正文。
+/// 成员一次运行的收尾：正常拿到正文，还是被取消。
+enum MemberRunEnd {
+    Text(String),
+    Cancelled,
+}
+
+/// 一位成员最多跑几轮模型调用。
+///
+/// 只在**收到追加指令**时才加轮 —— 没有 steer 时就是一次调用，老行为一个字不变。
+/// 上限是防「有人不停 steer」把成员拖成无底洞：到顶**如实失败**，不静默丢指令。
+const MEMBER_MAX_ROUNDS: u32 = 8;
+
+/// 真正把一位成员跑完：拼 system + 首轮任务，调模型；**两轮之间**取走追加指令
+/// （goose 的 `SteerOperation` 就作用在这个窗口，见 [`crate::member_control`]）；
+/// 被取消时立刻收手。
 ///
 /// 拿走全部所需值（不借用 `ProviderMemberExecutor`），这样它能被扔进
 /// `run_blocking` 的 `'static` future 里。
@@ -148,7 +185,9 @@ async fn run_member(
     llm_config: crate::llm::LlmConfig,
     db: Arc<DbBridge>,
     req: MemberStartRequest,
-) -> Result<String, AdapterError> {
+    run: Arc<MemberRun>,
+) -> Result<MemberRunEnd, AdapterError> {
+    let member = req.member().clone();
     let mut system = String::from(DELEGATION_PREAMBLE);
     if let Some(p) = persona(&db, req.owner(), req.expert())?
         .as_deref()
@@ -158,15 +197,47 @@ async fn run_member(
         system.push_str("\n\n你的身份与风格：\n");
         system.push_str(p);
     }
-    let user = format!("任务：{}\n\n{}", req.title(), req.instructions());
-    let request = crate::llm::build_request(
-        &llm_config,
-        vec![LlmMessage::system(system), LlmMessage::user(user)],
-    );
-    let resp = provider.chat(&request).await.map_err(|e| {
-        AdapterError::Provider(format!("成员 {} 的模型调用失败：{e}", req.member()))
-    })?;
-    Ok(resp.text)
+    let mut messages = vec![
+        LlmMessage::system(system),
+        LlmMessage::user(format!("任务：{}\n\n{}", req.title(), req.instructions())),
+    ];
+
+    let mut rounds = 0u32;
+    loop {
+        if run.is_cancelled() {
+            return Ok(MemberRunEnd::Cancelled);
+        }
+        rounds += 1;
+        let request = crate::llm::build_request(&llm_config, messages.clone());
+        // **取消要能打断正在飞的模型调用**：select 会把败者丢掉，于是那一次请求
+        // 当场作废 —— 这是 abort 的真身，不是「等它答完再把结果扔掉」。
+        let waiter = run.cancelled();
+        tokio::pin!(waiter);
+        let resp = tokio::select! {
+            r = provider.chat(&request) => r.map_err(|e| {
+                AdapterError::Provider(format!("成员 {member} 的模型调用失败：{e}"))
+            })?,
+            _ = &mut waiter => return Ok(MemberRunEnd::Cancelled),
+        };
+
+        let text = resp.text;
+        let pending = run.drain_steers();
+        if pending.is_empty() {
+            return Ok(MemberRunEnd::Text(text));
+        }
+        if rounds >= MEMBER_MAX_ROUNDS {
+            return Err(AdapterError::Internal(format!(
+                "成员 {member} 的追加指令轮次超过上限（{MEMBER_MAX_ROUNDS} 轮，已跑 {rounds} 次模型调用）。\
+                 下一步：少发几次 steer，或把要补充的内容一次写全再重派。"
+            )));
+        }
+        // 这一轮的正文留在对话里，追加指令作为下一条 user 消息 —— 与 goose 在
+        // 轮间把排队的引导注入对话是同一件事（`SteerOperation`）。
+        messages.push(LlmMessage::assistant(text));
+        for m in pending {
+            messages.push(LlmMessage::user(format!("[追加指令] {}", m.text())));
+        }
+    }
 }
 
 impl MemberExecutor for ProviderMemberExecutor {
@@ -177,22 +248,37 @@ impl MemberExecutor for ProviderMemberExecutor {
         // **在返回 future 之前就把活干完**（见文件头：dispatch 用空 waker 自旋 poll）。
         let member = req.member().clone();
         let scope = req.title().to_string();
+        let owner = req.owner();
         let provider = Arc::clone(&self.provider);
         let llm_config = self.llm_config.clone();
         let db = Arc::clone(&self.db);
+        // 登记进控制面：**运行中**才收得到 steer / abort。守卫随 future 一起活着，
+        // 成员跑完（含 panic）时把这一条摘掉。
+        let (run, guard) = self.control.register(owner, member.clone());
         // `run_blocking` 外层是「线程 / 运行时起没起来」，内层是任务本身的结果；
         // 对调用方这两层是同一件事（都算这次派工失败），所以拍平。
-        let done = run_blocking(async move { run_member(provider, llm_config, db, req).await })
-            .and_then(|inner| inner);
+        let done = run_blocking(async move {
+            let _guard = guard;
+            run_member(provider, llm_config, db, req, run).await
+        })
+        .and_then(|inner| inner);
 
         async move {
             match done {
                 // 模型回了正文 → 交付。
-                Ok(text) if !text.trim().is_empty() => MemberOutcome::done(member, &scope, &text)
-                    .map_err(|e| AdapterError::Internal(format!("构造成员产出失败：{e}"))),
+                Ok(MemberRunEnd::Text(text)) if !text.trim().is_empty() => {
+                    MemberOutcome::done(member, &scope, &text)
+                        .map_err(|e| AdapterError::Internal(format!("构造成员产出失败：{e}")))
+                }
                 // 模型回了个空串 → 这个成员没产出，按失败报，**不编一段话**。
-                Ok(_) => MemberOutcome::failed(member, &scope)
+                Ok(MemberRunEnd::Text(_)) => MemberOutcome::failed(member, &scope)
                     .map_err(|e| AdapterError::Internal(format!("构造成员失败产出失败：{e}"))),
+                // 被 abort：产出为空、状态 cancelled —— 台账那边按
+                // `MemberRejectKind::Cancelled` 结算（见 `quill_agent::dispatch::run_one`）。
+                Ok(MemberRunEnd::Cancelled) => {
+                    MemberOutcome::new(member, MemberStatus::Cancelled, &scope, "")
+                        .map_err(|e| AdapterError::Internal(format!("构造成员取消产出失败：{e}")))
+                }
                 Err(e) => Err(e),
             }
         }
@@ -200,22 +286,26 @@ impl MemberExecutor for ProviderMemberExecutor {
 
     fn steer(
         &self,
+        owner: &UserId,
         member: &MemberId,
-        _m: Message,
+        m: Message,
     ) -> impl std::future::Future<Output = Result<(), AdapterError>> + Send {
-        // 诚实：这一版**没有**运行中追加指令的通道。返回 `Ok(())` 会是谎话 ——
-        // 调用方会以为指令送到了。等真有长跑成员时再做。
-        let detail = format!("steer 尚未实现：成员 {member} 无法在运行中接收追加指令");
-        async move { Err(AdapterError::Internal(detail)) }
+        let control = Arc::clone(&self.control);
+        let owner = *owner;
+        let member = member.clone();
+        async move { control.steer(&owner, &member, m) }
     }
 
     fn abort(
         &self,
+        owner: &UserId,
         member: &MemberId,
-        _scope: AbortScope,
+        scope: AbortScope,
     ) -> impl std::future::Future<Output = Result<(), AdapterError>> + Send {
-        let detail = format!("abort 尚未实现：成员 {member} 的任务无法中途取消");
-        async move { Err(AdapterError::Internal(detail)) }
+        let control = Arc::clone(&self.control);
+        let owner = *owner;
+        let member = member.clone();
+        async move { control.abort(&owner, &member, scope) }
     }
 }
 
@@ -484,17 +574,212 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // ------------------------------------------------------- 运行中控制（Q023/Q024）
+
+    /// 会**卡住**的桩 provider：第一次调用先报到、等放行，之后每次调用立刻回。
+    ///
+    /// 「卡住」是这组用例的前提：只有成员真的停在一次模型调用里，
+    /// steer / abort 才有「运行中」这个窗口可作用（老实现没有这个窗口）。
+    #[derive(Debug)]
+    struct Gated {
+        replies: Mutex<Vec<String>>,
+        seen: Mutex<Vec<String>>,
+        started: std::sync::mpsc::Sender<usize>,
+        gate: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    }
+
+    impl quill_provider::Provider for Gated {
+        fn name(&self) -> &str {
+            "gated"
+        }
+
+        fn chat<'a>(
+            &'a self,
+            request: &'a ChatRequest,
+        ) -> quill_provider::BoxFuture<'a, ChatResponse> {
+            let user = request
+                .messages
+                .iter()
+                .rev()
+                .find(|m| matches!(m.role, quill_provider::Role::User))
+                .map(text_of)
+                .unwrap_or_default();
+            let n = {
+                let mut seen = self.seen.lock().expect("锁不毒化");
+                seen.push(user);
+                seen.len()
+            };
+            let _ = self.started.send(n);
+            let gate = self.gate.lock().expect("锁不毒化").take();
+            let reply = self
+                .replies
+                .lock()
+                .expect("锁不毒化")
+                .get(n - 1)
+                .cloned()
+                .unwrap_or_default();
+            let model = request.model.clone();
+            Box::pin(async move {
+                // 只有第一轮等放行。被取消时这个 future 会被 select **整体丢掉**，
+                // 于是那一次调用当场作废 —— 这正是 abort 要证明的事。
+                if let Some(rx) = gate {
+                    let _ = rx.await;
+                }
+                Ok(ChatResponse {
+                    id: None,
+                    model,
+                    text: reply,
+                    reasoning: String::new(),
+                    tool_calls: Vec::new(),
+                    finish_reason: None,
+                    usage: Default::default(),
+                })
+            })
+        }
+
+        fn stream<'a>(
+            &'a self,
+            _r: &'a ChatRequest,
+        ) -> quill_provider::BoxFuture<'a, ProviderStream> {
+            Box::pin(async {
+                Err(ProviderError::NotConfigured {
+                    detail: "单测不用流式".into(),
+                })
+            })
+        }
+
+        fn models<'a>(&'a self) -> quill_provider::BoxFuture<'a, Vec<ModelInfo>> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+    }
+
+    /// 在**真运行中**的成员身上追加一条指令：下一轮必须看得见它，交付的是新一轮。
     #[test]
-    fn steer_and_abort_say_they_are_not_supported_instead_of_pretending() {
-        let (db, _dir) = temp_db("steer");
+    fn steer_reaches_a_running_member_and_the_member_answers_again() {
+        let (db, dir) = temp_db("steer-live");
+        let owner = UserId::from_bytes([5; 16]);
+        let member = MemberId::parse("cost-analyst-1").expect("成员标识合法");
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let provider = Arc::new(Gated {
+            replies: Mutex::new(vec!["第一轮答案".into(), "第二轮答案".into()]),
+            seen: Mutex::new(Vec::new()),
+            started: started_tx,
+            gate: Mutex::new(Some(release_rx)),
+        });
+        let control = Arc::new(MemberControl::new());
+        let exec = ProviderMemberExecutor::new(
+            Arc::clone(&provider) as SharedProvider,
+            llm_cfg(),
+            Arc::clone(&db),
+        )
+        .with_control(Arc::clone(&control));
+
+        let worker = std::thread::spawn(move || {
+            poll_noop(exec.start(req(owner, "cost-analyst", "cost-analyst-1")))
+                .expect("第一次 poll 就完成")
+                .expect("桩 provider 必然成功")
+        });
+
+        // 第一次调用报到 = 成员**正在跑**。
+        assert_eq!(started_rx.recv().expect("第一次调用必须报到"), 1);
+        control
+            .steer(
+                &owner,
+                &member,
+                Message::user("补充：请附上数据来源").expect("消息合法"),
+            )
+            .expect("运行中的成员必须收得下追加指令");
+        release_tx.send(()).expect("放行第一轮");
+
+        // 第二轮报到 = 追加指令真的换来了又一轮。用 `recv_timeout` 而不是 `recv`：
+        // 指令被吞掉时（没有第二轮）这条要**变红**，不能把测试套件挂死。
+        let second = started_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("收到追加指令却不跑第二轮，等于把指令吞了");
+        assert_eq!(second, 2);
+
+        let outcome = worker.join().expect("线程不该 panic");
+        assert_eq!(outcome.status().as_wire(), "done", "{outcome:?}");
+        assert_eq!(outcome.output(), "第二轮答案", "要交付**最后一轮**的正文");
+
+        let seen = provider.seen.lock().expect("锁不毒化").clone();
+        assert_eq!(seen.len(), 2, "{seen:?}");
+        assert!(
+            seen[1].contains("[追加指令] 补充：请附上数据来源"),
+            "第二轮的提示词里必须带着追加指令：{seen:?}"
+        );
+        assert!(control.running(&owner).is_empty(), "跑完必须摘掉注册");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// abort：正在飞的模型调用当场作废，成员按 `cancelled` 结算，且**没有第二轮**。
+    #[test]
+    fn abort_cancels_a_running_member_mid_call() {
+        let (db, dir) = temp_db("abort-live");
+        let owner = UserId::from_bytes([6; 16]);
+        let member = MemberId::parse("cost-analyst-1").expect("成员标识合法");
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let provider = Arc::new(Gated {
+            replies: Mutex::new(vec!["这一轮不该被交付".into()]),
+            seen: Mutex::new(Vec::new()),
+            started: started_tx,
+            gate: Mutex::new(Some(release_rx)),
+        });
+        let control = Arc::new(MemberControl::new());
+        let exec = ProviderMemberExecutor::new(
+            Arc::clone(&provider) as SharedProvider,
+            llm_cfg(),
+            Arc::clone(&db),
+        )
+        .with_control(Arc::clone(&control));
+
+        let worker = std::thread::spawn(move || {
+            poll_noop(exec.start(req(owner, "cost-analyst", "cost-analyst-1")))
+                .expect("第一次 poll 就完成")
+                .expect("取消是 cancelled 这个状态，不是 Err")
+        });
+
+        assert_eq!(started_rx.recv().expect("第一次调用必须报到"), 1);
+        // **兜底放行**：取消万一没实现，这条用例要变红而不是把测试套件挂死。
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            let _ = release_tx.send(());
+        });
+        control
+            .abort(&owner, &member, AbortScope::StopRound)
+            .expect("运行中的成员必须取消得掉");
+
+        let outcome = worker.join().expect("线程不该 panic");
+        assert_eq!(outcome.status().as_wire(), "cancelled", "{outcome:?}");
+        assert!(outcome.output().trim().is_empty(), "取消没有产出");
+        assert_eq!(
+            provider.seen.lock().expect("锁不毒化").len(),
+            1,
+            "取消之后不许再跑一轮"
+        );
+        assert!(control.running(&owner).is_empty(), "跑完必须摘掉注册");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 没有在跑的成员：steer / abort **如实报错** —— 不假装成功、也不排队等下次。
+    #[test]
+    fn steer_and_abort_on_an_idle_member_are_honest_errors() {
+        let (db, _dir) = temp_db("steer-idle");
+        let owner = UserId::from_bytes([7; 16]);
         let exec =
             ProviderMemberExecutor::new(Arc::new(Recorder::new("x")), llm_cfg(), Arc::clone(&db));
         let member = MemberId::parse("cost-analyst-1").expect("成员标识合法");
         let msg = Message::user("停一下").expect("消息合法");
-        let steered = poll_noop(exec.steer(&member, msg)).expect("第一次 poll 就完成");
-        assert!(steered.is_err(), "尚未支持就必须报错，不能假装成功");
-        let aborted =
-            poll_noop(exec.abort(&member, AbortScope::StopRound)).expect("第一次 poll 就完成");
-        assert!(aborted.is_err(), "尚未支持就必须报错，不能假装成功");
+        let err = poll_noop(exec.steer(&owner, &member, msg))
+            .expect("第一次 poll 就完成")
+            .expect_err("没有在跑的成员必须报错");
+        assert!(format!("{err}").contains("没有正在运行的成员"), "{err}");
+        assert!(format!("{err}").contains("下一步"), "{err}");
+        let err = poll_noop(exec.abort(&owner, &member, AbortScope::StopRound))
+            .expect("第一次 poll 就完成")
+            .expect_err("没有在跑的成员必须报错");
+        assert!(format!("{err}").contains("没有正在运行的成员"), "{err}");
     }
 }

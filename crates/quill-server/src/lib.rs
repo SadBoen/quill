@@ -44,6 +44,9 @@ pub mod mbti;
 /// MCP 协议客户端（内核层，已搬到 `quill-core`；这里 re-export 保持旧路径可用）。
 pub use quill_core::mcp_client;
 pub mod mcp_repo;
+/// 运行中成员的控制面：追加指令（steer）与中途取消（abort），照 goose 的
+/// `Agent::steer` + `SteerOperation` 移植（queue Q023/Q024）。
+pub mod member_control;
 pub mod member_executor;
 pub mod middleware;
 /// 「路径在不在目录里」的唯一判定口径，见模块文档。

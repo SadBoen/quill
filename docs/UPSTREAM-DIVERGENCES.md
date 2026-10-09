@@ -150,6 +150,34 @@ octop 的 fork 是**分支**不是回滚。而且 **octop 的 fork 实现在 spa
 
 ---
 
+### A8. 运行中成员的控制面：**形照抄，取消手段换了一种**（queue Q023/Q024）
+
+**上游**：goose 有一张**进程级注册表**把「正在跑的那个」与它的取消令牌放在一起 ——
+`vendor/goose/crates/goose/src/execution/active_run.rs:1-14` 的
+`ActiveRun { run_id, cancel_token, agent }`（字段注释写着「Routes steering from another
+roaming connection to the run owner」）与 `:103-115` 的 `agent_cancel_token` /
+`cancel_agent_run`；追加指令走**每会话一个 FIFO**，由状态机在**轮与轮之间**注入
+（`vendor/goose/crates/goose/src/agents/agent.rs:562-600`、
+`vendor/goose/crates/goose/src/agents/state_machine/ops_steer.rs:1-70`）。
+
+**quill**：`crates/quill-server/src/member_control.rs` 照抄了这张注册表的形
+（登记 → 另一个请求找得到 → 取消 → 跑完摘掉），键换成 **(发起人, 成员)**：
+一轮派工里所有成员共用 leader 的 session，按 session 键会把同轮成员串在一起。
+
+**刻意不同的两处（各带代价）**：
+1. **取消不用 `tokio_util::sync::CancellationToken`，改用 `tokio::sync::Notify` +
+   `select!`** —— 代价：`notify_one` 的「没人在等时存一张通行证」语义得自己讲清楚
+   （`member_control.rs` 里写了注释并有用例钉住 `a_cancel_that_arrives_before_the_wait_still_wins`），
+   而 `CancellationToken` 天生就有这个语义。换来的是一条新依赖不进门。
+2. **没有在跑的成员时如实报错**（`AdapterError::NotFound` + 下一步），goose 那边
+   队列可以存在但没有消费者 —— 我们不接受「假装送达」，也不排队等下一次
+   （那意味着一次调用可能永远不生效，而调用方以为自己成功送达了）。
+
+**尚未做**：**HTTP 出口**（`steer`/`abort` 现在只有持有同一执行器的调用方够得到，
+而生产里执行器是每请求现建的）—— 条目是 **Q113**。
+
+---
+
 ## B. 外壳侧（对 octop）
 
 ### B1. 团队派工会话（`kind='team_leader'`）：**自创**，octop 没有这一层

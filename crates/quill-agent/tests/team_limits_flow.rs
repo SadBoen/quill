@@ -199,6 +199,7 @@ impl MemberExecutor for PromptRecorder {
     #[allow(clippy::manual_async_fn)]
     fn steer(
         &self,
+        _owner: &UserId,
         _member: &MemberId,
         _m: Message,
     ) -> impl std::future::Future<Output = Result<(), AdapterError>> + Send {
@@ -208,6 +209,7 @@ impl MemberExecutor for PromptRecorder {
     #[allow(clippy::manual_async_fn)]
     fn abort(
         &self,
+        _owner: &UserId,
         _member: &MemberId,
         _scope: AbortScope,
     ) -> impl std::future::Future<Output = Result<(), AdapterError>> + Send {
