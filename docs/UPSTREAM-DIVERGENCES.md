@@ -212,9 +212,10 @@ roaming connection to the run owner」）与 `:103-115` 的 `agent_cancel_token`
 （schema 的 CHECK 对 `team_member` 强制三项归属非空，`0001_init.sql:284`）。
 所以成员会话也要靠 `exclude_kind` 才不混进侧栏（前端发的是
 `?exclude_kind=team_leader,team_member`）。
-**代价**：① 成员会话在「全量会话」口径里可见（团队页/用量页看得见它），
-而成员这一轮的 token 用量现在**没记**（执行器不带 usage，条目是 Q026）——
-用量页会看到一条 token 全 0 的会话；② 成员会话按调用方给的 id 复用，不回收，
+**代价**：① 成员会话在「全量会话」口径里可见（团队页/用量页看得见它）；
+成员这一轮的 token 用量**已记**（Q026：执行器跨轮累加 `MemberUsage` → 随产出
+写进那条会话的 assistant 消息，列可空，上游没报就是 `null` 而非 0；用量页因此
+看得到派工消耗）；② 成员会话按调用方给的 id 复用，不回收，
 `message_count` 随派工轮数增长，会话数会被「每成员一条」放大。
 
 ### B2. 通道（channels）：部分能力只做诚实降级

@@ -285,6 +285,21 @@ export const ITEMS = [
     },
     blocks: ['M2'],
   },
+  {
+    id: 'B2-7',
+    milestone: 'M2',
+    title: '派工消耗记进成员会话，用量页看得到（Q026）',
+    // 卡点原写「记到哪要产品决策」；Q025 已让成员会话真实存在、任务与产出本就
+    // 写在那条会话里（token 列写死 0）—— 于是只剩「把真数字填进去」这一步。
+    // 判据绑端到端用例：run 完一轮后经 GET /api/sessions/{id}/messages 读回
+    // assistant 那条带着模型真报的 token（不是 0），且 /metrics 算得出来 ——
+    // 「只累加最后一轮」或「写死 0」都会让这条红（反向验证见提交记录）。
+    verify: {
+      kind: 'test',
+      name: 'a_round_records_the_member_token_usage_in_its_own_session',
+    },
+    blocks: ['M2'],
+  },
 
   // ——— M3 上下文与成本 ———
   {

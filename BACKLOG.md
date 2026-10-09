@@ -100,15 +100,13 @@ typecheck·lint·vitest·build / 四道文本门禁。
 
 - `steer` / `abort` 明确返回 `AdapterError::Internal("尚未实现…")` —— 没有
   「运行中追加指令 / 中途取消」这两条通道。返回 `Ok(())` 会是谎话。
-- **成员 token 用量没有记**：`MemberOutcome` 不带 usage，所以这一轮成员烧掉的
-  token 在用量页上**看不到**。产出正文本身是**落了库**的 ——
-  `task_dispatches.result_digest` 存的就是 `{status, scope, output}` 这段 JSON
-  （`dispatch_ledger.rs` 的 `result_payload`），读路径能把它还原成 outcome。
-  （这一条我先写错成「产出没落库」，去读了 `result_payload` 才发现 —— 记下来当例子：
-  **没读过代码的事实别往文档里写**。）
-- **成员用同一个 `round.session`**，没有按成员各开一条独立会话 ——
-  `vendor/goose/.../subagent_handler.rs` 的 `run_subagent_task` 是「每子 agent
-  独立 config + 独立 session」，我们只对齐了「独立调一次模型」这一层。
+  （**2026-10-09 已实现**：Q023/Q024 做了执行器、Q113 接了两条 HTTP 路由。）
+- ~~**成员 token 用量没有记**~~（**2026-10-09 已记，Q026**）：执行器跨轮累加后
+  随 `MemberOutcome` 带下来，写进成员会话的 assistant 那条消息（列可空，
+  上游没报就是 `null` 而不是 0）；`GET /api/sessions/{id}/metrics` 与
+  `/api/usage` 因此看得到派工消耗。`MemberUsage` 见 `quill-adapters/src/member.rs`。
+- ~~**成员用同一个 `round.session`**~~（**2026-10-09 各开独立会话，Q025**）——
+  每个成员一条 `kind='team_member'` 会话，任务与产出写进它自己那条。
 - 响应里带整段成员产出，长任务下响应体可能很大（未截断）。
 
 ### B2-3 建团队静默多出的 `team_leader` 会话

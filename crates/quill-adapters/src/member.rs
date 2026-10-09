@@ -331,12 +331,31 @@ impl std::fmt::Display for MemberStatus {
     }
 }
 
+/// 一位成员这一轮烧掉的 token（跨多次模型调用累加）。
+///
+/// 与 `quill-provider::TokenUsage` 同形，但**独立定义**：`quill-adapters` 是 L0
+/// 叶子、`[dependencies]` 为空，不能引 `quill-provider`（同层依赖会被
+/// `.layer-guard.mjs` 判违例）。四个字段都可空：`None` = 模型端没上报，**不是 0**
+/// —— 与 `messages` 的 token 列同一个口径（缺一列不许拿 0 冒充）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MemberUsage {
+    pub input: Option<u32>,
+    pub output: Option<u32>,
+    /// 命中缓存的入参（`input` 的子集，不重复计入）。
+    pub cache_read: Option<u32>,
+    /// 写入缓存的入参（同样是 `input` 的子集）。
+    pub cache_write: Option<u32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemberOutcome {
     member: MemberId,
     status: MemberStatus,
     completed_scope: String,
     output: String,
+    /// 这一轮成员的 token 用量。默认全 `None`（`new` 的调用点不动）——
+    /// 由执行器跑完后用 `with_usage` 挂上，然后随产出一起落进成员会话。
+    usage: MemberUsage,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -384,7 +403,18 @@ impl MemberOutcome {
             status,
             completed_scope,
             output,
+            usage: MemberUsage::default(),
         })
+    }
+
+    /// 挂上这一轮成员烧掉的 token 用量（字段见 [`MemberUsage`]）。
+    pub fn with_usage(mut self, usage: MemberUsage) -> Self {
+        self.usage = usage;
+        self
+    }
+
+    pub fn usage(&self) -> MemberUsage {
+        self.usage
     }
 
     pub fn done(member: MemberId, scope: &str, output: &str) -> Result<Self, InvalidOutcome> {

@@ -133,7 +133,8 @@ impl Provider for EchoProvider {
                 reasoning: String::new(),
                 tool_calls: Vec::new(),
                 finish_reason: None,
-                usage: Default::default(),
+                // Q026：每轮上报一个**与轮次绑定**的用量，好让「累计」被钉住。
+                usage: quill_provider::TokenUsage::new(Some(100 * n as u32), Some(10 * n as u32)),
             })
         })
     }
@@ -749,6 +750,68 @@ async fn a_round_writes_task_and_output_into_the_member_session() {
     assert_eq!(msgs[1]["status"], serde_json::json!("complete"), "{msgs:?}");
 }
 
+/// Q026：成员这一轮真烧掉的 token 写进它自己的会话 —— 经真实 HTTP 路由读回，
+/// assistant 那条带着真数字（不是 0），会话级 metrics 也算得出来。
+#[tokio::test]
+async fn a_round_records_the_member_token_usage_in_its_own_session() {
+    let t = TestDb::new("dispatch-run-member-usage");
+    let f = seed(&t.bridge(), user_id(), 0x44, &["cost-analyst"]);
+    let provider = Arc::new(EchoProvider::new());
+    let app = state(&t, Arc::clone(&provider));
+    let sid = member_session(0x44, &expert("cost-analyst"));
+
+    let (status, v) = call(
+        &app,
+        "POST",
+        &format!("/api/teams/{}/dispatch/run", team_hex(f.team_id)),
+        Some(body(&f, vec![member_entry(0x44, "cost-analyst", 1)])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+
+    let (status, msgs) = call(
+        &app,
+        "GET",
+        &format!("/api/sessions/{}/messages", sid.to_compact_hex()),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{msgs}");
+    let msgs = msgs["messages"].as_array().expect("消息数组").clone();
+    assert_eq!(msgs.len(), 2, "任务 + 产出：{msgs:?}");
+    assert_eq!(
+        msgs[1]["input_tokens"],
+        serde_json::json!(100),
+        "assistant 那条必须带模型真报的入参 token，不能是 0：{msgs:?}"
+    );
+    assert_eq!(
+        msgs[1]["output_tokens"],
+        serde_json::json!(10),
+        "出参 token 同理：{msgs:?}"
+    );
+    assert_eq!(
+        msgs[0]["input_tokens"],
+        serde_json::json!(0),
+        "任务那条是用户侧，没有 token 概念，保持 0：{msgs:?}"
+    );
+
+    // 会话级 metrics 也看得到这一份 —— 否则「用量页能看到派工消耗」只是半句真话。
+    let (status, m) = call(
+        &app,
+        "GET",
+        &format!("/api/sessions/{}/metrics", sid.to_compact_hex()),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{m}");
+    assert_eq!(
+        m["input_tokens"],
+        serde_json::json!(100),
+        "会话 metrics 必须把成员这一轮的入参算进去：{m}"
+    );
+    assert_eq!(m["output_tokens"], serde_json::json!(10), "出参同理：{m}");
+}
+
 /// book 在记账之前把缺的成员会话建出来（外键要求它先在），且归属三项齐全 ——
 /// 建出来的是真正的成员会话，不是随手塞一条空会话。
 #[tokio::test]
@@ -974,7 +1037,7 @@ async fn steering_a_running_member_from_another_request_lands_in_its_next_round(
     // 第一次模型调用报到 = 成员**正在另一条请求里跑**。
     assert_eq!(
         started_rx
-            .recv_timeout(std::time::Duration::from_secs(5))
+            .recv_timeout(std::time::Duration::from_secs(10))
             .expect("成员必须在闸门后面跑起来"),
         1
     );
@@ -995,7 +1058,7 @@ async fn steering_a_running_member_from_another_request_lands_in_its_next_round(
     // 第二轮报到 = 指令真的换来了又一轮（用 recv_timeout：吞掉指令时要变红，不能挂死）。
     assert_eq!(
         started_rx
-            .recv_timeout(std::time::Duration::from_secs(5))
+            .recv_timeout(std::time::Duration::from_secs(10))
             .expect("收到追加指令却不跑第二轮，等于把指令吞了"),
         2
     );
@@ -1043,7 +1106,7 @@ async fn aborting_a_running_member_from_another_request_cancels_it_mid_call() {
     );
     assert_eq!(
         started_rx
-            .recv_timeout(std::time::Duration::from_secs(5))
+            .recv_timeout(std::time::Duration::from_secs(10))
             .expect("成员必须在闸门后面跑起来"),
         1
     );
@@ -1052,9 +1115,22 @@ async fn aborting_a_running_member_from_another_request_cancels_it_mid_call() {
     assert_eq!(status, StatusCode::OK, "对运行中的成员发取消应 200：{v}");
     assert_eq!(v["cancelled"], serde_json::json!(true), "{v}");
 
-    // **不放行**闸门。若取消没生效，接收端被丢会让等待立刻报错、成员照跑第一轮
-    // ——下面的断言会变红；所以这里既不会挂死，也不会假绿。
-    drop(release_tx);
+    // **不放行**闸门：取消生效的话，这一轮唯一的出路就是被取消。
+    // 有界轮询等它结束 —— **不能**用 `drop(release_tx)` 立刻放行：那会让
+    // 「模型调用完成」与「取消」在 `select!` 里随机撞车（两者同时就绪时
+    // select! 随机挑一条），CI 上实测撞出过一次 delivered 的假红。
+    let mut settled = false;
+    for _ in 0..1000 {
+        if run.is_finished() {
+            settled = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    if !settled {
+        // 取消没生效：放行闸门让这一轮跑完 —— 下面几条断言会如实变红，而不是挂死。
+        drop(release_tx);
+    }
 
     let (status, run_v) = run.await.expect("派工任务不该 panic");
     assert_eq!(status, StatusCode::OK, "{run_v}");

@@ -239,7 +239,14 @@ fn state_transitions_and_settlement_survive_a_real_roundtrip() {
         "已完成数据采集",
         "采集到 3 条成本记录",
     )
-    .expect("结果应合法");
+    .expect("结果应合法")
+    // Q026：用量随产出一起冻结 —— 重放时不许退回「全空」。
+    .with_usage(quill_adapters::MemberUsage {
+        input: Some(1200),
+        output: Some(340),
+        cache_read: Some(800),
+        cache_write: None,
+    });
     let mut done = DispatchRecord::pending(k.clone(), member("cost-analyst", 1));
     done.settle_done(outcome.clone()).expect("结算 DONE 应成功");
     ledger.put(&done).expect("写 DONE 应成功");
@@ -249,7 +256,12 @@ fn state_transitions_and_settlement_survive_a_real_roundtrip() {
     assert_eq!(o.status(), MemberStatus::Partial);
     assert_eq!(o.completed_scope(), "已完成数据采集");
     assert_eq!(o.output(), "采集到 3 条成本记录");
-    assert_eq!(*o, outcome, "结算结果必须逐字往返（不丢正文）");
+    assert_eq!(*o, outcome, "结算结果必须逐字往返（不丢正文、不丢用量）");
+    assert_eq!(
+        o.usage(),
+        outcome.usage(),
+        "用量必须逐字段往返（含 cache_write = None 这个「没上报」）"
+    );
     assert_eq!(
         text_of(
             &t.bridge(),

@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use quill_adapters::{ExpertId, MemberId, MemberOutcome, MemberStatus, SessionId, UserId};
+use quill_adapters::{
+    ExpertId, MemberId, MemberOutcome, MemberStatus, MemberUsage, SessionId, UserId,
+};
 use quill_agent::{
     AgentError, BeginOutcome, DispatchKey, DispatchLedger, DispatchRecord, DispatchState,
     RoundPrefix,
@@ -172,7 +174,7 @@ fn parse_result(
                 MemberOutcome::new(member.clone(), status, scope, output).map_err(|e| {
                     crate::db::invariant_broken(format!("结算结果与成员状态不自洽：{e}"))
                 })?;
-            Ok(Some(Ok(outcome)))
+            Ok(Some(Ok(outcome.with_usage(usage_from(&v)))))
         }
         DispatchState::Failed | DispatchState::Cancelled => {
             let code = error_code.ok_or_else(|| {
@@ -213,6 +215,23 @@ fn parse_json(raw: &[u8], column: &str) -> Result<serde_json::Value, AgentError>
         .map_err(|e| crate::db::invariant_broken(format!("{column} 不是合法 JSON（{e}）")))
 }
 
+/// `result_digest.usage` → 字段。**缺这个键是合法的**：Q026 之前写下的行没有它，
+/// 那些行回读时用量就是「没记」（全 `None`），不是数据损坏。
+fn usage_from(v: &serde_json::Value) -> MemberUsage {
+    let field = |name: &str| -> Option<u32> {
+        v.get("usage")
+            .and_then(|u| u.get(name))
+            .and_then(|n| n.as_u64())
+            .map(|n| n.min(u32::MAX as u64) as u32)
+    };
+    MemberUsage {
+        input: field("input"),
+        output: field("output"),
+        cache_read: field("cache_read"),
+        cache_write: field("cache_write"),
+    }
+}
+
 fn kind_from_wire(code: &str) -> Option<quill_agent::MemberRejectKind> {
     use quill_agent::MemberRejectKind as K;
 
@@ -230,10 +249,20 @@ fn result_payload(
 ) -> (Option<Vec<u8>>, i64, Option<String>, Option<String>) {
     match (record.state(), record.outcome(), record.error()) {
         (DispatchState::Done, Some(outcome), _) => {
+            let u = outcome.usage();
             let v = serde_json::json!({
                 "status": outcome.status().as_wire(),
                 "scope": outcome.completed_scope(),
                 "output": outcome.output(),
+                // Q026：成员这一轮烧掉的 token 随产出一起冻结 —— 缺了它，
+                // 重放（`get`）时回读到的产出会带上一个假的「用量全空」。
+                // null = 模型端没上报，与「报了 0」不是一回事。
+                "usage": {
+                    "input": u.input,
+                    "output": u.output,
+                    "cache_read": u.cache_read,
+                    "cache_write": u.cache_write,
+                },
             });
             let bytes = v.to_string().into_bytes();
             let n = bytes.len() as i64;

@@ -13,5 +13,5 @@ pub use knowledge::{
 pub use member::{
     check_chain, AbortScope, AdapterError, ChainCheck, ChainHop, InvalidChainHop, InvalidMessage,
     InvalidOutcome, InvalidStartRequest, MemberExecutor, MemberOutcome, MemberStartRequest,
-    MemberStatus, Message, MessageRole, MAX_CHAIN_DEPTH,
+    MemberStatus, MemberUsage, Message, MessageRole, MAX_CHAIN_DEPTH,
 };

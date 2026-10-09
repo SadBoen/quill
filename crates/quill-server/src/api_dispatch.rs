@@ -799,7 +799,14 @@ fn persist_member_outputs(
         let Some(entry) = plan.iter().find(|p| p.member == *member) else {
             continue;
         };
-        match write_member_turn(db, uid, entry.session, &entry.task_text, outcome.output()) {
+        match write_member_turn(
+            db,
+            uid,
+            entry.session,
+            &entry.task_text,
+            outcome.output(),
+            outcome.usage(),
+        ) {
             Ok(()) => written += 1,
             Err(e) => {
                 if first_error.is_none() {
@@ -813,20 +820,31 @@ fn persist_member_outputs(
 
 /// 一次成员回合写两条消息（user = 任务、assistant = 产出），并推进会话计数。
 ///
-/// **用量一律不写**：成员执行器现在不带 token 用量（那是 Q026）—— 不编数，
-/// 宁可让用量页看不到这一份，也不写真值不明的数字。
+/// **用量记在 assistant 那条上**（Q026）：成员这一轮真烧掉的 token 由执行器
+/// 跨轮累加后随产出带下来。用户那条没有 token 概念（同聊天路径的
+/// `prepare_turn`）。`None` = 模型端没上报，与「报了 0」不是一回事 ——
+/// 列可空（见 migration 0008），落 0 会是假数字。
 fn write_member_turn(
     db: &crate::db::DbBridge,
     uid: quill_adapters::UserId,
     sid: [u8; 16],
     task_text: &str,
     output: &str,
+    usage: quill_adapters::MemberUsage,
 ) -> Result<(), String> {
     let now = crate::db::now_ms();
     let seq = crate::chat_repo::next_seq(db, uid, sid).map_err(|e| e.to_string())?;
-    for (seq, role, content) in [
-        (seq, "user", task_text.to_string()),
-        (seq + 1, "assistant", output.to_string()),
+    for (seq, role, content, input, output_t, cache_read, cache_write) in [
+        (seq, "user", task_text.to_string(), 0i64, 0i64, None, None),
+        (
+            seq + 1,
+            "assistant",
+            output.to_string(),
+            i64::from(usage.input.unwrap_or(0)),
+            i64::from(usage.output.unwrap_or(0)),
+            usage.cache_read.map(i64::from),
+            usage.cache_write.map(i64::from),
+        ),
     ] {
         crate::chat_repo::insert_message(
             db,
@@ -839,17 +857,17 @@ fn write_member_turn(
                 status: "complete".to_string(),
                 content,
                 reasoning: None,
-                input_tokens: 0,
-                output_tokens: 0,
-                cache_read_tokens: None,
-                cache_write_tokens: None,
+                input_tokens: input,
+                output_tokens: output_t,
+                cache_read_tokens: cache_read,
+                cache_write_tokens: cache_write,
                 turn_ms: None,
                 created_at: now,
             },
         )
         .map_err(|e| e.to_string())?;
     }
-    crate::chat_repo::touch_session(db, uid, sid, seq + 2, None, None, now)
+    crate::chat_repo::touch_session(db, uid, sid, seq + 2, usage.input, usage.output, now)
         .map_err(|e| e.to_string())
 }
 

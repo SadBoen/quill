@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 use quill_adapters::{
     AbortScope, AdapterError, ExpertId, MemberExecutor, MemberId, MemberOutcome,
-    MemberStartRequest, MemberStatus, Message, UserId,
+    MemberStartRequest, MemberStatus, MemberUsage, Message, UserId,
 };
 use quill_provider::{Message as LlmMessage, SharedProvider};
 
@@ -162,9 +162,9 @@ fn persona(
     out.map_err(|e| AdapterError::Storage(format!("读专家人格失败：{e}")))
 }
 
-/// 成员一次运行的收尾：正常拿到正文，还是被取消。
+/// 成员一次运行的收尾：正常拿到正文（连同这一轮烧掉的 token），还是被取消。
 enum MemberRunEnd {
-    Text(String),
+    Text(String, MemberUsage),
     Cancelled,
 }
 
@@ -203,6 +203,11 @@ async fn run_member(
     ];
 
     let mut rounds = 0u32;
+    // 这一轮**所有**模型调用的 token 都记在这里，而不是只留最后一次 ——
+    // 与对话循环（`quill_core::turn::TurnUsage`）同一个累加器、同一条语义：
+    // 只加真值、缓存两项不并进入参、单轮逐字不变。steer 会让成员有多轮，
+    // 只留最后一轮会把「成员这一轮烧了多少」少报一大截。
+    let mut turn_usage = quill_core::turn::TurnUsage::default();
     loop {
         if run.is_cancelled() {
             return Ok(MemberRunEnd::Cancelled);
@@ -219,11 +224,12 @@ async fn run_member(
             })?,
             _ = &mut waiter => return Ok(MemberRunEnd::Cancelled),
         };
+        turn_usage.push(resp.usage);
 
         let text = resp.text;
         let pending = run.drain_steers();
         if pending.is_empty() {
-            return Ok(MemberRunEnd::Text(text));
+            return Ok(MemberRunEnd::Text(text, usage_of(turn_usage.finish())));
         }
         if rounds >= MEMBER_MAX_ROUNDS {
             return Err(AdapterError::Internal(format!(
@@ -237,6 +243,17 @@ async fn run_member(
         for m in pending {
             messages.push(LlmMessage::user(format!("[追加指令] {}", m.text())));
         }
+    }
+}
+
+/// 内核累加器的结果 → 适配层字段。只做搬运，不改口径（口径在
+/// `TurnUsage::finish` 的文档里）。
+fn usage_of(u: quill_provider::TokenUsage) -> MemberUsage {
+    MemberUsage {
+        input: u.input,
+        output: u.output,
+        cache_read: u.cache_read,
+        cache_write: u.cache_write,
     }
 }
 
@@ -265,13 +282,14 @@ impl MemberExecutor for ProviderMemberExecutor {
 
         async move {
             match done {
-                // 模型回了正文 → 交付。
-                Ok(MemberRunEnd::Text(text)) if !text.trim().is_empty() => {
+                // 模型回了正文 → 交付，**连同这一轮烧掉的 token**（Q026）。
+                Ok(MemberRunEnd::Text(text, usage)) if !text.trim().is_empty() => {
                     MemberOutcome::done(member, &scope, &text)
+                        .map(|o| o.with_usage(usage))
                         .map_err(|e| AdapterError::Internal(format!("构造成员产出失败：{e}")))
                 }
                 // 模型回了个空串 → 这个成员没产出，按失败报，**不编一段话**。
-                Ok(MemberRunEnd::Text(_)) => MemberOutcome::failed(member, &scope)
+                Ok(MemberRunEnd::Text(_, _)) => MemberOutcome::failed(member, &scope)
                     .map_err(|e| AdapterError::Internal(format!("构造成员失败产出失败：{e}"))),
                 // 被 abort：产出为空、状态 cancelled —— 台账那边按
                 // `MemberRejectKind::Cancelled` 结算（见 `quill_agent::dispatch::run_one`）。
@@ -632,7 +650,104 @@ mod tests {
                     reasoning: String::new(),
                     tool_calls: Vec::new(),
                     finish_reason: None,
-                    usage: Default::default(),
+                    // 每轮上报一个**与轮次绑定**的数：第 n 轮 input=100n / output=10n。
+                    // 这样「跨轮累加」被钉住 —— 只留最后一轮会得到 200/20 而不是 300/30。
+                    usage: quill_provider::TokenUsage::new(
+                        Some(100 * n as u32),
+                        Some(10 * n as u32),
+                    ),
+                })
+            })
+        }
+
+        fn stream<'a>(
+            &'a self,
+            _r: &'a ChatRequest,
+        ) -> quill_provider::BoxFuture<'a, ProviderStream> {
+            Box::pin(async {
+                Err(ProviderError::NotConfigured {
+                    detail: "单测不用流式".into(),
+                })
+            })
+        }
+
+        fn models<'a>(&'a self) -> quill_provider::BoxFuture<'a, Vec<ModelInfo>> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+    }
+
+    #[test]
+    fn a_missing_usage_stays_missing_and_a_reported_one_survives() {
+        // Q026：模型端没上报时用量必须保持全空（不是 0）；上报了就原样带下来。
+        let (db, dir) = temp_db("usage");
+        let owner = UserId::from_bytes([8; 16]);
+
+        // 桩 provider 不报 usage（`Recorder`）→ 用量全 None。
+        let silent = ProviderMemberExecutor::new(
+            Arc::new(Recorder::new("结论")) as SharedProvider,
+            llm_cfg(),
+            Arc::clone(&db),
+        );
+        let out = poll_noop(silent.start(req(owner, "cost-analyst", "cost-analyst-1")))
+            .expect("第一次 poll 就完成")
+            .expect("应成功");
+        assert_eq!(
+            out.usage(),
+            MemberUsage::default(),
+            "上游没上报时报 0 就是编数字"
+        );
+
+        // 桩 provider 报 usage → 单轮逐字带下来。
+        let verbose = ProviderMemberExecutor::new(
+            Arc::new(UsageReporter {
+                usage: quill_provider::TokenUsage::new(Some(11), Some(7))
+                    .with_cache(Some(3), Some(2)),
+            }) as SharedProvider,
+            llm_cfg(),
+            Arc::clone(&db),
+        );
+        let out = poll_noop(verbose.start(req(owner, "cost-analyst", "cost-analyst-1")))
+            .expect("第一次 poll 就完成")
+            .expect("应成功");
+        assert_eq!(
+            out.usage(),
+            MemberUsage {
+                input: Some(11),
+                output: Some(7),
+                cache_read: Some(3),
+                cache_write: Some(2),
+            },
+            "单轮上报的用量必须原样带下来"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 只上报 usage 的桩 provider（正文固定）。
+    #[derive(Debug)]
+    struct UsageReporter {
+        usage: quill_provider::TokenUsage,
+    }
+
+    impl quill_provider::Provider for UsageReporter {
+        fn name(&self) -> &str {
+            "usage-reporter"
+        }
+
+        fn chat<'a>(
+            &'a self,
+            request: &'a ChatRequest,
+        ) -> quill_provider::BoxFuture<'a, ChatResponse> {
+            let usage = self.usage;
+            let model = request.model.clone();
+            Box::pin(async move {
+                Ok(ChatResponse {
+                    id: None,
+                    model,
+                    text: "结论".to_string(),
+                    reasoning: String::new(),
+                    tool_calls: Vec::new(),
+                    finish_reason: None,
+                    usage,
                 })
             })
         }
@@ -702,6 +817,18 @@ mod tests {
         let outcome = worker.join().expect("线程不该 panic");
         assert_eq!(outcome.status().as_wire(), "done", "{outcome:?}");
         assert_eq!(outcome.output(), "第二轮答案", "要交付**最后一轮**的正文");
+
+        // Q026：两轮的 token 必须**累加**（300/30），不是只留最后一轮（200/20）。
+        assert_eq!(
+            outcome.usage(),
+            MemberUsage {
+                input: Some(300),
+                output: Some(30),
+                cache_read: None,
+                cache_write: None,
+            },
+            "成员这一轮的用量必须是**跨轮累计**，不是最后一次调用"
+        );
 
         let seen = provider.seen.lock().expect("锁不毒化").clone();
         assert_eq!(seen.len(), 2, "{seen:?}");

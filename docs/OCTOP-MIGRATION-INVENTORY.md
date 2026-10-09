@@ -151,7 +151,7 @@ quill-testkit   ← 仅 dev-dependency
 | `GET /api/subagent-catalog`（+ `/divisions`、`/{slug}`） | 内置子 agent 目录 | 未做 |
 | `GET/POST /api/agents/{id}/subagents…` | agent 子 agent | 未做 |
 | `GET/POST/PATCH/DELETE /api/teams…` | 专家团 CRUD | **已实现**（`api_teams.rs`） |
-| 团队派工真执行 | — | **已实现（第一版）**：`ProviderMemberExecutor` + `POST /api/teams/{id}/dispatch/run`（`api_dispatch::run`）；产出落 `task_dispatches.result_digest`。`steer`/`abort` 未做；成员 token 用量未记 |
+| 团队派工真执行 | — | **已实现**：`ProviderMemberExecutor` + `POST /api/teams/{id}/dispatch/run`（`api_dispatch::run`）；产出落 `task_dispatches.result_digest`（含 token 用量）。`steer`/`abort` 有执行器与 HTTP 出口（Q023/Q024/Q113）；成员 token 用量已记（Q026） |
 
 > 参照实现：`vendor/goose/crates/goose/src/agents/subagent_handler.rs` 的
 > `run_subagent_task`（每子 agent 独立 config + 独立 session）、
@@ -310,7 +310,7 @@ quill-testkit   ← 仅 dev-dependency
   `POST /api/auth/refresh`、`POST /api/auth/logout`、`GET /api/auth/me`（`api_auth.rs`）
 - 专家 CRUD：`api_experts.rs`（+ `general_expert.rs` 保证每用户一份「通用专家」）
 - 专家团 CRUD：`api_teams.rs`
-- 派工记账与执行：`api_dispatch.rs` + `member_executor.rs`（`POST /api/teams/{id}/dispatch/run` 真调模型跑成员；`steer`/`abort` 与成员 token 用量仍未做）
+- 派工记账与执行：`api_dispatch.rs` + `member_executor.rs`（`POST /api/teams/{id}/dispatch/run` 真调模型跑成员；`steer`/`abort` 有执行器与 HTTP 出口，成员独立会话与 token 用量均已落地）
 - 会话与消息：`api_chat.rs`（含 `POST …/messages/stream` SSE 流式，`api_chat_stream.rs`）
 - MCP：`api_extensions.rs` + `mcp_client.rs`（rmcp 真拉 stdio 子进程、真握手、`tools/list`、`tools/call`）+ `mcp_repo.rs`
 - SKILL：`api_extensions.rs` + `skills_repo.rs` + `tools.rs`（挂进对话工具表）
@@ -386,7 +386,7 @@ quill-testkit   ← 仅 dev-dependency
    让 `api_dispatch.rs` 的台账真正被消费者消费。这是「专家团」从「摆件」变「能干活」的分界。
    **（第一版已完成：`member_executor.rs` 的 `ProviderMemberExecutor` + `dispatch/run`；
    2026-10-09 更新：`steer`/`abort`（Q023/Q024）与它们的 HTTP 出口（Q113）、
-   成员独立会话（Q025）也落地了；剩下成员 token 用量（Q026））**
+   成员独立会话（Q025）、成员 token 用量（Q026）也落地了）**
 3. **对话内核补齐**（§3.1）：HITL、轨迹、会话分叉、WS 主通道。
 4. **上下文与记忆**（§3.5）：这是 goose 最有价值、quill 完全空白的一块。
 5. **工作区 / 终端 / 上传**（§3.8）：让界面上那些「点了没反应」的入口真通。
