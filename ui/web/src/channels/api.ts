@@ -78,6 +78,27 @@ export function deleteChannel(channelId: string): Promise<{ deleted: string }> {
   })
 }
 
+/**
+ * 探测一条已保存的通道（octop 的 `POST .../channels/{id}/test`）。
+ *
+ * `ok` 的含义是「端点可达**且**已配置凭据」—— 它**不**代表登录仍然有效
+ * （那要抢长轮询，服务端刻意不做，`note` 里写明了）。失败时带 `error` 给用户看。
+ */
+export interface ChannelTestResult {
+  ok: boolean
+  kind: string
+  credential_present: boolean
+  endpoint_reachable: boolean
+  note: string
+  error?: string
+}
+
+export function testChannel(channelId: string): Promise<ChannelTestResult> {
+  return apiJson<ChannelTestResult>(`/api/channels/${encodeURIComponent(channelId)}/test`, {
+    method: 'POST',
+  })
+}
+
 /** 第一步：取二维码。不带凭据，所以不需要带 token。 */
 export function startWeixinQr(): Promise<QrTicket> {
   return apiJson<QrTicket>('/api/channels/weixin/qrcode/generate', { method: 'POST' })

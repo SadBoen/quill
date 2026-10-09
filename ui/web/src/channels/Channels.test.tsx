@@ -138,6 +138,58 @@ describe('通道页', () => {
     await waitFor(() => expect(screen.getByText(/存储不可用/)).toBeTruthy())
   })
 
+  it('点「测试连接」会打 test 端点并把结论显示出来', async () => {
+    const calls: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        calls.push(String(input))
+        if (String(input).includes('/test')) {
+          return json({
+            ok: true,
+            kind: 'weixin',
+            credential_present: true,
+            endpoint_reachable: true,
+            note: '这里只证明了「端点可达 + 已配置凭据」，没有验证登录有效性。',
+          })
+        }
+        return json(CONFIGURED)
+      }),
+    )
+    mount()
+    await waitFor(() => expect(screen.getByRole('button', { name: '测试连接' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
+    await waitFor(() =>
+      expect(calls.some((c) => c.includes('/api/channels/weixin-main/test'))).toBe(true),
+    )
+    await waitFor(() => expect(screen.getByText(/连接正常/)).toBeTruthy())
+    // 服务端那句「没验证登录有效性」要照原样显示，不能被前端吞掉。
+    expect(screen.getByText(/没有验证登录有效性/)).toBeTruthy()
+  })
+
+  it('测试不通过时显示服务端给的原因（ok:false 不是操作出错）', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes('/test')) {
+          return json({
+            ok: false,
+            kind: 'weixin',
+            credential_present: false,
+            endpoint_reachable: true,
+            note: '随便一句 note',
+            error: '这条通道还没有凭据。下一步：点「微信扫码连接」，用手机扫一次码。',
+          })
+        }
+        return json(CONFIGURED)
+      }),
+    )
+    mount()
+    await waitFor(() => expect(screen.getByRole('button', { name: '测试连接' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
+    await waitFor(() => expect(screen.getByText(/还没有凭据/)).toBeTruthy())
+  })
+
   it('源码里不出现 .token —— 凭据不进浏览器这条不能靠自觉', async () => {
     // 静态导入源文件：类型里没有 token 不代表渲染时不会有人顺手读它。
     const src = await import('./Channels.tsx?raw')

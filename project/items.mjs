@@ -519,6 +519,26 @@ export const ITEMS = [
     blocks: [],
   },
   {
+    id: 'B6-7',
+    milestone: 'M6',
+    title: '通道路由已登记 + `/{id}/test` 连接探测（Q045）',
+    // 起因：Q045 做完发现**通道路由六条一条都没进 CONTRACT_ROUTES/EXTRA_ROUTES**
+    // —— 真路由存在、契约表里查不到（Q110 同类漏登）。补齐登记时 http_contract
+    // 又抓到第二个真缺陷：`store::get` 对不存在的通道回的是 `not_found`
+    // （「路由没登记」的码），而不是 `entity_not_found`（「查无此人」）。
+    //
+    // 判据绑 `channels_http` 的四条探测用例（本地 iLink 桩，不打真网络）：
+    // 凭据齐 + 端点通 → ok:true 且 note 明说「没验证登录有效性」；没凭据 →
+    // 指向「去扫码」；端点死 → 指向端点；别人的通道 → 404。
+    // `ok` 恒 true 或把实体错误码退回 `not_found` 都会让这条红
+    // （反向验证见提交记录）。
+    verify: {
+      kind: 'test',
+      name: 'test_reports_ok_when_credentials_present_and_endpoint_reachable',
+    },
+    blocks: ['M6'],
+  },
+  {
     id: 'B6-6',
     milestone: 'M6',
     title: '人格（MBTI）：28 题测评 + 四维光谱 + 应用到某个专家',

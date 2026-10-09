@@ -10,6 +10,8 @@ import {
   qrRefetchInterval,
   saveChannel,
   startWeixinQr,
+  testChannel,
+  type ChannelTestResult,
   type ChannelView,
   type DmPolicy,
   type QrPollResult,
@@ -75,6 +77,9 @@ function ChannelCard({
   const queryClient = useQueryClient()
   const [busy, setBusy] = useState<false | 'save' | 'delete' | 'qr'>(false)
   const [error, setError] = useState<unknown>(null)
+  // 探测结果（null = 还没测过）。与 save/delete 的 error 分开：探测「失败」
+  // 是一条正常的结论（ok:false），不是操作出错 —— 混在一起会让用户以为点坏了。
+  const [probe, setProbe] = useState<ChannelTestResult | null>(null)
 
   const enabled = channel?.enabled ?? false
   const configured = channel?.configured ?? false
@@ -118,6 +123,21 @@ function ChannelCard({
     }
   }
 
+  const probeNow = async (): Promise<void> => {
+    if (busy || !channel) return
+    setBusy('save')
+    setError(null)
+    setProbe(null)
+    try {
+      setProbe(await testChannel(channel.channel_id))
+    } catch (e) {
+      // 真的操作失败（网络/鉴权）才走这里；`ok:false` 是上面那条正常返回。
+      setError(e)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <Card
       title={t(`channels.kind.${kind}`, { defaultValue: '微信' })}
@@ -153,6 +173,16 @@ function ChannelCard({
           {channel ? (
             <button
               type="button"
+              className="secondary-button"
+              disabled={busy !== false}
+              onClick={() => void probeNow()}
+            >
+              {t('channels.test', { defaultValue: '测试连接' })}
+            </button>
+          ) : null}
+          {channel ? (
+            <button
+              type="button"
               className="danger-button"
               disabled={busy !== false}
               onClick={() => void drop()}
@@ -161,6 +191,17 @@ function ChannelCard({
             </button>
           ) : null}
         </div>
+
+        {probe ? (
+          <p className="form-notice">
+            {probe.ok
+              ? t('channels.testOk', { defaultValue: '连接正常：端点可达、已配置凭据。' })
+              : (probe.error ?? t('channels.testFail', { defaultValue: '连接测试没通过。' }))}
+            {/* 服务端如实声明「没验证登录有效性」—— 把它照原样显示，
+                而不是让用户以为点一下就验证了整条链路。 */}
+            <small>{probe.note}</small>
+          </p>
+        ) : null}
 
         <label className="field">
           <span>{t('channels.dmPolicy', { defaultValue: '谁能私聊' })}</span>

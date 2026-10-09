@@ -194,9 +194,12 @@ pub async fn get(
         })
         .map_err(storage)?;
 
-    found
-        .map(|r| from_row(&r))
-        .ok_or_else(|| ApiError::not_found(format!("通道 {channel_id} 不存在，或不属于当前用户")))
+    found.map(|r| from_row(&r)).ok_or_else(|| {
+        // `entity_not_found`（查无此人）而**不是** `not_found`（路由没登记）：
+        // 这两个都是 404，但错误码分不开就等于把「路由没挂上」和「通道不存在」
+        // 混成一件事 —— 前端据此决定画什么，`http_contract` 也据此判漏登。
+        ApiError::entity_not_found(format!("通道 {channel_id} 不存在，或不属于当前用户"))
+    })
 }
 
 /// 找出这个用户该 kind 的那一条（表上有 UNIQUE(owner_user_id, kind)）。

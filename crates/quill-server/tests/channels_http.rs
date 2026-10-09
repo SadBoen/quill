@@ -407,3 +407,167 @@ async fn channel_routes_require_a_token() {
     let (s, _) = call(app, "", "GET", "/api/channels", None).await;
     assert_ne!(s, StatusCode::OK, "没令牌不该能列通道");
 }
+
+// ------------------------------------------------- Q045：POST /api/channels/{id}/test
+
+/// 一个**本地** iLink 桩：GET `.../ilink/bot/get_bot_qrcode` 回一张合法二维码，
+/// 其余路径回 404。用它把「端点可达」这条判据变成确定的，不打真网络。
+async fn stub_ilink() -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("假 iLink 必须能绑回环端口");
+    let addr = listener.local_addr().expect("读本机地址");
+    tokio::spawn(async move {
+        while let Ok((mut sock, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut head = [0u8; 4096];
+                let n = sock.read(&mut head).await.unwrap_or(0);
+                let req = String::from_utf8_lossy(&head[..n]);
+                let body = if req.contains("get_bot_qrcode") {
+                    r#"{"qrcode":"stub-q","qrcode_img_content":"data:image/png;base64,AAAA"}"#
+                } else {
+                    "{}"
+                };
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+                let _ = sock.shutdown().await;
+            });
+        }
+    });
+    format!("http://{addr}")
+}
+
+/// 一个**当场没人听**的 iLink 基址：绑一下拿到端口，立刻放掉 → connection refused。
+async fn dead_ilink() -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("占一个回环端口");
+    let addr = listener.local_addr().expect("读本机地址");
+    drop(listener);
+    format!("http://{addr}")
+}
+
+/// 建一条指向给定 base_url 的微信通道。`with_credential=false` 时不含 token。
+async fn make_weixin_at(
+    app: &axum::Router,
+    token: &str,
+    base_url: &str,
+    credential: bool,
+) -> Value {
+    let account = if credential {
+        json!({ "account_id": "acc-1@im.bot", "token": "SECRET", "base_url": base_url })
+    } else {
+        json!({ "account_id": "acc-1@im.bot", "base_url": base_url })
+    };
+    let (s, b) = call(
+        app.clone(),
+        token,
+        "POST",
+        "/api/channels",
+        Some(json!({
+            "kind": "weixin",
+            "name": "我的微信",
+            "enabled": false,
+            "config": { "dm_policy": "allowlist", "accounts": [account] },
+        })),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "建通道失败：{b}");
+    b
+}
+
+/// 已配置凭据 + 端点可达 → `ok:true`，且如实说明「没验证登录有效性」。
+#[tokio::test]
+async fn test_reports_ok_when_credentials_present_and_endpoint_reachable() {
+    let t = TestDb::new("ch-test-ok");
+    seed_user(&t.bridge(), UID_A);
+    let app = build_router(state(&t));
+    let base = stub_ilink().await;
+    make_weixin_at(&app, TOKEN_A, &base, true).await;
+
+    let (s, b) = call(app, TOKEN_A, "POST", "/api/channels/weixin-main/test", None).await;
+    assert_eq!(s, StatusCode::OK, "{b}");
+    assert_eq!(b["ok"], json!(true), "{b}");
+    assert_eq!(b["credential_present"], json!(true), "{b}");
+    assert_eq!(b["endpoint_reachable"], json!(true), "{b}");
+    assert!(
+        b["note"].as_str().unwrap_or_default().contains("没有"),
+        "必须如实说没验证登录有效性：{b}"
+    );
+    assert!(b.get("error").is_none(), "成功时不该有 error：{b}");
+    // 凭据绝不外泄 —— 探测响应同样不能带 token。
+    assert!(!b.to_string().contains("SECRET"), "探测响应泄漏了凭据：{b}");
+}
+
+/// 没凭据（还没扫码）但端点是通的 → `ok:false`，错在「没配置」而不是「网络」。
+#[tokio::test]
+async fn test_points_at_the_missing_credential_not_the_network() {
+    let t = TestDb::new("ch-test-nocred");
+    seed_user(&t.bridge(), UID_A);
+    let app = build_router(state(&t));
+    let base = stub_ilink().await;
+    make_weixin_at(&app, TOKEN_A, &base, false).await;
+
+    let (s, b) = call(app, TOKEN_A, "POST", "/api/channels/weixin-main/test", None).await;
+    assert_eq!(s, StatusCode::OK, "{b}");
+    assert_eq!(b["ok"], json!(false), "{b}");
+    assert_eq!(b["credential_present"], json!(false), "{b}");
+    assert_eq!(
+        b["endpoint_reachable"],
+        json!(true),
+        "端点其实是通的，别把两件事混成一句：{b}"
+    );
+    assert!(
+        b["error"].as_str().unwrap_or_default().contains("扫码"),
+        "要说清下一步是去扫码：{b}"
+    );
+}
+
+/// 有凭据但端点不可达 → `ok:false`，错在「网络」。
+#[tokio::test]
+async fn test_points_at_the_endpoint_when_it_is_unreachable() {
+    let t = TestDb::new("ch-test-dead");
+    seed_user(&t.bridge(), UID_A);
+    let app = build_router(state(&t));
+    let base = dead_ilink().await;
+    make_weixin_at(&app, TOKEN_A, &base, true).await;
+
+    let (s, b) = call(app, TOKEN_A, "POST", "/api/channels/weixin-main/test", None).await;
+    assert_eq!(s, StatusCode::OK, "{b}");
+    assert_eq!(b["ok"], json!(false), "{b}");
+    assert_eq!(b["credential_present"], json!(true), "{b}");
+    assert_eq!(b["endpoint_reachable"], json!(false), "{b}");
+    assert!(
+        b["error"].as_str().unwrap_or_default().contains("ilinkai"),
+        "要说清是端点的事：{b}"
+    );
+}
+
+/// 探测别的用户的通道 → 404（查无此人），不是「探测失败」。
+#[tokio::test]
+async fn test_is_404_for_a_channel_the_caller_does_not_own() {
+    let t = TestDb::new("ch-test-404");
+    seed_user(&t.bridge(), UID_A);
+    seed_user(&t.bridge(), UID_B);
+    let app = build_router(state(&t));
+    let base = stub_ilink().await;
+    make_weixin_at(&app, TOKEN_A, &base, true).await;
+
+    let (s, _) = call(
+        app.clone(),
+        TOKEN_B,
+        "POST",
+        "/api/channels/weixin-main/test",
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::NOT_FOUND, "B 不该探得到 A 的通道");
+    let (s, _) = call(app, TOKEN_A, "POST", "/api/channels/nope/test", None).await;
+    assert_eq!(s, StatusCode::NOT_FOUND, "不存在的 id 是 404");
+}

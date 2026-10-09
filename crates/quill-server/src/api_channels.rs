@@ -142,6 +142,50 @@ pub async fn remove(
     Ok(Json(json!({ "deleted": id })).into_response())
 }
 
+/// 探测一条**已保存**的通道能不能用（octop 的 `POST .../channels/{id}/test`，
+/// `channels.py:196-214`）。
+///
+/// **只说它能说的那件事。** 这里证明两件事：① 本机配了凭据；② 本机能连到 iLink。
+/// **不假装验证了「登录还有效」** —— 那要发起一次真实收发（`getupdates` /
+/// `sendmessage`），而本模块头部写明「一个凭据只能有一个长轮询者」，探测去抢那一次
+/// 长轮询等于**偷走正在轮询的消息**。所以调的是 `get_bot_qrcode`（登录取码，
+/// **无副作用、不碰游标**），只证明端点可达。结论按事实分成两条，`ok` = 两者都真，
+/// 并且把「没验证的那一半」写进 `note`。
+///
+/// **形状是 octop 的**（`{ok, error?}`，200 也带 `ok:false` —— 前端靠这个字段分支，
+/// 不靠 HTTP 状态码）；通道不存在仍是 404（那是「查无此人」，不是「探测失败」）。
+pub async fn test_one(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let row = store::get(state.db()?, user.0.user_id, &id).await?;
+    let base = weixin_base_of(&row).unwrap_or_else(|| weixin::DEFAULT_BASE_URL.to_string());
+
+    let credential_present = first_token(&row).is_some();
+    // 无论有没有凭据都探一次端点：没凭据是「用户还没扫码」，端点是另一件事，
+    // 分开说才不会让「网络坏了」被误读成「还没配置」。
+    let reachable = weixin::fetch_qrcode(&base, now_ms()).await.is_ok();
+
+    let ok = credential_present && reachable;
+    let mut out = json!({
+        "ok": ok,
+        "kind": row.kind,
+        "credential_present": credential_present,
+        "endpoint_reachable": reachable,
+        "note": "这里只证明了「端点可达 + 已配置凭据」，**没有**验证登录是否仍然有效 \
+                 —— 那需要一次真实收发，会抢走正在轮询的消息，故刻意不做。",
+    });
+    if !ok {
+        out["error"] = json!(if !credential_present {
+            "这条通道还没有凭据。下一步：点「微信扫码连接」，用手机扫一次码。"
+        } else {
+            "iLink 端点不可达。下一步：检查这台机器能不能访问 ilinkai.weixin.qq.com。"
+        });
+    }
+    Ok(Json(out))
+}
+
 // ------------------------------------------------------------ 微信扫码三步
 
 /// 第一步：要一张二维码。

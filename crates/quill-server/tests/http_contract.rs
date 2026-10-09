@@ -427,7 +427,7 @@ async fn created_session_id_is_byte_identical_to_the_listed_one() {
 async fn every_contract_route_responds_and_is_never_a_false_success() {
     // 「已实现」清单必须跟着实现一起长，否则新接通的路由会因为不再返回 501
     // 而被判成「假成功」——这正是本测试要抓的东西，所以清单不能手懒。
-    const IMPLEMENTED: [(&str, &str); 74] = [
+    const IMPLEMENTED: [(&str, &str); 81] = [
         ("GET", "/api/version"),
         ("GET", "/api/auth/me"),
         ("GET", "/api/healthz"),
@@ -550,6 +550,16 @@ async fn every_contract_route_responds_and_is_never_a_false_success() {
         // 理由写在 api_users.rs 的文件头，那两条 501 的 next_step 会原样说出来。
         ("GET", "/api/users"),
         ("PATCH", "/api/users/{id}"),
+        // 通道（Q045 补齐登记）。前六条真实现早就存在，只是从没进过任何一张声明表
+        // —— 与 Q110 同类。`/{id}/test` 是 Q045 新接的那条（形状照 octop 的
+        // `channels.py:219-238`）。
+        ("GET", "/api/channels"),
+        ("POST", "/api/channels"),
+        ("GET", "/api/channels/{id}"),
+        ("DELETE", "/api/channels/{id}"),
+        ("POST", "/api/channels/{id}/test"),
+        ("POST", "/api/channels/weixin/qrcode/generate"),
+        ("POST", "/api/channels/weixin/qrcode/poll"),
     ];
 
     for &(method, path) in CONTRACT_ROUTES {

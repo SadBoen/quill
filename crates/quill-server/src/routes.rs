@@ -285,6 +285,8 @@ pub fn build_router(state: AppState) -> Router {
             "/api/channels/{id}",
             get(api_channels::get_one).delete(api_channels::remove),
         )
+        // 探测一条已保存的通道能不能用（octop 的 `/{id}/test`，Q045）。
+        .route("/api/channels/{id}/test", post(api_channels::test_one))
         .route(
             "/api/channels/weixin/qrcode/generate",
             post(api_channels::weixin_qr_generate),
@@ -517,6 +519,17 @@ pub const CONTRACT_ROUTES: &[(&str, &str)] = &[
     // Q063：下载 + 校验 + 暂存（替换交给人）。
     ("POST", "/api/upgrade/apply"),
     ("GET", "/api/upgrade/history"),
+    // 通道。octop 侧是 `/agents/{agent_id}/channels`（`channels.py:118-241`、
+    // `:700-726`），quill 去掉 agent 前缀（agent 就是登录用户自己，见路由处注释）。
+    // **原先这六条一条都没登记** —— 真路由存在、契约表里查不到，正是本文件
+    // 开头点名的那类漏登。`/{id}/test` 是 Q045 接通的那条。
+    ("GET", "/api/channels"),
+    ("POST", "/api/channels"),
+    ("GET", "/api/channels/{id}"),
+    ("DELETE", "/api/channels/{id}"),
+    ("POST", "/api/channels/{id}/test"),
+    ("POST", "/api/channels/weixin/qrcode/generate"),
+    ("POST", "/api/channels/weixin/qrcode/poll"),
     ("GET", "/api/admin/config"),
     ("PUT", "/api/admin/config"),
     ("GET", "/api/admin/providers"),
